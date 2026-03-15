@@ -1,0 +1,3 @@
+set(SOURCES "${SOURCES}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sle.cpp"
+    PARENT_SCOPE)

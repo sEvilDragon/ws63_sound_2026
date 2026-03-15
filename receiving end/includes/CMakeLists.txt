@@ -1,0 +1,5 @@
+add_subdirectory_if_exist(led_test)
+add_subdirectory_if_exist(adpcm)
+add_subdirectory_if_exist(sle)
+add_subdirectory_if_exist(pcm5102)
+set(SOURCES "${SOURCES}" PARENT_SCOPE)

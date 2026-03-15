@@ -1,0 +1,22 @@
+#===============================================================================
+# @brief    Kconfig file.
+#===============================================================================
+
+choice MAIN_END_SELECT
+    prompt "Select the end to compile"
+    default MAIN_SENDING_END
+    help
+        Choose which end of the sound transmission application to build.
+        Only one end can be compiled at a time.
+
+config MAIN_SENDING_END
+    bool "Sending End"
+    help
+        Build the sending end (transmitter side).
+
+config MAIN_RECEIVING_END
+    bool "Receiving End"
+    help
+        Build the receiving end (receiver side).
+
+endchoice
