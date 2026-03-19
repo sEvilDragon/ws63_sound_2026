@@ -12,6 +12,7 @@ extern "C" {
 #include "hal_sio.h"
 #include "soc_osal.h"
 #include "hal_sio.h"
+#include "osal_addr.h"
 }
 #include <array>
 

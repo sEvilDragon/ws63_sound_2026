@@ -124,10 +124,11 @@ private:
     static constexpr uint16_t high_speed_latency = 0x00;     // 无延时
     static constexpr uint16_t high_speed_timeout = 0x1F4;    // 超时5000ms
     // 调整PHY，开放4M高速通道
-    static constexpr uint8_t format = SLE_RADIO_FRAME_2;                    // 开放4M通道
-    static constexpr uint8_t phy = SLE_PHY_4M;                              // 无特殊选项
-    static constexpr uint8_t pilot_density = SLE_PHY_PILOT_DENSITY_16_TO_1; // 16:1的导频密度（实现极速的音频传输）
-    static constexpr uint8_t feedback = 0;                                  // 关闭反馈机制，增加传输效率
+    static constexpr uint8_t format = SLE_RADIO_FRAME_2; // 开放4M通道
+    static constexpr uint8_t phy = SLE_PHY_4M;           // 无特殊选项
+    static constexpr uint8_t pilot_density =
+        SLE_PHY_PILOT_DENSITY_NO;          // MCS=12时必须使用无导频(NO=3)，16:1会导致吞吐异常
+    static constexpr uint8_t feedback = 0; // 关闭反馈机制，增加传输效率
 
     // 设置mcs
     static constexpr uint8_t uuid_user_1 = 0x20;
@@ -139,7 +140,7 @@ private:
     static constexpr uint8_t uuid_property_audio_1 = 0x0C;
     static constexpr uint8_t uuid_property_audio_2 = 0x06;
     static constexpr uint8_t mcs = 12;
-    static constexpr int mtu_max = 800;                                          // 最大值
+    static constexpr int mtu_max = 800;                                          // 800
     static constexpr uint8_t find_service_type = SSAP_FIND_TYPE_PRIMARY_SERVICE; // 查找最大范围内的服务
     static constexpr uint8_t find_property_type = SSAP_FIND_TYPE_PROPERTY;       // 查找最大范围内的特征
     static constexpr uint8_t find_write_type = SSAP_PROPERTY_TYPE_VALUE;         // 写数据到特征值
