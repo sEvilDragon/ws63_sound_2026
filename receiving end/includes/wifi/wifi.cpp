@@ -47,6 +47,8 @@ wifi::wifi()
     // 初始化STA模式
     // 循环尝试初始化STA模式，直到成功为止
     sta_start();
+
+    is_ready = true; // WiFi准备就绪
 }
 
 void wifi::restart_get_wifi()
@@ -299,7 +301,6 @@ void wifi::wifi_connection_changed_callback(int32_t state,
 
 void wifi::wifi_scan_done_callback(int32_t state, int32_t size)
 {
-    osal_printk("网络STA扫描完成，扫描结果数量: %d\n", size);
     osal_sem_up(&scan_done_sem);
 }
 

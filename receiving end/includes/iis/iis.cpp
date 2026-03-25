@@ -1,28 +1,28 @@
-#include "pcm5102.hpp"
+#include "iis.hpp"
 
-volatile int pcm5102::write_idx = 0;
-volatile int pcm5102::read_idx = 0;
-volatile int pcm5102::pending_frames = 0;
-std::array<void *, 100> pcm5102::raw_buffers;
-std::array<int16_t *, 100> pcm5102::dma_buffers;
-uint8_t pcm5102::dma_channel = 0;
-bool pcm5102::is_ready = false;
-int16_t pcm5102::last_left_sample = 0;
-int16_t pcm5102::last_right_sample = 0;
+volatile int iis::write_idx = 0;
+volatile int iis::read_idx = 0;
+volatile int iis::pending_frames = 0;
+std::array<void *, 100> iis::raw_buffers;
+std::array<int16_t *, 100> iis::dma_buffers;
+uint8_t iis::dma_channel = 0;
+bool iis::is_ready = false;
+int16_t iis::last_left_sample = 0;
+int16_t iis::last_right_sample = 0;
 
-pcm5102::pcm5102()
+iis::iis()
 {
     osal_msleep(8000); // 等待系统稳定，确保DMA和I2S驱动准备就绪
     pin_init();
     i2s_dma_init_1();
     i2s_init();
     i2s_dma_init_2();
-    set_sample_rate_48k(); // dma_config 会用 FREQ_OF_NEED=32 覆盖 BCLK，必须在其后重置为48kHz
+    set_rate_of_iis(i2s_sample_rate); // dma_config 会用 FREQ_OF_NEED=32 覆盖 BCLK，必须在其后重置为48kHz
     sem_mutex_init();
     dma_lli_init();
 }
 
-void pcm5102::pin_init()
+void iis::pin_init()
 {
     // 配置引脚功能
     uapi_pin_set_mode(mcsl_pin, PIN_MODE_4);
@@ -41,14 +41,14 @@ void pcm5102::pin_init()
     uapi_pin_set_pull(dataout_pin, PIN_PULL_TYPE_DISABLE);
 }
 
-void pcm5102::i2s_dma_init_1()
+void iis::i2s_dma_init_1()
 {
     // 使能DMA，该操作原先放在iis启动之前，这里同样选择分离
     uapi_dma_init();
     uapi_dma_open();
 }
 
-void pcm5102::i2s_init()
+void iis::i2s_init()
 {
     uapi_i2s_init(i2s_num, nullptr);
 
@@ -73,19 +73,15 @@ void pcm5102::i2s_init()
     osal_msleep(10);
 }
 
-void pcm5102::set_sample_rate_48k()
+void iis::set_rate_of_iis(i2s_sample_rate_t rate)
 {
-    // uapi_i2s_dma_config 内部会调用 hal_i2s_config → hal_i2s_set_bclk，
-    // 该函数使用 SDK 硬编码的 FREQ_OF_NEED=32(kHz) 而非实际48kHz，
-    // 会将 BCLK 分频设为 12288000/12=1024kHz，LRCLK 变为 32kHz。
-    // 必须在 dma_config 之后再调用一次 set_sample_rate，用正确值覆盖。
-    errcode_t ret = uapi_i2s_set_sample_rate(i2s_num, i2s_sample_rate);
+    errcode_t ret = uapi_i2s_set_sample_rate(i2s_num, rate);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("I2S采样率(修复)设置失败，错误码：%u\n", ret);
+        osal_printk("I2S采样率设置失败，错误码：%u\n", ret);
     }
 }
 
-void pcm5102::i2s_dma_init_2()
+void iis::i2s_dma_init_2()
 {
     i2s_dma_attr_t dma_attr;
     memset(&dma_attr, 0, sizeof(i2s_dma_attr_t));
@@ -100,7 +96,7 @@ void pcm5102::i2s_dma_init_2()
     }
 }
 
-void pcm5102::sem_mutex_init()
+void iis::sem_mutex_init()
 {
     raw_buffers.fill(nullptr);
     dma_buffers.fill(nullptr);
@@ -133,7 +129,7 @@ void pcm5102::sem_mutex_init()
     }
 }
 
-void pcm5102::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
+void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
 {
     unused(channel);
     unused(arg);
@@ -155,7 +151,7 @@ void pcm5102::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
     }
 }
 
-void pcm5102::dma_lli_init()
+void iis::dma_lli_init()
 {
     dma_channel = uapi_dma_get_lli_channel(0, HAL_DMA_HANDSHAKING_MAX_NUM);
 
@@ -205,7 +201,7 @@ void pcm5102::dma_lli_init()
     hal_sio_set_tx_enable(i2s_num, 0);
 }
 
-void pcm5102::data_write(const int16_t *data, uint32_t size)
+void iis::data_write(const int16_t *data, uint32_t size)
 {
     // 判断数据大小是否超过缓冲区容量
     static uint32_t offset = 0; // 当前缓冲区内的偏移量
@@ -255,7 +251,7 @@ void pcm5102::data_write(const int16_t *data, uint32_t size)
     }
 }
 
-void pcm5102::data_clear()
+void iis::data_clear()
 {
     for (int i = 0; i < buffer_num; i++) {
         memset(dma_buffers[i], 0, buffer_size * sizeof(uint16_t));
@@ -275,7 +271,7 @@ void pcm5102::data_clear()
     hal_sio_set_tx_enable(i2s_num, 0);
 }
 
-void pcm5102::data_clear_one(int index)
+void iis::data_clear_one(int index)
 {
     if (index < 0 || index >= (int)buffer_num) {
         return; // 索引越界，直接返回
@@ -286,7 +282,7 @@ void pcm5102::data_clear_one(int index)
     osal_dcache_region_clean(dma_buffers[index], buffer_size * sizeof(uint16_t));
 }
 
-void pcm5102::fill_buffer_if_needed()
+void iis::fill_buffer_if_needed()
 {
     if (pending_frames < if_fill_num) {
         // 重复一定帧数，抗衡抖动
@@ -299,7 +295,7 @@ void pcm5102::fill_buffer_if_needed()
     }
 }
 
-void pcm5102::reduce_buffer_if_needed(uint32_t &size)
+void iis::reduce_buffer_if_needed(uint32_t &size)
 {
     if (pending_frames > if_reduce_num) {
         // 待处理帧过多时，丢弃部分数据，避免积压过多帧导致长时间高延迟

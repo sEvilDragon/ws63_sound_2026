@@ -1,5 +1,5 @@
-#ifndef __PCM5102_HPP__
-#define __PCM5102_HPP__
+#ifndef __IIS_HPP__
+#define __IIS_HPP__
 
 extern "C" {
 #include "gpio.h"
@@ -16,9 +16,9 @@ extern "C" {
 }
 #include <array>
 
-class pcm5102 {
+class iis {
 public:
-    pcm5102();
+    iis();
     static void data_write(const int16_t *data, uint32_t size);
     // 定义清理函数
     static void data_clear();
@@ -26,6 +26,8 @@ public:
     // 补帧算法
     static void fill_buffer_if_needed();
     static void reduce_buffer_if_needed(uint32_t &size);
+    // 调整iis的频率
+    static void set_rate_of_iis(i2s_sample_rate_t rate);
 
 private:
     // 初始化引脚
@@ -33,7 +35,6 @@ private:
     static void i2s_dma_init_1();
     static void i2s_init();
     static void i2s_dma_init_2();
-    static void set_sample_rate_48k(); // 修复：dma_config 后重置正确的 48kHz BCLK
     static void sem_mutex_init();
     static void dma_lli_init();
     static void i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg);

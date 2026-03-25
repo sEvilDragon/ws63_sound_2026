@@ -52,6 +52,7 @@ private:
     static bool udp();
 
 public:
+    bool is_ready = false; // 记录WiFi是否准备就绪，DLAN流程需要等待WiFi准备就绪后才能开始
 private:
     // 初始化相关的信号量
     static osal_semaphore scan_done_sem;

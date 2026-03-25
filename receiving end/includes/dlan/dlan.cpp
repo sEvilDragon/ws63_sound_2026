@@ -1,47 +1,256 @@
 #include "dlan.hpp"
+dlan::dlan() {}
 
-// åˆå§‹åŒ–é™æ€æˆå‘˜å˜é‡
+// ³õÊ¼»¯¾²Ì¬³ÉÔ±±äÁ¿
 std::array<char, 16> dlan::local_ip = {0};
 bool dlan::is_ready = false;
-uint32_t dlan::ssdp_sock = 0;
-uint32_t dlan::http_sock = 0;
+int32_t dlan::ssdp_sock = -1;
+int32_t dlan::http_sock = -1;
+dlan::data_process_t dlan::data_process = nullptr;
+dlan::data_clear_t dlan::data_clear = nullptr;
+
+namespace {
+void trim_ascii_whitespace(char *text)
+{
+    if (text == nullptr || text[0] == '\0') {
+        return;
+    }
+
+    size_t start = 0;
+    size_t end = strlen(text);
+
+    while (start < end && isspace(static_cast<unsigned char>(text[start])) != 0) {
+        ++start;
+    }
+    while (end > start && isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
+        --end;
+    }
+
+    if (start > 0) {
+        memmove(text, text + start, end - start);
+    }
+    text[end - start] = '\0';
+}
+
+bool ascii_iequals(const char *a, const char *b)
+{
+    if (a == nullptr || b == nullptr) {
+        return false;
+    }
+
+    while (*a != '\0' && *b != '\0') {
+        char ca = static_cast<char>(tolower(static_cast<unsigned char>(*a)));
+        char cb = static_cast<char>(tolower(static_cast<unsigned char>(*b)));
+        if (ca != cb) {
+            return false;
+        }
+        ++a;
+        ++b;
+    }
+
+    return (*a == '\0' && *b == '\0');
+}
+
+bool ascii_icontains(const char *haystack, const char *needle)
+{
+    if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
+        return false;
+    }
+
+    const size_t needle_len = strlen(needle);
+    for (size_t i = 0; haystack[i] != '\0'; ++i) {
+        size_t j = 0;
+        while (j < needle_len && haystack[i + j] != '\0') {
+            char ch = static_cast<char>(tolower(static_cast<unsigned char>(haystack[i + j])));
+            char cn = static_cast<char>(tolower(static_cast<unsigned char>(needle[j])));
+            if (ch != cn) {
+                break;
+            }
+            ++j;
+        }
+        if (j == needle_len) {
+            return true;
+        }
+    }
+    return false;
+}
+
+char *extract_xml_tag_value(const char *buffer, const char *tag, char *out, size_t out_size)
+{
+    if (buffer == nullptr || tag == nullptr || out == nullptr || out_size == 0) {
+        return nullptr;
+    }
+
+    char start_tag[256] = {0};
+    char end_tag[256] = {0};
+    snprintf(start_tag, sizeof(start_tag), "<%s>", tag);
+    snprintf(end_tag, sizeof(end_tag), "</%s>", tag);
+
+    const char *tag_start = strstr(buffer, start_tag);
+    if (tag_start == nullptr) {
+        return nullptr;
+    }
+
+    tag_start += strlen(start_tag);
+    const char *tag_end = strstr(tag_start, end_tag);
+    if (tag_end == nullptr) {
+        return nullptr;
+    }
+
+    int value_len = tag_end - tag_start;
+    if (value_len > 0 && value_len < (int)out_size - 1) {
+        strncpy(out, tag_start, value_len);
+        out[value_len] = '\0';
+        return out;
+    }
+
+    return nullptr;
+}
+} // namespace
+
+bool dlan::ssdp_get_header_value(const char *request, const char *key, char *out, size_t out_size)
+{
+    if (request == nullptr || key == nullptr || out == nullptr || out_size == 0) {
+        return false;
+    }
+
+    const size_t key_len = strlen(key);
+    const char *line = request;
+    while (*line != '\0') {
+        const char *line_end = strstr(line, "\r\n");
+        if (line_end == nullptr) {
+            line_end = line + strlen(line);
+        }
+
+        size_t i = 0;
+        while (i < key_len && (line + i) < line_end) {
+            char a = static_cast<char>(tolower(static_cast<unsigned char>(line[i])));
+            char b = static_cast<char>(tolower(static_cast<unsigned char>(key[i])));
+            if (a != b) {
+                break;
+            }
+            ++i;
+        }
+
+        if (i == key_len && (line + i) < line_end && line[i] == ':') {
+            const char *val = line + i + 1;
+            while (val < line_end && (*val == ' ' || *val == '\t')) {
+                ++val;
+            }
+
+            size_t copy_len = static_cast<size_t>(line_end - val);
+            if (copy_len >= out_size) {
+                copy_len = out_size - 1;
+            }
+            memcpy(out, val, copy_len);
+            out[copy_len] = '\0';
+            return true;
+        }
+
+        if (*line_end == '\0') {
+            break;
+        }
+        line = line_end + 2;
+    }
+
+    return false;
+}
+
+bool dlan::ssdp_send_msearch_reply(const sockaddr_in &client_addr,
+                                   socklen_t client_addr_len,
+                                   const char *st,
+                                   const char *usn_suffix)
+{
+    if (st == nullptr || st[0] == '\0') {
+        return false;
+    }
+
+    std::array<char, 256> usn = {0};
+    if (usn_suffix != nullptr && usn_suffix[0] != '\0') {
+        snprintf(usn.data(), usn.size(), "%s::%s", ssdp_uuid.data(), usn_suffix);
+    } else {
+        snprintf(usn.data(), usn.size(), "%s", ssdp_uuid.data());
+    }
+
+    std::array<char, 896> response = {0};
+    snprintf(response.data(), response.size(),
+             "HTTP/1.1 200 OK\r\n"
+             "CACHE-CONTROL: max-age=%d\r\n"
+             "EXT:\r\n"
+             "LOCATION: http://%s:%u/description.xml\r\n"
+             "SERVER: Linux/5.10 UPnP/1.1 WS63/1.0\r\n"
+             "ST: %s\r\n"
+             "USN: %s\r\n"
+             "BOOTID.UPNP.ORG: %d\r\n"
+             "CONFIGID.UPNP.ORG: %d\r\n"
+             "\r\n",
+             ssdp_timeout, local_ip.data(), http_port, st, usn.data(), ssdp_boot_id, ssdp_config_id);
+
+    int32_t send_ret =
+        sendto(ssdp_sock, response.data(), strlen(response.data()), 0, (const sockaddr *)&client_addr, client_addr_len);
+    if (send_ret < 0) {
+        osal_printk("ssdpÏìÓ¦·¢ËÍÊ§°Ü(ST=%s)\n", st);
+        return false;
+    }
+
+    osal_printk("ssdpÒÑÏìÓ¦M-SEARCH (ST=%s, USN=%s)\n", st, usn.data());
+    return true;
+}
 
 void dlan::ssdp_and_http_scan()
 {
-    while(!is_ready)
-    {
-        // ç­‰å¾…ç½‘ç»œå‡†å¤‡å°±ç»ªï¼Œè·å–æœ¬åœ°IPåœ°å€ç­‰ä¿¡æ¯
+    while (!is_ready) {
+        // µÈ´ıÍøÂç×¼±¸¾ÍĞ÷£¬»ñÈ¡±¾µØIPµØÖ·µÈĞÅÏ¢
         osal_msleep(100);
     }
-    ssdp_ip_get();
-    // å»ºç«‹SSDPï¼ˆUDPï¼‰å¥—æ¥å­—
+    // WiFiÁ¬½Ó³É¹¦²¢²»´ú±íDHCPÒÑÍê³É£¬µÈ´ıÄÃµ½ÓĞĞ§IPÔÙÆô¶¯DLNA¡£
+    while (true) {
+        ssdp_ip_get();
+        if (strcmp(local_ip.data(), "0.0.0.0") != 0) {
+            break;
+        }
+        osal_printk("dlanµÈ´ıÓĞĞ§IPÖĞ...\n");
+        osal_msleep(500);
+    }
+    // ½¨Á¢SSDP£¨UDP£©Ì×½Ó×Ö
     ssdp_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (ssdp_sock < 0) {
-        osal_printk("ssdpè¿›ç¨‹å¯åŠ¨å¤±è´¥\n");
+        osal_printk("ssdp½ø³ÌÆô¶¯Ê§°Ü\n");
         return;
     }
-    ssdp_set();
+    if (!ssdp_set()) {
+        dlan_stop();
+        return;
+    }
 
-    // å»ºç«‹HTTPï¼ˆTCPï¼‰å¥—æ¥å­—
+    // ½¨Á¢HTTP£¨TCP£©Ì×½Ó×Ö
     http_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (http_sock < 0) {
-        osal_printk("httpè¿›ç¨‹å¯åŠ¨å¤±è´¥\n");
+        osal_printk("http½ø³ÌÆô¶¯Ê§°Ü\n");
+        dlan_stop();
         return;
     }
-    http_set();
+    if (!http_set()) {
+        dlan_stop();
+        return;
+    }
+
+    // SED : ´®¿ÚÊä³ö
+    osal_printk("dlanÆô¶¯³É¹¦£¬local_ip=%s, ssdp=%d, http=%d\n", local_ip.data(), ssdp_sock, http_sock);
 
     fd_set read_fds;
+    memset(&read_fds, 0, sizeof(read_fds));
     int max_fd = (ssdp_sock > http_sock) ? ssdp_sock : http_sock;
 
     while (true) {
         memset(&read_fds, 0, sizeof(read_fds));
-        FD_SET(ssdp_sock, &read_fds); // æŠŠ UDP ç›‘æ§åŠ è¿›å»
-        FD_SET(http_sock, &read_fds); // æŠŠ TCP ç›‘æ§åŠ è¿›å»
+        FD_SET(ssdp_sock, &read_fds); // °Ñ UDP ¼à¿Ø¼Ó½øÈ¥
+        FD_SET(http_sock, &read_fds); // °Ñ TCP ¼à¿Ø¼Ó½øÈ¥
 
         int ret = lwip_select(max_fd + 1, &read_fds, nullptr, nullptr, nullptr);
 
         if (ret < 0) {
-            osal_printk("selectå‡ºé”™\n");
+            osal_printk("select³ö´í\n");
             continue;
         }
 
@@ -49,15 +258,23 @@ void dlan::ssdp_and_http_scan()
             ssdp_process();
         }
         if (FD_ISSET(http_sock, &read_fds)) {
+            // SED : ´®¿ÚÊä³ö
+            osal_printk("selectÃüÖĞhttp fd\n");
             http_process();
         }
     }
 }
 
-void dlan::ssdp_set()
+bool dlan::ssdp_set()
 {
-    uint32_t sock = ssdp_sock;
-    // é…ç½®SSDPå¥—æ¥å­—
+    int32_t sock = ssdp_sock;
+    int32_t reuse = 1;
+
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        osal_printk("ssdpÌ×½Ó×ÖÉèÖÃSO_REUSEADDRÊ§°Ü\n");
+    }
+
+    // ÅäÖÃSSDPÌ×½Ó×Ö
     sockaddr_in ssdp_addr = {0};
     ssdp_addr.sin_family = AF_INET;
     ssdp_addr.sin_addr.s_addr = INADDR_ANY;
@@ -65,127 +282,734 @@ void dlan::ssdp_set()
 
     errcode_t ret = bind(sock, (sockaddr *)&ssdp_addr, sizeof(ssdp_addr));
     if (ret != 0) {
-        osal_printk("ssdpå¥—æ¥å­—ç»‘å®šå¤±è´¥\n");
+        osal_printk("ssdpÌ×½Ó×Ö°ó¶¨Ê§°Ü\n");
         lwip_close(sock);
-        return;
+        ssdp_sock = -1;
+        return false;
     }
 
-    // åŠ å…¥å¤šæ’­ç»„
-    ip_mreq mreq;
+    // ¼ÓÈë¶à²¥×é
+    ip_mreq mreq = {0};
     mreq.imr_multiaddr.s_addr = inet_addr(mcast_ip.data());
     mreq.imr_interface.s_addr = INADDR_ANY;
     if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-        osal_printk("ssdpå¥—æ¥å­—åŠ å…¥å¤šæ’­ç»„å¤±è´¥\n");
+        osal_printk("ssdpÌ×½Ó×Ö¼ÓÈë¶à²¥×éÊ§°Ü\n");
         lwip_close(sock);
-        return;
+        ssdp_sock = -1;
+        return false;
     }
+
+    return true;
 }
 
-void dlan::http_set()
+bool dlan::http_set()
 {
-    uint32_t sock = http_sock;
+    int32_t sock = http_sock;
+    int32_t reuse = 1;
 
-    // é…ç½®HTTPå¥—æ¥å­—
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        osal_printk("httpÌ×½Ó×ÖÉèÖÃSO_REUSEADDRÊ§°Ü\n");
+    }
+
+    // ÅäÖÃHTTPÌ×½Ó×Ö
     sockaddr_in http_addr = {0};
     http_addr.sin_family = AF_INET;
     http_addr.sin_addr.s_addr = INADDR_ANY;
     http_addr.sin_port = htons(http_port);
     errcode_t ret = bind(sock, (sockaddr *)&http_addr, sizeof(http_addr));
     if (ret != 0) {
-        osal_printk("httpå¥—æ¥å­—ç»‘å®šå¤±è´¥\n");
+        osal_printk("httpÌ×½Ó×Ö°ó¶¨Ê§°Ü\n");
         lwip_close(sock);
-        return;
+        http_sock = -1;
+        return false;
     }
 
-    // è°ƒç”¨listenå‡½æ•°ç›‘å¬HTTPå¥—æ¥å­—ï¼Œè®¾ç½®æœ€å¤§è¿æ¥æ•°ä¸º2
+    // µ÷ÓÃlistenº¯Êı¼àÌıHTTPÌ×½Ó×Ö£¬ÉèÖÃ×î´óÁ¬½ÓÊıÎª2
     ret = listen(sock, 2);
     if (ret != 0) {
-        osal_printk("httpå¥—æ¥å­—ç›‘å¬å¤±è´¥\n");
+        osal_printk("httpÌ×½Ó×Ö¼àÌıÊ§°Ü\n");
         lwip_close(sock);
-        return;
+        http_sock = -1;
+        return false;
     }
+
+    // SED : ´®¿ÚÊä³ö
+    osal_printk("http¼àÌıÒÑÆô¶¯£¬¶Ë¿Ú=%u\n", http_port);
+
+    return true;
 }
 
 void dlan::ssdp_process()
 {
-    uint32_t sock = ssdp_sock;
-    static std::array<char, 1024> buffer; // SSDPæ¥æ”¶ç¼“å†²åŒº
-    sockaddr_in client_addr = {0};        // è®°å½•SSDPæ¶ˆæ¯æ¥æº
+    int32_t sock = ssdp_sock;
+    static std::array<char, 1024> buffer; // SSDP½ÓÊÕ»º³åÇø
+    sockaddr_in client_addr = {0};        // ¼ÇÂ¼SSDPÏûÏ¢À´Ô´
     socklen_t client_addr_len = sizeof(client_addr);
 
     int ret = recvfrom(sock, buffer.data(), buffer.size() - 1, 0, (sockaddr *)&client_addr, &client_addr_len);
 
     if (ret < 0) {
-        osal_printk("ssdpæ•°æ®æ¥æ”¶å¤±è´¥\n");
+        osal_printk("ssdpÊı¾İ½ÓÊÕÊ§°Ü\n");
+        return;
     }
-    return;
 
     buffer[ret] = '\0';
-    // å¡«å……SSDPæ¶ˆæ¯å¤„ç†é€»è¾‘ï¼Œä¾‹å¦‚è§£æSSDPæ¶ˆæ¯å¹¶å“åº”
-    if (strstr(buffer.data(), "M-SEARCH") && strstr(buffer.data(), "urn:schemas-upnp-org:device:MediaRenderer:1")) {
-        std::array<char, 768> response;
-        snprintf(response.data(), response.size(),
-                 "HTTP/1.1 200 OK\r\n"
-                 "CACHE-CONTROL: max-age=%d\r\n"
-                 "EXT:\r\n"
-                 "LOCATION: http://%s:%u/description.xml\r\n"
-                 "SERVER: HiSilicon-WS63_sound DLNA DMR/1.0 UPnP/1.1\r\n"
-                 "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
-                 "USN: %s::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
-                 "\r\n",
-                 ssdp_timeout, local_ip.data(), http_port, ssdp_uuid.data());
-        sendto(sock, response.data(), strlen(response.data()), 0, (sockaddr *)&client_addr, client_addr_len);
+
+    // ´¦Àí M-SEARCH ËÑË÷±¨ÎÄ
+    bool is_msearch = strstr(buffer.data(), "M-SEARCH") != nullptr;
+    // ´¦Àí NOTIFY ¹ã²¥Í¨Öª£¨ÎÒÃÇÖ»ĞèÒªºöÂÔËü£¬²»µ±×÷´íÎó£©
+    bool is_notify = strstr(buffer.data(), "NOTIFY") != nullptr;
+
+    if (is_msearch) {
+        std::array<char, 128> st_value = {0};
+        std::array<char, 128> man_value = {0};
+        std::array<char, 64> host_value = {0};
+        bool has_st = ssdp_get_header_value(buffer.data(), "ST", st_value.data(), st_value.size());
+        bool has_man = ssdp_get_header_value(buffer.data(), "MAN", man_value.data(), man_value.size());
+        bool has_host = ssdp_get_header_value(buffer.data(), "HOST", host_value.data(), host_value.size());
+        if (has_st) {
+            trim_ascii_whitespace(st_value.data());
+        }
+        if (has_man) {
+            trim_ascii_whitespace(man_value.data());
+        }
+        if (has_host) {
+            trim_ascii_whitespace(host_value.data());
+        }
+
+        if (!has_st || !has_man || !ascii_icontains(man_value.data(), "ssdp:discover")) {
+            osal_printk("ssdpºöÂÔM-SEARCH: MAN/ST²»ºÏ·¨, MAN=%s, ST=%s\n", man_value.data(), st_value.data());
+            return;
+        }
+
+        if (has_host && strstr(host_value.data(), "239.255.255.250:1900") == nullptr) {
+            osal_printk("ssdpºöÂÔM-SEARCH: HOST=%s\n", host_value.data());
+            return;
+        }
+
+        osal_printk("ssdpÊÕµ½M-SEARCH: ST=%s\n", st_value.data());
+
+        const bool is_ssdp_all = ascii_iequals(st_value.data(), "ssdp:all");
+        const bool is_root = ascii_iequals(st_value.data(), "upnp:rootdevice");
+        const bool is_uuid = ascii_iequals(st_value.data(), ssdp_uuid.data());
+        const bool is_renderer = ascii_iequals(st_value.data(), "urn:schemas-upnp-org:device:MediaRenderer:1");
+        const bool is_av_transport = ascii_iequals(st_value.data(), "urn:schemas-upnp-org:service:AVTransport:1");
+        const bool is_rendering_control =
+            ascii_iequals(st_value.data(), "urn:schemas-upnp-org:service:RenderingControl:1");
+        const bool is_connection_manager =
+            ascii_iequals(st_value.data(), "urn:schemas-upnp-org:service:ConnectionManager:1");
+        const bool is_qplay = strstr(st_value.data(), "QPlay") != nullptr;
+
+        if (!(is_ssdp_all || is_root || is_uuid || is_renderer || is_av_transport || is_rendering_control ||
+              is_connection_manager || is_qplay)) {
+            osal_printk("ssdpºöÂÔM-SEARCH: ST=%s\n", st_value.data());
+            return;
+        }
+
+        if (is_ssdp_all) {
+            ssdp_send_msearch_reply(client_addr, client_addr_len, "UPnP:rootdevice", "UPnP:rootdevice");
+            osal_msleep(20);
+            ssdp_send_msearch_reply(client_addr, client_addr_len, ssdp_uuid.data());
+            osal_msleep(20);
+            ssdp_send_msearch_reply(client_addr, client_addr_len, "urn:schemas-upnp-org:device:MediaRenderer:1",
+                                    "urn:schemas-upnp-org:device:MediaRenderer:1");
+            osal_msleep(20);
+            ssdp_send_msearch_reply(client_addr, client_addr_len, "urn:schemas-upnp-org:service:AVTransport:1",
+                                    "urn:schemas-upnp-org:service:AVTransport:1");
+            osal_msleep(20);
+            ssdp_send_msearch_reply(client_addr, client_addr_len, "urn:schemas-upnp-org:service:RenderingControl:1",
+                                    "urn:schemas-upnp-org:service:RenderingControl:1");
+            osal_msleep(20);
+            ssdp_send_msearch_reply(client_addr, client_addr_len, "urn:schemas-upnp-org:service:ConnectionManager:1",
+                                    "urn:schemas-upnp-org:service:ConnectionManager:1");
+            return;
+        }
+
+        if (is_root) {
+            ssdp_send_msearch_reply(client_addr, client_addr_len, "UPnP:rootdevice", "UPnP:rootdevice");
+        } else if (is_uuid) {
+            ssdp_send_msearch_reply(client_addr, client_addr_len, ssdp_uuid.data());
+        } else if (is_renderer) {
+            ssdp_send_msearch_reply(client_addr, client_addr_len, st_value.data(), st_value.data());
+        } else if (is_av_transport || is_rendering_control || is_connection_manager || is_qplay) {
+            ssdp_send_msearch_reply(client_addr, client_addr_len, st_value.data(), st_value.data());
+        }
+    } else if (is_notify) {
+        // ÕâÊÇ±ğÈË·¢³öµÄ¹ã²¥£¨ÈçÂ·ÓÉÆ÷µÄ alive Ğû¸æ£©£¬Ö±½ÓºöÂÔ²»´òÓ¡
+    } else {
+        osal_printk("ssdpÊÕµ½Î´ÖªÏûÏ¢Ô­ÎÄ:\n%s\n", buffer.data());
     }
 }
 
 void dlan::http_process()
 {
-    uint32_t sock = http_sock;
-    sockaddr_in client_addr;
+    int32_t sock = http_sock;
+    sockaddr_in client_addr = {0};
     socklen_t client_addr_len = sizeof(client_addr);
 
     int32_t client_sock = accept(sock, (sockaddr *)&client_addr, &client_addr_len);
     if (client_sock < 0) {
-        osal_printk("httpæ¥å—è¿æ¥å¤±è´¥\n");
+        osal_printk("http½ÓÊÜÁ¬½ÓÊ§°Ü\n");
         return;
     }
 
-    static std::array<char, 2048> buffer; // HTTPæ¥æ”¶ç¼“å†²åŒº
-    errcode_t ret = lwip_recv(client_sock, buffer.data()-1, buffer.size() - 1, 0);
+    // SED : ´®¿ÚÊä³ö
+    uint32_t peer_ip = lwip_ntohl(client_addr.sin_addr.s_addr);
+    osal_printk("httpÊÕµ½Á¬½Ó: %u.%u.%u.%u:%u\n", (peer_ip >> 24) & 0xFF, (peer_ip >> 16) & 0xFF, (peer_ip >> 8) & 0xFF,
+                peer_ip & 0xFF, lwip_ntohs(client_addr.sin_port));
+
+    static std::array<char, 2048> buffer; // HTTP½ÓÊÕ»º³åÇø
+    errcode_t ret = lwip_recv(client_sock, buffer.data(), buffer.size() - 1, 0);
     if (ret <= 0) {
-        osal_printk("httpæ•°æ®æ¥æ”¶å¤±è´¥\n");
-        dlan_stop();
+        osal_printk("httpÊı¾İ½ÓÊÕÊ§°Ü\n");
+        lwip_close(client_sock);
         return;
     }
     buffer[ret] = '\0';
 
-    // é¦–å…ˆå¤„ç†ç¬¬ä¸€æ¬¡è¿æ¥çš„HTTPè¯·æ±‚ï¼Œè§£æé…ç½‘ä¿¡æ¯å¹¶å“åº”
+    // AI
+    // SED : ´®¿ÚÊä³ö£¬´òÓ¡HTTPÇëÇóÊ×ĞĞ£¨Ö±µ½\r\n£©£¬·½±ãµ÷ÊÔÑéÖ¤ÊÖ»úAPPµÄÇëÇó¸ñÊ½ÊÇ·ñÕıÈ·¡£
+    char *line_end = strstr(buffer.data(), "\r\n");
+    if (line_end != nullptr) {
+        *line_end = '\0';
+    }
+    osal_printk("httpÇëÇóÊ×ĞĞ: %s\n", buffer.data());
+    if (line_end != nullptr) {
+        *line_end = '\r';
+    }
+    // AI½áÊø
 
+    // ¡¾ĞÂÔö¡¿´¦Àí SUBSCRIBE ÊÂ¼ş¶©ÔÄÇëÇó
+    if (strstr(buffer.data(), "SUBSCRIBE") != nullptr) {
+        osal_printk("httpÊÕµ½ SUBSCRIBE ÇëÇó\n");
+        // »Ø¸´ 200 OK + SID + TIMEOUT
+        std::array<char, 256> subscribe_response;
+        snprintf(subscribe_response.data(), subscribe_response.size(),
+                 "HTTP/1.1 200 OK\r\n"
+                 "SID: %s\r\n"
+                 "TIMEOUT: Second-1800\r\n"
+                 "CONTENT-LENGTH: 0\r\n"
+                 "Connection: close\r\n\r\n",
+                 ssdp_uuid.data());
+
+        lwip_send(client_sock, subscribe_response.data(), strlen(subscribe_response.data()), 0);
+        osal_printk("ÒÑ»Ø¸´ SUBSCRIBE: SID=%s\n", ssdp_uuid.data());
+        lwip_close(client_sock);
+        return;
+    }
+
+    // ¡¾ĞÂÔö¡¿´¦Àí UNSUBSCRIBE È¡Ïû¶©ÔÄÇëÇó
+    if (strstr(buffer.data(), "UNSUBSCRIBE") != nullptr) {
+        osal_printk("httpÊÕµ½ UNSUBSCRIBE ÇëÇó\n");
+
+        static const char *unsubscribe_response =
+            "HTTP/1.1 200 OK\r\n"
+            "CONTENT-LENGTH: 0\r\n"
+            "Connection: close\r\n\r\n";
+
+        lwip_send(client_sock, unsubscribe_response, strlen(unsubscribe_response), 0);
+        osal_printk("ÒÑ»Ø¸´ UNSUBSCRIBE\n");
+        lwip_close(client_sock);
+        return;
+    }
+
+    // ÇëÇóÉè±¸ÃèÊöµÄXMLÎÄ¼ş
+    if (strstr(buffer.data(), "GET /description.xml") || strstr(buffer.data(), "HEAD /description.xml") ||
+        strstr(buffer.data(), "GET / HTTP/1.1") || strstr(buffer.data(), "GET / HTTP/1.0")) {
+        // SED : ´®¿ÚÊä³ö
+        osal_printk("httpÊÕµ½Éè±¸ÃèÊöÇëÇó\n");
+        std::array<char, 2048> xml_response;
+        std::array<char, 256> header;
+        snprintf(xml_response.data(), xml_response.size(),
+                 "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+                 "<root xmlns=\"urn:schemas-upnp-org:device-1-0\" xmlns:dlna=\"urn:schemas-dlna-org:device-1-0\">\r\n"
+                 "  <specVersion><major>1</major><minor>0</minor></specVersion>\r\n"
+                 "  <device>\r\n"
+                 "    <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>\r\n"
+                 "    <friendlyName>%s</friendlyName>\r\n"
+                 "    <manufacturer>%s</manufacturer>\r\n"
+                 "    <manufacturerURL>http://www.hisilicon.com/</manufacturerURL>\r\n"
+                 "    <modelDescription>%s</modelDescription>\r\n"
+                 "    <modelName>WS63-DMR</modelName>\r\n"
+                 "    <modelNumber>%.1f</modelNumber>\r\n"
+                 "    <UDN>%s</UDN>\r\n"
+                 "    <dlna:X_DLNADOC>DMR-1.50</dlna:X_DLNADOC>\r\n"
+                 "    <serviceList>\r\n"
+                 "      <service>\r\n"
+                 "        <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>\r\n"
+                 "        <serviceId>urn:upnp-org:serviceId:AVTransport</serviceId>\r\n"
+                 "        <SCPDURL>/AVTransport.xml</SCPDURL>\r\n"
+                 "        <controlURL>/AVTransport/control</controlURL>\r\n"
+                 "        <eventSubURL>/AVTransport/event</eventSubURL>\r\n"
+                 "      </service>\r\n"
+                 "      <service>\r\n"
+                 "        <serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType>\r\n"
+                 "        <serviceId>urn:upnp-org:serviceId:RenderingControl</serviceId>\r\n"
+                 "        <SCPDURL>/RenderingControl.xml</SCPDURL>\r\n"
+                 "        <controlURL>/RenderingControl/control</controlURL>\r\n"
+                 "        <eventSubURL>/RenderingControl/event</eventSubURL>\r\n"
+                 "      </service>\r\n"
+                 "      <service>\r\n"
+                 "        <serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType>\r\n"
+                 "        <serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId>\r\n"
+                 "        <SCPDURL>/ConnectionManager.xml</SCPDURL>\r\n"
+                 "        <controlURL>/ConnectionManager/control</controlURL>\r\n"
+                 "        <eventSubURL>/ConnectionManager/event</eventSubURL>\r\n"
+                 "      </service>\r\n"
+                 "    </serviceList>\r\n"
+                 "  </device>\r\n"
+                 "</root>\r\n",
+                 http_xml_name.data(), http_xml_manufacturer.data(), http_xml_model_description.data(),
+                 http_xml_version, ssdp_uuid.data());
+        int response_length = strlen(xml_response.data());
+        snprintf(header.data(), header.size(),
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+                 "Content-Length: %d\r\n"
+                 "Connection: close\r\n"
+                 "Server: OS/1.0 UPnP/1.1 product/1.0\r\n\r\n",
+                 response_length);
+        lwip_send(client_sock, header.data(), strlen(header.data()), 0);
+        lwip_send(client_sock, (const uint8_t *)xml_response.data(), strlen(xml_response.data()), 0);
+        lwip_close(client_sock);
+        return;
+    }
+    // »Ø¸´GETµÄ×·¼Ó²¿·Ö
+    else if (strstr(buffer.data(), "GET /AVTransport.xml") != nullptr ||
+             strstr(buffer.data(), "HEAD /AVTransport.xml") != nullptr) {
+        // SED : ´®¿ÚÊä³ö
+        osal_printk("httpÊÕµ½AVTransport.xmlÇëÇó\n");
+        static constexpr const char *avt_xml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+            "<scpd xmlns=\"urn:schemas-upnp-org:service-1-0\">\r\n"
+            "  <actionList>\r\n"
+            "    <action><name>SetAVTransportURI</name></action>\r\n"
+            "    <action><name>Play</name></action>\r\n"
+            "    <action><name>Pause</name></action>\r\n"
+            "    <action><name>Stop</name></action>\r\n"
+            "    <action><name>GetTransportInfo</name></action>\r\n"
+            "    <action><name>GetPositionInfo</name></action>\r\n"
+            "  </actionList>\r\n"
+            "</scpd>";
+
+        std::array<char, 256> header;
+        int response_length = strlen(avt_xml);
+        snprintf(header.data(), header.size(),
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+                 "Content-Length: %d\r\n"
+                 "Connection: close\r\n"
+                 "Server: OS/1.0 UPnP/1.1 product/1.0\r\n\r\n",
+                 response_length);
+        lwip_send(client_sock, header.data(), strlen(header.data()), 0);
+        lwip_send(client_sock, (const uint8_t *)avt_xml, response_length, 0);
+        lwip_close(client_sock);
+        return;
+    }
+    // ´¦Àírendering xml
+    else if (strstr(buffer.data(), "GET /RenderingControl.xml") != nullptr ||
+             strstr(buffer.data(), "HEAD /RenderingControl.xml") != nullptr) {
+        // SED : ´®¿ÚÊä³ö
+        osal_printk("httpÊÕµ½RenderingControl.xmlÇëÇó\n");
+        static constexpr const char *rc_xml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+            "<scpd xmlns=\"urn:schemas-upnp-org:service-1-0\">\r\n"
+            "  <actionList>\r\n"
+            "    <action><name>SetVolume</name></action>\r\n"
+            "    <action><name>GetVolume</name></action>\r\n"
+            "    <action><name>SetMute</name></action>\r\n"
+            "    <action><name>GetMute</name></action>\r\n"
+            "  </actionList>\r\n"
+            "</scpd>";
+
+        std::array<char, 256> header;
+        int response_length = strlen(rc_xml);
+        snprintf(header.data(), header.size(),
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+                 "Content-Length: %d\r\n"
+                 "Connection: close\r\n"
+                 "Server: OS/1.0 UPnP/1.1 product/1.0\r\n\r\n",
+                 response_length);
+        lwip_send(client_sock, header.data(), strlen(header.data()), 0);
+        lwip_send(client_sock, (const uint8_t *)rc_xml, response_length, 0);
+        lwip_close(client_sock);
+        return;
+    }
+    // ´¦Àíconnection manager xml
+    else if (strstr(buffer.data(), "GET /ConnectionManager.xml") != nullptr ||
+             strstr(buffer.data(), "HEAD /ConnectionManager.xml") != nullptr) {
+        osal_printk("httpÊÕµ½ ConnectionManager.xml ÇëÇó\n");
+        static constexpr const char *cm_xml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+            "<scpd xmlns=\"urn:schemas-upnp-org:service-1-0\">\r\n"
+            "  <actionList>\r\n"
+            "    <action><name>GetProtocolInfo</name></action>\r\n"
+            "    <action><name>GetCurrentConnectionIDs</name></action>\r\n"
+            "  </actionList>\r\n"
+            "</scpd>";
+
+        std::array<char, 256> header;
+        int response_length = strlen(cm_xml);
+        snprintf(header.data(), header.size(),
+                 "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+                 "Content-Length: %d\r\n"
+                 "Connection: close\r\n"
+                 "Server: OS/1.0 UPnP/1.1 product/1.0\r\n\r\n",
+                 response_length);
+        lwip_send(client_sock, header.data(), strlen(header.data()), 0);
+        lwip_send(client_sock, (const uint8_t *)cm_xml, response_length, 0);
+        lwip_close(client_sock);
+        return;
+    }
+    // ´¦ÀíSetAVTransportURIµÈ¿ØÖÆÃüÁî
+    else if (strstr(buffer.data(), "POST") != nullptr) {
+        // ÅĞ¶ÏÊÇ·ñÊÇAVTransport¡¢RenderingControl»òConnectionManagerµÄ¿ØÖÆÃüÁî
+        const bool is_avtransport = strstr(buffer.data(), "POST /AVTransport/control") != nullptr;
+        const bool is_renderingcontrol = strstr(buffer.data(), "POST /RenderingControl/control") != nullptr;
+        const bool is_connectionmanager = strstr(buffer.data(), "POST /ConnectionManager/control") != nullptr;
+
+        if (!(is_avtransport || is_renderingcontrol || is_connectionmanager)) {
+            static const char *unknown_command_response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n";
+            lwip_send(client_sock, unknown_command_response, strlen(unknown_command_response), 0);
+            lwip_close(client_sock);
+            return;
+        }
+        // SED : ´®¿ÚÊä³ö
+        osal_printk("httpÊÕµ½¿ØÖÆÃüÁî: %s\n",
+                    is_avtransport ? "AVTransport" : (is_renderingcontrol ? "RenderingControl" : "ConnectionManager"));
+        // °´ÕÕSOAPACTION×ö¶¯×÷·Ö·¢
+        const char *soap_action_start = strstr(buffer.data(), "SOAPACTION:");
+        if (soap_action_start != nullptr) {
+            // ========== AVTransport ·şÎñµÄ SOAP ¶¯×÷´¦Àí ==========
+            if (is_avtransport) {
+                if (strstr(soap_action_start, "#SetAVTransportURI") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½SetAVTransportURIÃüÁî\n");
+                    std::array<char, 512> media_url = {0}; // ´ÓSOAPÇëÇóÖĞÌáÈ¡³öÃ½ÌåURL£¬·½±ãºóĞøÊµÏÖÕæÕıµÄ²¥·Å¹¦ÄÜ
+                    extract_xml_tag_value(buffer.data(), "CurrentURI", media_url.data(), media_url.size());
+                    static const char *http_answer_av =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:SetAVTransportURIResponse "
+                        "xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, http_answer_av, strlen(http_answer_av) - 1, 0);
+
+                    // ´¦ÀíÃ½ÌåURL£¬ÕæÕıÊµÏÖDLNA²¥·Å¹¦ÄÜµÄºËĞÄ¾ÍÔÚÕâÀïÁË£¬µ±Ç°ÏÈ´òÓ¡³öÀ´ÑéÖ¤ÊÖ»úAPPµÄÇëÇó¸ñÊ½ÊÇ·ñÕıÈ·¡£
+                    osal_printk("SetAVTransportURIµÄÃ½ÌåURL: %s\n", media_url.data());
+
+                    // ´¦ÀíÒôÆµ
+                    if (data_process != nullptr) {
+                        data_process(media_url.data(), strlen(media_url.data()));
+                    }
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#Play") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½playÏà¹ØÃüÁî\n");
+                    // »Ø¸´Ò»¸ö¹Ì¶¨µÄ³É¹¦ÏìÓ¦
+                    static const char *play_control_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:PlayResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, play_control_response, strlen(play_control_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#Pause") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½pauseÏà¹ØÃüÁî\n");
+                    static const char *pause_control_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:PauseResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, pause_control_response, strlen(pause_control_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#Stop") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½stopÏà¹ØÃüÁî\n");
+                    static const char *stop_control_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:StopResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, stop_control_response, strlen(stop_control_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#GetTransportInfo") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ GetTransportInfo ÃüÁî\n");
+                    // »ñÈ¡´«Êä×´Ì¬£ºPLAYING, PAUSED_PLAYBACK, STOPPED, NO_MEDIA_PRESENT
+                    static const char *transport_info_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetTransportInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                        "<CurrentTransportState>PLAYING</CurrentTransportState>"
+                        "<CurrentTransportStatus>OK</CurrentTransportStatus>"
+                        "<CurrentSpeed>1</CurrentSpeed>"
+                        "</u:GetTransportInfoResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, transport_info_response, strlen(transport_info_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#GetPositionInfo") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ GetPositionInfo ÃüÁî\n");
+                    // »ñÈ¡²¥·Å½ø¶ÈĞÅÏ¢
+                    static const char *position_info_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetPositionInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                        "<Track>1</Track>"
+                        "<TrackDuration>00:05:00</TrackDuration>"
+                        "<TrackMetaData></TrackMetaData>"
+                        "<TrackURI></TrackURI>"
+                        "<RelTime>00:00:30</RelTime>"
+                        "<AbsTime>00:00:30</AbsTime>"
+                        "<RelCount>2147483647</RelCount>"
+                        "<AbsCount>2147483647</AbsCount>"
+                        "</u:GetPositionInfoResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, position_info_response, strlen(position_info_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else {
+                    // AVTransport ÖĞÎ´Æ¥ÅäµÄ¶¯×÷£¬·µ»Ø 501
+                    osal_printk("httpÊÕµ½AVTransportÎ´Öª¶¯×÷\n");
+                    static const char *k501 =
+                        "HTTP/1.1 501 Not Implemented\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n";
+                    lwip_send(client_sock, (const uint8_t *)k501, strlen(k501) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                }
+            }
+            // ========== RenderingControl ·şÎñµÄ SOAP ¶¯×÷´¦Àí ==========
+            else if (is_renderingcontrol) {
+                if (strstr(soap_action_start, "#SetVolume") != nullptr) {
+                    //  SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ SetVolume ÃüÁî\n");
+                    static const char *set_volume_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:SetVolumeResponse xmlns:u=\"urn:schemas-upnp-org:service:RenderingControl:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, set_volume_response, strlen(set_volume_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#GetVolume") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ GetVolume ÃüÁî\n");
+                    static const char *get_volume_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetVolumeResponse xmlns:u=\"urn:schemas-upnp-org:service:RenderingControl:1\">"
+                        "<CurrentVolume>50</CurrentVolume>"
+                        "</u:GetVolumeResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, get_volume_response, strlen(get_volume_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#SetMute") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ SetMute ÃüÁî\n");
+                    static const char *set_mute_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:SetMuteResponse xmlns:u=\"urn:schemas-upnp-org:service:RenderingControl:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, set_mute_response, strlen(set_mute_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#GetMute") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ GetMute ÃüÁî\n");
+                    static const char *get_mute_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetMuteResponse xmlns:u=\"urn:schemas-upnp-org:service:RenderingControl:1\">"
+                        "<CurrentMute>0</CurrentMute>"
+                        "</u:GetMuteResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, get_mute_response, strlen(get_mute_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½RenderingControlÎ´Öª¶¯×÷\n");
+                    static const char *k501 =
+                        "HTTP/1.1 501 Not Implemented\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n";
+                    lwip_send(client_sock, (const uint8_t *)k501, sizeof(k501) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                }
+            }
+            // ========== ConnectionManager ·şÎñµÄ SOAP ¶¯×÷´¦Àí ==========
+            else if (is_connectionmanager) {
+                if (strstr(soap_action_start, "#GetProtocolInfo") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ GetProtocolInfo ÃüÁî\n");
+                    static const char *protocol_info_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetProtocolInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:ConnectionManager:1\">"
+                        "<Source>http-get:*:audio/mpeg:*,http-get:*:audio/mp4:*</Source>"
+                        "<Sink></Sink>"
+                        "</u:GetProtocolInfoResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, protocol_info_response, strlen(protocol_info_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_start, "#GetCurrentConnectionIDs") != nullptr) {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ GetCurrentConnectionIDs ÃüÁî\n");
+                    static const char *connection_ids_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetCurrentConnectionIDsResponse "
+                        "xmlns:u=\"urn:schemas-upnp-org:service:ConnectionManager:1\">"
+                        "<ConnectionIDs></ConnectionIDs>"
+                        "</u:GetCurrentConnectionIDsResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, connection_ids_response, strlen(connection_ids_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else {
+                    // SED : ´®¿ÚÊä³ö
+                    osal_printk("httpÊÕµ½ConnectionManagerÎ´Öª¶¯×÷\n");
+                    static const char *k501 =
+                        "HTTP/1.1 501 Not Implemented\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n";
+                    lwip_send(client_sock, (const uint8_t *)k501, sizeof(k501) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                }
+            } else {
+                // SOAPACTION Í·²»´æÔÚ£¬·µ»Ø 501
+                osal_printk("httpÊÕµ½POSTµ«ÎŞSOAPACTIONÍ·\n");
+                static const char *k501 =
+                    "HTTP/1.1 501 Not Implemented\r\n"
+                    "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                    "CONNECTION: close\r\n\r\n";
+                lwip_send(client_sock, (const uint8_t *)k501, sizeof(k501) - 1, 0);
+                lwip_close(client_sock);
+                return;
+            }
+        } else {
+            // ·Ç GET ÃèÊö¡¢·Ç POST ¿ØÖÆ£¬ÇÒ²»ÔÚÒÑÖ§³ÖĞ­Òé·¶Î§ÄÚ£º·µ»Ø 400¡£
+            static const char k400[] = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+            lwip_send(client_sock, (const uint8_t *)k400, sizeof(k400) - 1, 0);
+            lwip_close(client_sock);
+        }
+    }
 }
 
 void dlan::ssdp_ip_get()
 {
-    static netif *netif_p = netif_default;
+    netif *netif_p = netif_default;
+    if (netif_p == nullptr || !netif_is_up(netif_p)) {
+        // STA³¡¾°ÓÅÏÈ³¢ÊÔwlan0£¬±ÜÃânetif_defaultÉĞÎ´ÇĞ»»Íê³É¡£
+        netif_p = netif_find("wlan0");
+    }
     if (netif_p == nullptr || !netif_is_up(netif_p)) {
         snprintf(local_ip.data(), sizeof(local_ip), "0.0.0.0");
-        osal_printk("è·å–é»˜è®¤ç½‘ç»œæ¥å£å¤±è´¥\n");
+        osal_printk("»ñÈ¡Ä¬ÈÏÍøÂç½Ó¿ÚÊ§°Ü\n");
         return;
     }
 
-    snprintf(local_ip.data(), sizeof(local_ip), "%d.%d.%d.%d", (netif_p->ip_addr.u_addr.ip4.addr >> 0) & 0xFF,
-             (netif_p->ip_addr.u_addr.ip4.addr >> 8) & 0xFF, (netif_p->ip_addr.u_addr.ip4.addr >> 16) & 0xFF,
-             (netif_p->ip_addr.u_addr.ip4.addr >> 24) & 0xFF);
+    uint32_t ip_host_order = lwip_ntohl(netif_p->ip_addr.u_addr.ip4.addr);
+    snprintf(local_ip.data(), sizeof(local_ip), "%u.%u.%u.%u", (ip_host_order >> 24) & 0xFF,
+             (ip_host_order >> 16) & 0xFF, (ip_host_order >> 8) & 0xFF, ip_host_order & 0xFF);
+    osal_printk("dlan±¾µØIP=%s\n", local_ip.data());
 }
 
 void dlan::dlan_stop()
 {
-    // ç»“æŸDLANç›¸å…³çš„å¥—æ¥å­—å’Œèµ„æº
-    if (ssdp_sock > 0) {
+    // ½áÊøDLANÏà¹ØµÄÌ×½Ó×ÖºÍ×ÊÔ´
+    if (ssdp_sock >= 0) {
         lwip_close(ssdp_sock);
-        ssdp_sock = 0;
+        ssdp_sock = -1;
     }
-    if (http_sock > 0) {
+    if (http_sock >= 0) {
         lwip_close(http_sock);
-        http_sock = 0;
+        http_sock = -1;
     }
+}
+
+void dlan::set_data_clear_fuction(data_clear_t callback)
+{
+    data_clear = callback;
+}
+
+void dlan::set_data_process_fuction(data_process_t callback)
+{
+    data_process = callback;
 }

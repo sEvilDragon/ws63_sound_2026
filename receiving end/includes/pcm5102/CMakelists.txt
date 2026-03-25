@@ -1,3 +1,0 @@
-set(SOURCES "${SOURCES}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pcm5102.cpp"
-    PARENT_SCOPE)   
