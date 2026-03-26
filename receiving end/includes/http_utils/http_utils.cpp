@@ -98,8 +98,22 @@ bool resolve_ipv4_addr(const char *host, in_addr *out_addr)
         return false;
     }
 
-    out_addr->s_addr = inet_addr(host);
-    return (out_addr->s_addr != INADDR_NONE);
+    // Fast path: dotted-decimal IPv4 literal.
+    if (inet_aton(host, out_addr) != 0) {
+        return true;
+    }
+
+    // Fallback: resolve DNS host name via lwIP netdb API.
+    hostent *entry = lwip_gethostbyname(host);
+    if (entry == nullptr || entry->h_addr_list == nullptr || entry->h_addr_list[0] == nullptr) {
+        return false;
+    }
+    if (entry->h_addrtype != AF_INET || entry->h_length < static_cast<int>(sizeof(in_addr))) {
+        return false;
+    }
+
+    memcpy(out_addr, entry->h_addr_list[0], sizeof(in_addr));
+    return true;
 }
 
 bool extract_http_header_value(const char *request, const char *key, char *out, size_t out_size)

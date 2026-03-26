@@ -5,6 +5,7 @@ extern "C" {
 #include "lwip/sockets.h"
 #include "lwip/netif.h"
 #include "lwip/inet.h"
+#include "lwip/netdb.h"
 #include "soc_osal.h"
 }
 

@@ -3,8 +3,8 @@
 volatile int iis::write_idx = 0;
 volatile int iis::read_idx = 0;
 volatile int iis::pending_frames = 0;
-std::array<void *, 100> iis::raw_buffers;
-std::array<int16_t *, 100> iis::dma_buffers;
+std::array<void *, 80> iis::raw_buffers;
+std::array<int16_t *, 80> iis::dma_buffers;
 uint8_t iis::dma_channel = 0;
 bool iis::is_ready = false;
 int16_t iis::last_left_sample = 0;
@@ -140,7 +140,7 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         if (pending_frames > 0)
             pending_frames--; // 发送了一帧数据，待处理帧数减1
 
-        data_clear_one(read_idx); // 清理刚发送完的缓冲区，DMA下次经过此槽时播静音
+        data_clear_one(read_idx); // 清理刚发送完的缓冲区，DMA下次经过此槽时播平滑保持采样
         read_idx = new_read_idx;  // 更新读取索引
 
         // 在消耗侧检查缓冲是否耗尽：pending_frames 刚被减，此处最准确
@@ -276,7 +276,11 @@ void iis::data_clear_one(int index)
     if (index < 0 || index >= (int)buffer_num) {
         return; // 索引越界，直接返回
     }
-    memset(dma_buffers[index], 0, buffer_size * sizeof(uint16_t));
+    // 欠载时用最后采样值填充，较纯静音更不易产生突兀爆音。
+    for (uint32_t i = 0; i + 1 < buffer_size; i += 2) {
+        dma_buffers[index][i] = last_left_sample;
+        dma_buffers[index][i + 1] = last_right_sample;
+    }
     // DMA 直接读物理内存，memset 只写 CPU cache，不 writeback 则 DMA 读到物理内存里的旧音频，
     // 产生每次完全相同的重复杂音。
     osal_dcache_region_clean(dma_buffers[index], buffer_size * sizeof(uint16_t));

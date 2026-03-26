@@ -39,6 +39,8 @@ uint32_t g_avt_seq = 0;
 std::array<char, 256> g_rc_callback = {0};
 std::array<char, 128> g_rc_sid = {0};
 uint32_t g_rc_seq = 0;
+uint32_t g_playback_elapsed_base_sec = 0;
+unsigned long long g_playback_started_jiffies = 0;
 } // namespace
 
 // 定义全局传输状态静态成员
@@ -82,7 +84,7 @@ bool send_http_notify_request(const char *callback_url, const char *sid, uint32_
         return false;
     }
 
-    std::array<char, 1024> request = {0};
+    static std::array<char, 1024> request = {0};
     int body_len = static_cast<int>(strlen(body));
     int request_len = snprintf(request.data(), request.size(),
                                "NOTIFY %s HTTP/1.1\r\n"
@@ -108,7 +110,7 @@ bool send_http_notify_request(const char *callback_url, const char *sid, uint32_
         return false;
     }
 
-    std::array<char, 256> resp = {0};
+    static std::array<char, 256> resp = {0};
     int read_ret = lwip_recv(sock, resp.data(), resp.size() - 1, 0);
     if (read_ret > 0) {
         resp[read_ret] = '\0';
@@ -124,13 +126,40 @@ bool send_http_notify_request(const char *callback_url, const char *sid, uint32_
     return true;
 }
 
+bool send_http_soap_response(int32_t client_sock, const char *body)
+{
+    if (body == nullptr) {
+        return false;
+    }
+
+    int body_len = static_cast<int>(strlen(body));
+    std::array<char, 256> header = {0};
+    int header_len = snprintf(header.data(), header.size(),
+                              "HTTP/1.1 200 OK\r\n"
+                              "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                              "CONTENT-LENGTH: %d\r\n"
+                              "CONNECTION: close\r\n\r\n",
+                              body_len);
+    if (header_len <= 0 || header_len >= static_cast<int>(header.size())) {
+        return false;
+    }
+
+    if (lwip_send(client_sock, header.data(), header_len, 0) <= 0) {
+        return false;
+    }
+    if (body_len > 0 && lwip_send(client_sock, (const uint8_t *)body, body_len, 0) <= 0) {
+        return false;
+    }
+    return true;
+}
+
 bool notify_avtransport_state(const char *state)
 {
     if (state == nullptr || state[0] == '\0' || g_avt_callback[0] == '\0' || g_avt_sid[0] == '\0') {
         return false;
     }
 
-    std::array<char, 768> body = {0};
+    static std::array<char, 768> body = {0};
     snprintf(body.data(), body.size(),
              "<e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">"
              "<e:property>"
@@ -156,7 +185,7 @@ bool notify_renderingcontrol_state(uint8_t volume, bool mute)
         return false;
     }
 
-    std::array<char, 768> body = {0};
+    static std::array<char, 768> body = {0};
     snprintf(body.data(), body.size(),
              "<e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">"
              "<e:property>"
@@ -225,11 +254,61 @@ void xml_escape_basic(const char *src, char *dst, size_t dst_size)
     dst[di] = '\0';
 }
 
+bool is_transport_playing_state(const char *state)
+{
+    return ascii_iequals(state, "PLAYING") || ascii_iequals(state, "TRANSITIONING");
+}
+
+void format_hms(uint32_t total_seconds, char *out, size_t out_size)
+{
+    if (out == nullptr || out_size == 0) {
+        return;
+    }
+    uint32_t hours = total_seconds / 3600U;
+    uint32_t mins = (total_seconds % 3600U) / 60U;
+    uint32_t secs = total_seconds % 60U;
+    snprintf(out, out_size, "%02u:%02u:%02u", hours, mins, secs);
+}
+
+uint32_t get_playback_elapsed_seconds()
+{
+    uint32_t elapsed = g_playback_elapsed_base_sec;
+    if (is_transport_playing_state(dlan::g_transport_state.data()) && g_playback_started_jiffies != 0) {
+        unsigned long long now_jiffies = osal_get_jiffies();
+        unsigned long long delta_jiffies = (now_jiffies >= g_playback_started_jiffies)
+                                              ? (now_jiffies - g_playback_started_jiffies)
+                                              : 0ULL;
+        unsigned int delta_ms = osal_jiffies_to_msecs(static_cast<unsigned int>(delta_jiffies));
+        elapsed += delta_ms / 1000U;
+    }
+    return elapsed;
+}
+
 void update_transport_state(const char *state, bool notify)
 {
     if (state == nullptr || state[0] == '\0') {
         return;
     }
+
+    const bool was_playing = is_transport_playing_state(dlan::g_transport_state.data());
+    const bool now_playing = is_transport_playing_state(state);
+
+    if (!was_playing && now_playing) {
+        g_playback_started_jiffies = osal_get_jiffies();
+    } else if (was_playing && !now_playing && g_playback_started_jiffies != 0) {
+        unsigned long long now_jiffies = osal_get_jiffies();
+        unsigned long long delta_jiffies =
+            (now_jiffies >= g_playback_started_jiffies) ? (now_jiffies - g_playback_started_jiffies) : 0ULL;
+        unsigned int delta_ms = osal_jiffies_to_msecs(static_cast<unsigned int>(delta_jiffies));
+        g_playback_elapsed_base_sec += delta_ms / 1000U;
+        g_playback_started_jiffies = 0;
+    }
+
+    if (ascii_iequals(state, "STOPPED")) {
+        g_playback_elapsed_base_sec = 0;
+        g_playback_started_jiffies = 0;
+    }
+
     copy_string_safe(dlan::g_transport_state.data(), dlan::g_transport_state.size(), state);
     if (notify) {
         notify_avtransport_state(state);
@@ -273,7 +352,7 @@ bool stream_probe_once(const char *uri)
         return false;
     }
 
-    std::array<char, 768> request = {0};
+    static std::array<char, 768> request = {0};
     int request_len = snprintf(request.data(), request.size(),
                                "GET %s HTTP/1.1\r\n"
                                "Host: %s\r\n"
@@ -291,7 +370,7 @@ bool stream_probe_once(const char *uri)
         return false;
     }
 
-    std::array<char, 512> recv_buf = {0};
+    static std::array<char, 512> recv_buf = {0};
     int recv_len = lwip_recv(sock, recv_buf.data(), recv_buf.size(), 0);
     lwip_close(sock);
 
@@ -317,6 +396,8 @@ void init_dlan_runtime_state_once()
     copy_string_safe(g_avt_sid.data(), g_avt_sid.size(), k_default_avt_sid);
     copy_string_safe(g_rc_sid.data(), g_rc_sid.size(), k_default_rc_sid);
     copy_string_safe(dlan::g_transport_state.data(), dlan::g_transport_state.size(), "STOPPED");
+    g_playback_elapsed_base_sec = 0;
+    g_playback_started_jiffies = 0;
     inited = true;
 }
 } // namespace
@@ -733,8 +814,8 @@ void dlan::http_process()
         strstr(buffer.data(), "GET / HTTP/1.1") || strstr(buffer.data(), "GET / HTTP/1.0")) {
         // SED : 串口输出
         osal_printk("http收到设备描述请求\n");
-        std::array<char, 2048> xml_response;
-        std::array<char, 256> header;
+        static std::array<char, 2048> xml_response;
+        static std::array<char, 256> header;
         snprintf(xml_response.data(), xml_response.size(),
                  "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
                  "<root xmlns=\"urn:schemas-upnp-org:device-1-0\" xmlns:dlna=\"urn:schemas-dlna-org:device-1-0\">\r\n"
@@ -912,17 +993,14 @@ void dlan::http_process()
                 if (strstr(soap_action_value.data(), "#SetAVTransportURI") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到SetAVTransportURI命令\n");
-                    std::array<char, 512> media_url = {0}; // 从SOAP请求中提取出媒体URL，方便后续实现真正的播放功能
+                    static std::array<char, 512> media_url = {0}; // 从SOAP请求中提取出媒体URL，方便后续实现真正的播放功能
                     extract_xml_tag_value(buffer.data(), "CurrentURI", media_url.data(), media_url.size());
                     html_entity_decode_amp(media_url.data());
                     copy_string_safe(g_current_uri.data(), g_current_uri.size(), media_url.data());
                     if (media_set_uri_handler_func != nullptr) {
                         media_set_uri_handler_func(g_current_uri.data());
                     }
-                    static const char *http_answer_av =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *set_uri_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
@@ -930,7 +1008,7 @@ void dlan::http_process()
                         "xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, http_answer_av, strlen(http_answer_av) - 1, 0);
+                    send_http_soap_response(client_sock, set_uri_response_body);
 
                     // 处理媒体URL，真正实现DLNA播放功能的核心就在这里了，当前先打印出来验证手机APP的请求格式是否正确。
                     osal_printk("SetAVTransportURI的媒体URL: %s\n", media_url.data());
@@ -943,27 +1021,23 @@ void dlan::http_process()
                     // SED : 串口输出
                     osal_printk("http收到play相关命令\n");
                     // 回复一个固定的成功响应
-                    static const char *play_control_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *play_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
                         "<u:PlayResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, play_control_response, strlen(play_control_response) - 1, 0);
+                    send_http_soap_response(client_sock, play_response_body);
 
-                    // 进入播放前上报TRANSITIONING，并尝试一次最小拉流探测。
+                    // 进入播放前上报TRANSITIONING。
+                    // 不在控制通道里做同步拉流探测，避免额外连接影响真实播放链路稳定性。
                     update_transport_state("TRANSITIONING", true);
                     bool play_ok = false;
-                    bool callback_ok = false;
                     if (media_play_handler_func != nullptr) {
-                        callback_ok = media_play_handler_func(g_current_uri.data());
-                        play_ok = callback_ok && stream_probe_once(g_current_uri.data());
+                        play_ok = media_play_handler_func(g_current_uri.data());
                     } else {
-                        play_ok = stream_probe_once(g_current_uri.data());
+                        play_ok = (g_current_uri[0] != '\0');
                     }
                     if (play_ok) {
                         update_transport_state("PLAYING", true);
@@ -976,17 +1050,14 @@ void dlan::http_process()
                 } else if (strstr(soap_action_value.data(), "#Pause") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到pause相关命令\n");
-                    static const char *pause_control_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *pause_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
                         "<u:PauseResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, pause_control_response, strlen(pause_control_response) - 1, 0);
+                    send_http_soap_response(client_sock, pause_response_body);
                     if (media_pause_handler_func != nullptr) {
                         media_pause_handler_func();
                     }
@@ -996,17 +1067,14 @@ void dlan::http_process()
                 } else if (strstr(soap_action_value.data(), "#Stop") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到stop相关命令\n");
-                    static const char *stop_control_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *stop_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
                         "<u:StopResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, stop_control_response, strlen(stop_control_response) - 1, 0);
+                    send_http_soap_response(client_sock, stop_response_body);
                     if (media_stop_handler_func != nullptr) {
                         media_stop_handler_func();
                     }
@@ -1017,11 +1085,8 @@ void dlan::http_process()
                     // SED : 串口输出
                     osal_printk("http收到 GetTransportInfo 命令\n");
                     // 获取传输状态：PLAYING, PAUSED_PLAYBACK, STOPPED, NO_MEDIA_PRESENT
-                    std::array<char, 768> transport_info_response = {0};
-                    snprintf(transport_info_response.data(), transport_info_response.size(),
-                             "HTTP/1.1 200 OK\r\n"
-                             "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                             "CONNECTION: close\r\n\r\n"
+                    static std::array<char, 640> transport_info_body = {0};
+                    snprintf(transport_info_body.data(), transport_info_body.size(),
                              "<?xml version=\"1.0\"?>"
                              "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                              "<s:Body>"
@@ -1032,26 +1097,23 @@ void dlan::http_process()
                              "</u:GetTransportInfoResponse>"
                              "</s:Body>"
                              "</s:Envelope>",
-                             g_transport_state.data());
-                    lwip_send(client_sock, transport_info_response.data(), strlen(transport_info_response.data()), 0);
+                             dlan::g_transport_state.data());
+                    send_http_soap_response(client_sock, transport_info_body.data());
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetPositionInfo") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetPositionInfo 命令\n");
-                    std::array<char, 1024> escaped_uri = {0};
+                    static std::array<char, 1024> escaped_uri = {0};
                     xml_escape_basic(g_current_uri.data(), escaped_uri.data(), escaped_uri.size());
 
                     const bool has_uri = g_current_uri[0] != '\0';
-                    const bool is_playing = ascii_iequals(dlan::g_transport_state.data(), "PLAYING") ||
-                                            ascii_iequals(dlan::g_transport_state.data(), "TRANSITIONING") ||
-                                            ascii_iequals(dlan::g_transport_state.data(), "PAUSED_PLAYBACK");
+                    uint32_t elapsed_sec = has_uri ? get_playback_elapsed_seconds() : 0U;
+                    static std::array<char, 16> elapsed_hms = {0};
+                    format_hms(elapsed_sec, elapsed_hms.data(), elapsed_hms.size());
 
-                    std::array<char, 1536> position_info_response = {0};
-                    snprintf(position_info_response.data(), position_info_response.size(),
-                             "HTTP/1.1 200 OK\r\n"
-                             "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                             "CONNECTION: close\r\n\r\n"
+                    static std::array<char, 1280> position_info_body = {0};
+                    snprintf(position_info_body.data(), position_info_body.size(),
                              "<?xml version=\"1.0\"?>"
                              "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                              "<s:Body>"
@@ -1068,8 +1130,8 @@ void dlan::http_process()
                              "</s:Body>"
                              "</s:Envelope>",
                              has_uri ? 1U : 0U, "00:00:00", has_uri ? escaped_uri.data() : "",
-                             is_playing ? "00:00:01" : "00:00:00", is_playing ? "00:00:01" : "00:00:00");
-                    lwip_send(client_sock, position_info_response.data(), strlen(position_info_response.data()), 0);
+                             elapsed_hms.data(), elapsed_hms.data());
+                    send_http_soap_response(client_sock, position_info_body.data());
                     lwip_close(client_sock);
                     return;
                 } else {
@@ -1089,26 +1151,20 @@ void dlan::http_process()
                 if (strstr(soap_action_value.data(), "#SetVolume") != nullptr) {
                     //  SED : 串口输出
                     osal_printk("http收到 SetVolume 命令\n");
-                    static const char *set_volume_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *set_volume_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
                         "<u:SetVolumeResponse xmlns:u=\"urn:schemas-upnp-org:service:RenderingControl:1\" />"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, set_volume_response, strlen(set_volume_response) - 1, 0);
+                    send_http_soap_response(client_sock, set_volume_response_body);
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetVolume") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetVolume 命令\n");
-                    static const char *get_volume_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *get_volume_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
@@ -1117,32 +1173,26 @@ void dlan::http_process()
                         "</u:GetVolumeResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, get_volume_response, strlen(get_volume_response) - 1, 0);
+                    send_http_soap_response(client_sock, get_volume_response_body);
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#SetMute") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 SetMute 命令\n");
-                    static const char *set_mute_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *set_mute_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
                         "<u:SetMuteResponse xmlns:u=\"urn:schemas-upnp-org:service:RenderingControl:1\" />"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, set_mute_response, strlen(set_mute_response) - 1, 0);
+                    send_http_soap_response(client_sock, set_mute_response_body);
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetMute") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetMute 命令\n");
-                    static const char *get_mute_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *get_mute_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
@@ -1151,7 +1201,7 @@ void dlan::http_process()
                         "</u:GetMuteResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, get_mute_response, strlen(get_mute_response) - 1, 0);
+                    send_http_soap_response(client_sock, get_mute_response_body);
                     lwip_close(client_sock);
                     return;
                 } else {
@@ -1161,7 +1211,7 @@ void dlan::http_process()
                         "HTTP/1.1 501 Not Implemented\r\n"
                         "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
                         "CONNECTION: close\r\n\r\n";
-                    lwip_send(client_sock, (const uint8_t *)k501, sizeof(k501) - 1, 0);
+                    lwip_send(client_sock, (const uint8_t *)k501, strlen(k501), 0);
                     lwip_close(client_sock);
                     return;
                 }
@@ -1171,10 +1221,7 @@ void dlan::http_process()
                 if (strstr(soap_action_value.data(), "#GetProtocolInfo") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetProtocolInfo 命令\n");
-                    static const char *protocol_info_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *protocol_info_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
@@ -1184,16 +1231,13 @@ void dlan::http_process()
                         "</u:GetProtocolInfoResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, protocol_info_response, strlen(protocol_info_response) - 1, 0);
+                    send_http_soap_response(client_sock, protocol_info_response_body);
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetCurrentConnectionIDs") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetCurrentConnectionIDs 命令\n");
-                    static const char *connection_ids_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *connection_ids_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
@@ -1203,15 +1247,12 @@ void dlan::http_process()
                         "</u:GetCurrentConnectionIDsResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, connection_ids_response, strlen(connection_ids_response) - 1, 0);
+                    send_http_soap_response(client_sock, connection_ids_response_body);
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetCurrentConnectionInfo") != nullptr) {
                     osal_printk("http收到 GetCurrentConnectionInfo 命令\n");
-                    static const char *connection_info_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
+                    static const char *connection_info_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
@@ -1227,7 +1268,7 @@ void dlan::http_process()
                         "</u:GetCurrentConnectionInfoResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
-                    lwip_send(client_sock, connection_info_response, strlen(connection_info_response) - 1, 0);
+                    send_http_soap_response(client_sock, connection_info_response_body);
                     lwip_close(client_sock);
                     return;
                 } else {
@@ -1237,7 +1278,7 @@ void dlan::http_process()
                         "HTTP/1.1 501 Not Implemented\r\n"
                         "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
                         "CONNECTION: close\r\n\r\n";
-                    lwip_send(client_sock, (const uint8_t *)k501, sizeof(k501) - 1, 0);
+                    lwip_send(client_sock, (const uint8_t *)k501, strlen(k501), 0);
                     lwip_close(client_sock);
                     return;
                 }
@@ -1248,7 +1289,7 @@ void dlan::http_process()
                     "HTTP/1.1 501 Not Implemented\r\n"
                     "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
                     "CONNECTION: close\r\n\r\n";
-                lwip_send(client_sock, (const uint8_t *)k501, sizeof(k501) - 1, 0);
+                lwip_send(client_sock, (const uint8_t *)k501, strlen(k501), 0);
                 lwip_close(client_sock);
                 return;
             }

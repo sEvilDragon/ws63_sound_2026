@@ -54,7 +54,16 @@ void minimp3_task(void *arg)
             osal_printk("不支持的采样率: %d\n", rate);
         }
     });
-    minimp3::mp3_get_into_iis_set(iis::data_write);
+    minimp3::mp3_get_into_iis_set([](const int16_t *data, uint32_t size) {
+        iis::data_write(data, size);
+        // 仅在队列接近见底时补帧，降低补帧对正常音频连续性的干预。
+        if (iis::pending_frames <= 1) {
+            iis::fill_buffer_if_needed();
+        }
+    });
+    minimp3::playback_queue_level_getter_set([]() -> int {
+        return static_cast<int>(iis::pending_frames);
+    });
 
     minimp3::stream_mp3_to_iis();
 }
