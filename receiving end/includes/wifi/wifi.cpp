@@ -389,8 +389,8 @@ bool wifi::udp()
     // 配置服务端地址结构体
     srv_addr.sin_family = AF_INET;                             // 地址族设置为IPv4
     srv_addr.sin_addr.s_addr = inet_addr(udp_stack_ip.data()); // 设置服务地址
-    srv_addr.sin_port = htons(udp_stack_port);                 // 服务器端口
-    errcode_t ret = bind(sfd, (sockaddr *)&srv_addr, sizeof(srv_addr));
+    srv_addr.sin_port = lwip_htons(udp_stack_port);            // 服务器端口
+    errcode_t ret = lwip_bind(sfd, (sockaddr *)&srv_addr, sizeof(srv_addr));
     if (ret != 0) {
         osal_printk("UDP绑定套接字失败 错误码: %d\n", ret);
         lwip_close(sfd);
@@ -398,7 +398,7 @@ bool wifi::udp()
     }
 
     // 堵塞并等待接收数据，recvfrom函数会将接收到的数据存储在buffer中，并将发送方的地址信息存储在client_addr中
-    ret = recvfrom(sfd, buffer, sizeof(buffer), 0, (sockaddr *)&client_addr, &client_addr_len);
+    ret = lwip_recvfrom(sfd, buffer, sizeof(buffer), 0, (sockaddr *)&client_addr, &client_addr_len);
     if (ret < 0) {
         osal_printk("UDP接收数据失败\n");
         lwip_close(sfd);

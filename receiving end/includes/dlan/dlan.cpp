@@ -6,155 +6,320 @@ std::array<char, 16> dlan::local_ip = {0};
 bool dlan::is_ready = false;
 int32_t dlan::ssdp_sock = -1;
 int32_t dlan::http_sock = -1;
-dlan::data_process_t dlan::data_process = nullptr;
-dlan::data_clear_t dlan::data_clear = nullptr;
+dlan::media_set_uri_handler dlan::media_set_uri_handler_func = nullptr;
+dlan::media_play_handler dlan::media_play_handler_func = nullptr;
+dlan::media_pause_handler dlan::media_pause_handler_func = nullptr;
+dlan::media_stop_handler dlan::media_stop_handler_func = nullptr;
+
+void dlan::register_media_set_uri_handler(media_set_uri_handler handler)
+{
+    media_set_uri_handler_func = handler;
+}
+
+void dlan::register_media_play_handler(media_play_handler handler)
+{
+    media_play_handler_func = handler;
+}
+
+void dlan::register_media_pause_handler(media_pause_handler handler)
+{
+    media_pause_handler_func = handler;
+}
+
+void dlan::register_media_stop_handler(media_stop_handler handler)
+{
+    media_stop_handler_func = handler;
+}
 
 namespace {
-void trim_ascii_whitespace(char *text)
+std::array<char, 512> g_current_uri = {0};
+std::array<char, 256> g_avt_callback = {0};
+std::array<char, 128> g_avt_sid = {0};
+uint32_t g_avt_seq = 0;
+std::array<char, 256> g_rc_callback = {0};
+std::array<char, 128> g_rc_sid = {0};
+uint32_t g_rc_seq = 0;
+} // namespace
+
+// 定义全局传输状态静态成员
+std::array<char, 32> dlan::g_transport_state = {"STOPPED"};
+
+namespace {
+bool send_http_notify_request(const char *callback_url, const char *sid, uint32_t seq, const char *body)
 {
-    if (text == nullptr || text[0] == '\0') {
+    if (callback_url == nullptr || sid == nullptr || body == nullptr || callback_url[0] == '\0' || sid[0] == '\0') {
+        return false;
+    }
+
+    simple_http_url url;
+    if (!parse_http_url(callback_url, url)) {
+        osal_printk("NOTIFY URL解析失败: %s\n", callback_url);
+        return false;
+    }
+
+    int32_t sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        osal_printk("NOTIFY socket创建失败\n");
+        return false;
+    }
+
+    timeval tv = {2, 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = lwip_htons(url.port);
+    if (!resolve_ipv4_addr(url.host.data(), &addr.sin_addr)) {
+        osal_printk("NOTIFY主机解析失败: %s\n", url.host.data());
+        lwip_close(sock);
+        return false;
+    }
+
+    if (connect(sock, (sockaddr *)&addr, sizeof(addr)) != 0) {
+        osal_printk("NOTIFY连接失败: %s:%u\n", url.host.data(), url.port);
+        lwip_close(sock);
+        return false;
+    }
+
+    std::array<char, 1024> request = {0};
+    int body_len = static_cast<int>(strlen(body));
+    int request_len = snprintf(request.data(), request.size(),
+                               "NOTIFY %s HTTP/1.1\r\n"
+                               "HOST: %s:%u\r\n"
+                               "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                               "NT: upnp:event\r\n"
+                               "NTS: upnp:propchange\r\n"
+                               "SID: %s\r\n"
+                               "SEQ: %u\r\n"
+                               "CONTENT-LENGTH: %d\r\n"
+                               "Connection: close\r\n\r\n"
+                               "%s",
+                               url.path.data(), url.host.data(), url.port, sid, seq, body_len, body);
+    if (request_len <= 0 || request_len >= static_cast<int>(request.size())) {
+        lwip_close(sock);
+        return false;
+    }
+
+    int ret = lwip_send(sock, request.data(), request_len, 0);
+    if (ret <= 0) {
+        osal_printk("NOTIFY发送失败\n");
+        lwip_close(sock);
+        return false;
+    }
+
+    std::array<char, 256> resp = {0};
+    int read_ret = lwip_recv(sock, resp.data(), resp.size() - 1, 0);
+    if (read_ret > 0) {
+        resp[read_ret] = '\0';
+        char *line_end = strstr(resp.data(), "\r\n");
+        if (line_end != nullptr) {
+            *line_end = '\0';
+        }
+        // SED ： 串口输出
+        osal_printk("NOTIFY响应: %s\n", resp.data());
+    }
+
+    lwip_close(sock);
+    return true;
+}
+
+bool notify_avtransport_state(const char *state)
+{
+    if (state == nullptr || state[0] == '\0' || g_avt_callback[0] == '\0' || g_avt_sid[0] == '\0') {
+        return false;
+    }
+
+    std::array<char, 768> body = {0};
+    snprintf(body.data(), body.size(),
+             "<e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">"
+             "<e:property>"
+             "<LastChange>"
+             "&lt;Event xmlns=\"urn:schemas-upnp-org:metadata-1-0/AVT/\"&gt;"
+             "&lt;InstanceID val=\"0\"&gt;"
+             "&lt;TransportState val=\"%s\"/&gt;"
+             "&lt;/InstanceID&gt;"
+             "&lt;/Event&gt;"
+             "</LastChange>"
+             "</e:property>"
+             "</e:propertyset>",
+             state);
+
+    bool ok = send_http_notify_request(g_avt_callback.data(), g_avt_sid.data(), g_avt_seq++, body.data());
+    osal_printk("AVTransport NOTIFY(%s): %s\n", state, ok ? "成功" : "失败");
+    return ok;
+}
+
+bool notify_renderingcontrol_state(uint8_t volume, bool mute)
+{
+    if (g_rc_callback[0] == '\0' || g_rc_sid[0] == '\0') {
+        return false;
+    }
+
+    std::array<char, 768> body = {0};
+    snprintf(body.data(), body.size(),
+             "<e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">"
+             "<e:property>"
+             "<LastChange>"
+             "&lt;Event xmlns=\"urn:schemas-upnp-org:metadata-1-0/RCS/\"&gt;"
+             "&lt;InstanceID val=\"0\"&gt;"
+             "&lt;Volume channel=\"Master\" val=\"%u\"/&gt;"
+             "&lt;Mute channel=\"Master\" val=\"%u\"/&gt;"
+             "&lt;/InstanceID&gt;"
+             "&lt;/Event&gt;"
+             "</LastChange>"
+             "</e:property>"
+             "</e:propertyset>",
+             static_cast<unsigned int>(volume), mute ? 1U : 0U);
+
+    bool ok = send_http_notify_request(g_rc_callback.data(), g_rc_sid.data(), g_rc_seq++, body.data());
+    osal_printk("RenderingControl NOTIFY(volume=%u,mute=%u): %s\n", static_cast<unsigned int>(volume), mute ? 1U : 0U,
+                ok ? "成功" : "失败");
+    return ok;
+}
+
+void xml_escape_basic(const char *src, char *dst, size_t dst_size)
+{
+    if (dst == nullptr || dst_size == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (src == nullptr) {
         return;
     }
 
-    size_t start = 0;
-    size_t end = strlen(text);
-
-    while (start < end && isspace(static_cast<unsigned char>(text[start])) != 0) {
-        ++start;
-    }
-    while (end > start && isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-        --end;
-    }
-
-    if (start > 0) {
-        memmove(text, text + start, end - start);
-    }
-    text[end - start] = '\0';
-}
-
-bool ascii_iequals(const char *a, const char *b)
-{
-    if (a == nullptr || b == nullptr) {
-        return false;
-    }
-
-    while (*a != '\0' && *b != '\0') {
-        char ca = static_cast<char>(tolower(static_cast<unsigned char>(*a)));
-        char cb = static_cast<char>(tolower(static_cast<unsigned char>(*b)));
-        if (ca != cb) {
-            return false;
+    size_t di = 0;
+    for (size_t si = 0; src[si] != '\0' && di + 1 < dst_size; ++si) {
+        const char *rep = nullptr;
+        switch (src[si]) {
+            case '&':
+                rep = "&amp;";
+                break;
+            case '<':
+                rep = "&lt;";
+                break;
+            case '>':
+                rep = "&gt;";
+                break;
+            case '"':
+                rep = "&quot;";
+                break;
+            case '\'':
+                rep = "&apos;";
+                break;
+            default:
+                break;
         }
-        ++a;
-        ++b;
-    }
 
-    return (*a == '\0' && *b == '\0');
-}
-
-bool ascii_icontains(const char *haystack, const char *needle)
-{
-    if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
-        return false;
-    }
-
-    const size_t needle_len = strlen(needle);
-    for (size_t i = 0; haystack[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (j < needle_len && haystack[i + j] != '\0') {
-            char ch = static_cast<char>(tolower(static_cast<unsigned char>(haystack[i + j])));
-            char cn = static_cast<char>(tolower(static_cast<unsigned char>(needle[j])));
-            if (ch != cn) {
+        if (rep != nullptr) {
+            size_t rep_len = strlen(rep);
+            if (di + rep_len >= dst_size) {
                 break;
             }
-            ++j;
-        }
-        if (j == needle_len) {
-            return true;
+            memcpy(dst + di, rep, rep_len);
+            di += rep_len;
+        } else {
+            dst[di++] = src[si];
         }
     }
-    return false;
+    dst[di] = '\0';
 }
 
-char *extract_xml_tag_value(const char *buffer, const char *tag, char *out, size_t out_size)
+void update_transport_state(const char *state, bool notify)
 {
-    if (buffer == nullptr || tag == nullptr || out == nullptr || out_size == 0) {
-        return nullptr;
+    if (state == nullptr || state[0] == '\0') {
+        return;
+    }
+    copy_string_safe(dlan::g_transport_state.data(), dlan::g_transport_state.size(), state);
+    if (notify) {
+        notify_avtransport_state(state);
+    }
+}
+
+bool stream_probe_once(const char *uri)
+{
+    if (uri == nullptr || uri[0] == '\0') {
+        return false;
     }
 
-    char start_tag[256] = {0};
-    char end_tag[256] = {0};
-    snprintf(start_tag, sizeof(start_tag), "<%s>", tag);
-    snprintf(end_tag, sizeof(end_tag), "</%s>", tag);
-
-    const char *tag_start = strstr(buffer, start_tag);
-    if (tag_start == nullptr) {
-        return nullptr;
+    simple_http_url url;
+    if (!parse_http_url(uri, url)) {
+        osal_printk("拉流URL解析失败: %s\n", uri);
+        return false;
     }
 
-    tag_start += strlen(start_tag);
-    const char *tag_end = strstr(tag_start, end_tag);
-    if (tag_end == nullptr) {
-        return nullptr;
+    int32_t sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        osal_printk("拉流socket创建失败\n");
+        return false;
     }
 
-    int value_len = tag_end - tag_start;
-    if (value_len > 0 && value_len < (int)out_size - 1) {
-        strncpy(out, tag_start, value_len);
-        out[value_len] = '\0';
-        return out;
+    timeval tv = {3, 0};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = lwip_htons(url.port);
+    if (!resolve_ipv4_addr(url.host.data(), &addr.sin_addr)) {
+        osal_printk("拉流主机解析失败: %s\n", url.host.data());
+        lwip_close(sock);
+        return false;
     }
 
-    return nullptr;
+    if (connect(sock, (sockaddr *)&addr, sizeof(addr)) != 0) {
+        osal_printk("拉流连接失败: %s:%u\n", url.host.data(), url.port);
+        lwip_close(sock);
+        return false;
+    }
+
+    std::array<char, 768> request = {0};
+    int request_len = snprintf(request.data(), request.size(),
+                               "GET %s HTTP/1.1\r\n"
+                               "Host: %s\r\n"
+                               "Connection: close\r\n"
+                               "Icy-MetaData: 1\r\n\r\n",
+                               url.path.data(), url.host.data());
+    if (request_len <= 0 || request_len >= static_cast<int>(request.size())) {
+        lwip_close(sock);
+        return false;
+    }
+
+    if (lwip_send(sock, request.data(), request_len, 0) <= 0) {
+        osal_printk("拉流GET发送失败\n");
+        lwip_close(sock);
+        return false;
+    }
+
+    std::array<char, 512> recv_buf = {0};
+    int recv_len = lwip_recv(sock, recv_buf.data(), recv_buf.size(), 0);
+    lwip_close(sock);
+
+    if (recv_len <= 0) {
+        osal_printk("拉流首包接收失败\n");
+        return false;
+    }
+
+    // SED : 串口输出
+    osal_printk("拉流首包成功，字节数=%d\n", recv_len);
+    return true;
+}
+
+void init_dlan_runtime_state_once()
+{
+    static bool inited = false;
+    static constexpr const char *k_default_avt_sid = "uuid:20260321-1612-2007-0423-a1b2c3d4e5f6-avt";
+    static constexpr const char *k_default_rc_sid = "uuid:20260321-1612-2007-0423-a1b2c3d4e5f6-rc";
+    if (inited) {
+        return;
+    }
+
+    copy_string_safe(g_avt_sid.data(), g_avt_sid.size(), k_default_avt_sid);
+    copy_string_safe(g_rc_sid.data(), g_rc_sid.size(), k_default_rc_sid);
+    copy_string_safe(dlan::g_transport_state.data(), dlan::g_transport_state.size(), "STOPPED");
+    inited = true;
 }
 } // namespace
-
-bool dlan::ssdp_get_header_value(const char *request, const char *key, char *out, size_t out_size)
-{
-    if (request == nullptr || key == nullptr || out == nullptr || out_size == 0) {
-        return false;
-    }
-
-    const size_t key_len = strlen(key);
-    const char *line = request;
-    while (*line != '\0') {
-        const char *line_end = strstr(line, "\r\n");
-        if (line_end == nullptr) {
-            line_end = line + strlen(line);
-        }
-
-        size_t i = 0;
-        while (i < key_len && (line + i) < line_end) {
-            char a = static_cast<char>(tolower(static_cast<unsigned char>(line[i])));
-            char b = static_cast<char>(tolower(static_cast<unsigned char>(key[i])));
-            if (a != b) {
-                break;
-            }
-            ++i;
-        }
-
-        if (i == key_len && (line + i) < line_end && line[i] == ':') {
-            const char *val = line + i + 1;
-            while (val < line_end && (*val == ' ' || *val == '\t')) {
-                ++val;
-            }
-
-            size_t copy_len = static_cast<size_t>(line_end - val);
-            if (copy_len >= out_size) {
-                copy_len = out_size - 1;
-            }
-            memcpy(out, val, copy_len);
-            out[copy_len] = '\0';
-            return true;
-        }
-
-        if (*line_end == '\0') {
-            break;
-        }
-        line = line_end + 2;
-    }
-
-    return false;
-}
 
 bool dlan::ssdp_send_msearch_reply(const sockaddr_in &client_addr,
                                    socklen_t client_addr_len,
@@ -193,6 +358,7 @@ bool dlan::ssdp_send_msearch_reply(const sockaddr_in &client_addr,
         return false;
     }
 
+    // SED : 串口输出
     osal_printk("ssdp已响应M-SEARCH (ST=%s, USN=%s)\n", st, usn.data());
     return true;
 }
@@ -278,7 +444,7 @@ bool dlan::ssdp_set()
     sockaddr_in ssdp_addr = {0};
     ssdp_addr.sin_family = AF_INET;
     ssdp_addr.sin_addr.s_addr = INADDR_ANY;
-    ssdp_addr.sin_port = htons(ssdp_port);
+    ssdp_addr.sin_port = lwip_htons(ssdp_port);
 
     errcode_t ret = bind(sock, (sockaddr *)&ssdp_addr, sizeof(ssdp_addr));
     if (ret != 0) {
@@ -315,7 +481,7 @@ bool dlan::http_set()
     sockaddr_in http_addr = {0};
     http_addr.sin_family = AF_INET;
     http_addr.sin_addr.s_addr = INADDR_ANY;
-    http_addr.sin_port = htons(http_port);
+    http_addr.sin_port = lwip_htons(http_port);
     errcode_t ret = bind(sock, (sockaddr *)&http_addr, sizeof(http_addr));
     if (ret != 0) {
         osal_printk("http套接字绑定失败\n");
@@ -364,9 +530,9 @@ void dlan::ssdp_process()
         std::array<char, 128> st_value = {0};
         std::array<char, 128> man_value = {0};
         std::array<char, 64> host_value = {0};
-        bool has_st = ssdp_get_header_value(buffer.data(), "ST", st_value.data(), st_value.size());
-        bool has_man = ssdp_get_header_value(buffer.data(), "MAN", man_value.data(), man_value.size());
-        bool has_host = ssdp_get_header_value(buffer.data(), "HOST", host_value.data(), host_value.size());
+        bool has_st = extract_http_header_value(buffer.data(), "ST", st_value.data(), st_value.size());
+        bool has_man = extract_http_header_value(buffer.data(), "MAN", man_value.data(), man_value.size());
+        bool has_host = extract_http_header_value(buffer.data(), "HOST", host_value.data(), host_value.size());
         if (has_st) {
             trim_ascii_whitespace(st_value.data());
         }
@@ -443,11 +609,13 @@ void dlan::ssdp_process()
 
 void dlan::http_process()
 {
+    init_dlan_runtime_state_once();
+
     int32_t sock = http_sock;
     sockaddr_in client_addr = {0};
     socklen_t client_addr_len = sizeof(client_addr);
 
-    int32_t client_sock = accept(sock, (sockaddr *)&client_addr, &client_addr_len);
+    int32_t client_sock = lwip_accept(sock, (sockaddr *)&client_addr, &client_addr_len);
     if (client_sock < 0) {
         osal_printk("http接受连接失败\n");
         return;
@@ -482,6 +650,48 @@ void dlan::http_process()
     // 【新增】处理 SUBSCRIBE 事件订阅请求
     if (strstr(buffer.data(), "SUBSCRIBE") != nullptr) {
         osal_printk("http收到 SUBSCRIBE 请求\n");
+        std::array<char, 256> sid_value = {0};
+        std::array<char, 256> callback_value = {0};
+        const bool has_sid = extract_http_header_value(buffer.data(), "SID", sid_value.data(), sid_value.size());
+        const bool has_callback =
+            extract_http_header_value(buffer.data(), "CALLBACK", callback_value.data(), callback_value.size());
+        if (has_sid) {
+            trim_ascii_whitespace(sid_value.data());
+        }
+        if (has_callback) {
+            trim_ascii_whitespace(callback_value.data());
+            strip_angle_brackets(callback_value.data());
+        }
+
+        const bool is_avtransport_event = strstr(buffer.data(), "SUBSCRIBE /AVTransport/event") != nullptr;
+        const bool is_rendering_event = strstr(buffer.data(), "SUBSCRIBE /RenderingControl/event") != nullptr;
+        if (is_avtransport_event) {
+            if (has_sid && sid_value[0] != '\0') {
+                copy_string_safe(g_avt_sid.data(), g_avt_sid.size(), sid_value.data());
+            }
+            if (has_callback && callback_value[0] != '\0') {
+                copy_string_safe(g_avt_callback.data(), g_avt_callback.size(), callback_value.data());
+            }
+            g_avt_seq = 0;
+            osal_printk("AVTransport订阅: SID=%s CALLBACK=%s\n", g_avt_sid.data(), g_avt_callback.data());
+        } else if (is_rendering_event) {
+            if (has_sid && sid_value[0] != '\0') {
+                copy_string_safe(g_rc_sid.data(), g_rc_sid.size(), sid_value.data());
+            }
+            if (has_callback && callback_value[0] != '\0') {
+                copy_string_safe(g_rc_callback.data(), g_rc_callback.size(), callback_value.data());
+            }
+            g_rc_seq = 0;
+            osal_printk("RenderingControl订阅: SID=%s CALLBACK=%s\n", g_rc_sid.data(), g_rc_callback.data());
+        }
+
+        const char *sid_to_reply = ssdp_uuid.data();
+        if (is_avtransport_event && g_avt_sid[0] != '\0') {
+            sid_to_reply = g_avt_sid.data();
+        } else if (is_rendering_event && g_rc_sid[0] != '\0') {
+            sid_to_reply = g_rc_sid.data();
+        }
+
         // 回复 200 OK + SID + TIMEOUT
         std::array<char, 256> subscribe_response;
         snprintf(subscribe_response.data(), subscribe_response.size(),
@@ -490,11 +700,16 @@ void dlan::http_process()
                  "TIMEOUT: Second-1800\r\n"
                  "CONTENT-LENGTH: 0\r\n"
                  "Connection: close\r\n\r\n",
-                 ssdp_uuid.data());
+                 sid_to_reply);
 
         lwip_send(client_sock, subscribe_response.data(), strlen(subscribe_response.data()), 0);
-        osal_printk("已回复 SUBSCRIBE: SID=%s\n", ssdp_uuid.data());
+        osal_printk("已回复 SUBSCRIBE: SID=%s\n", sid_to_reply);
         lwip_close(client_sock);
+        if (is_avtransport_event) {
+            notify_avtransport_state(dlan::g_transport_state.data());
+        } else if (is_rendering_event) {
+            notify_renderingcontrol_state(50, false);
+        }
         return;
     }
 
@@ -646,6 +861,7 @@ void dlan::http_process()
             "  <actionList>\r\n"
             "    <action><name>GetProtocolInfo</name></action>\r\n"
             "    <action><name>GetCurrentConnectionIDs</name></action>\r\n"
+            "    <action><name>GetCurrentConnectionInfo</name></action>\r\n"
             "  </actionList>\r\n"
             "</scpd>";
 
@@ -680,15 +896,29 @@ void dlan::http_process()
         osal_printk("http收到控制命令: %s\n",
                     is_avtransport ? "AVTransport" : (is_renderingcontrol ? "RenderingControl" : "ConnectionManager"));
         // 按照SOAPACTION做动作分发
-        const char *soap_action_start = strstr(buffer.data(), "SOAPACTION:");
-        if (soap_action_start != nullptr) {
+        std::array<char, 256> soap_action_value = {0};
+        const bool has_soap_action =
+            extract_http_header_value(buffer.data(), "SOAPACTION", soap_action_value.data(), soap_action_value.size());
+        if (has_soap_action) {
+            trim_ascii_whitespace(soap_action_value.data());
+            size_t action_len = strlen(soap_action_value.data());
+            if (action_len >= 2 && soap_action_value[0] == '"' && soap_action_value[action_len - 1] == '"') {
+                memmove(soap_action_value.data(), soap_action_value.data() + 1, action_len - 2);
+                soap_action_value[action_len - 2] = '\0';
+            }
+
             // ========== AVTransport 服务的 SOAP 动作处理 ==========
             if (is_avtransport) {
-                if (strstr(soap_action_start, "#SetAVTransportURI") != nullptr) {
+                if (strstr(soap_action_value.data(), "#SetAVTransportURI") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到SetAVTransportURI命令\n");
                     std::array<char, 512> media_url = {0}; // 从SOAP请求中提取出媒体URL，方便后续实现真正的播放功能
                     extract_xml_tag_value(buffer.data(), "CurrentURI", media_url.data(), media_url.size());
+                    html_entity_decode_amp(media_url.data());
+                    copy_string_safe(g_current_uri.data(), g_current_uri.size(), media_url.data());
+                    if (media_set_uri_handler_func != nullptr) {
+                        media_set_uri_handler_func(g_current_uri.data());
+                    }
                     static const char *http_answer_av =
                         "HTTP/1.1 200 OK\r\n"
                         "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
@@ -705,13 +935,11 @@ void dlan::http_process()
                     // 处理媒体URL，真正实现DLNA播放功能的核心就在这里了，当前先打印出来验证手机APP的请求格式是否正确。
                     osal_printk("SetAVTransportURI的媒体URL: %s\n", media_url.data());
 
-                    // 处理音频
-                    if (data_process != nullptr) {
-                        data_process(media_url.data(), strlen(media_url.data()));
-                    }
+                    // 先上报STOPPED，让控制端确认URI设置已生效。
+                    update_transport_state("STOPPED", true);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#Play") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#Play") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到play相关命令\n");
                     // 回复一个固定的成功响应
@@ -726,9 +954,26 @@ void dlan::http_process()
                         "</s:Body>"
                         "</s:Envelope>";
                     lwip_send(client_sock, play_control_response, strlen(play_control_response) - 1, 0);
+
+                    // 进入播放前上报TRANSITIONING，并尝试一次最小拉流探测。
+                    update_transport_state("TRANSITIONING", true);
+                    bool play_ok = false;
+                    bool callback_ok = false;
+                    if (media_play_handler_func != nullptr) {
+                        callback_ok = media_play_handler_func(g_current_uri.data());
+                        play_ok = callback_ok && stream_probe_once(g_current_uri.data());
+                    } else {
+                        play_ok = stream_probe_once(g_current_uri.data());
+                    }
+                    if (play_ok) {
+                        update_transport_state("PLAYING", true);
+                    } else {
+                        update_transport_state("STOPPED", true);
+                    }
+
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#Pause") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#Pause") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到pause相关命令\n");
                     static const char *pause_control_response =
@@ -742,9 +987,13 @@ void dlan::http_process()
                         "</s:Body>"
                         "</s:Envelope>";
                     lwip_send(client_sock, pause_control_response, strlen(pause_control_response) - 1, 0);
+                    if (media_pause_handler_func != nullptr) {
+                        media_pause_handler_func();
+                    }
+                    update_transport_state("PAUSED_PLAYBACK", true);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#Stop") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#Stop") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到stop相关命令\n");
                     static const char *stop_control_response =
@@ -758,53 +1007,69 @@ void dlan::http_process()
                         "</s:Body>"
                         "</s:Envelope>";
                     lwip_send(client_sock, stop_control_response, strlen(stop_control_response) - 1, 0);
+                    if (media_stop_handler_func != nullptr) {
+                        media_stop_handler_func();
+                    }
+                    update_transport_state("STOPPED", true);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#GetTransportInfo") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#GetTransportInfo") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetTransportInfo 命令\n");
                     // 获取传输状态：PLAYING, PAUSED_PLAYBACK, STOPPED, NO_MEDIA_PRESENT
-                    static const char *transport_info_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
-                        "<?xml version=\"1.0\"?>"
-                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
-                        "<s:Body>"
-                        "<u:GetTransportInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
-                        "<CurrentTransportState>PLAYING</CurrentTransportState>"
-                        "<CurrentTransportStatus>OK</CurrentTransportStatus>"
-                        "<CurrentSpeed>1</CurrentSpeed>"
-                        "</u:GetTransportInfoResponse>"
-                        "</s:Body>"
-                        "</s:Envelope>";
-                    lwip_send(client_sock, transport_info_response, strlen(transport_info_response) - 1, 0);
+                    std::array<char, 768> transport_info_response = {0};
+                    snprintf(transport_info_response.data(), transport_info_response.size(),
+                             "HTTP/1.1 200 OK\r\n"
+                             "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                             "CONNECTION: close\r\n\r\n"
+                             "<?xml version=\"1.0\"?>"
+                             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                             "<s:Body>"
+                             "<u:GetTransportInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                             "<CurrentTransportState>%s</CurrentTransportState>"
+                             "<CurrentTransportStatus>OK</CurrentTransportStatus>"
+                             "<CurrentSpeed>1</CurrentSpeed>"
+                             "</u:GetTransportInfoResponse>"
+                             "</s:Body>"
+                             "</s:Envelope>",
+                             g_transport_state.data());
+                    lwip_send(client_sock, transport_info_response.data(), strlen(transport_info_response.data()), 0);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#GetPositionInfo") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#GetPositionInfo") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetPositionInfo 命令\n");
-                    // 获取播放进度信息
-                    static const char *position_info_response =
-                        "HTTP/1.1 200 OK\r\n"
-                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
-                        "CONNECTION: close\r\n\r\n"
-                        "<?xml version=\"1.0\"?>"
-                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
-                        "<s:Body>"
-                        "<u:GetPositionInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
-                        "<Track>1</Track>"
-                        "<TrackDuration>00:05:00</TrackDuration>"
-                        "<TrackMetaData></TrackMetaData>"
-                        "<TrackURI></TrackURI>"
-                        "<RelTime>00:00:30</RelTime>"
-                        "<AbsTime>00:00:30</AbsTime>"
-                        "<RelCount>2147483647</RelCount>"
-                        "<AbsCount>2147483647</AbsCount>"
-                        "</u:GetPositionInfoResponse>"
-                        "</s:Body>"
-                        "</s:Envelope>";
-                    lwip_send(client_sock, position_info_response, strlen(position_info_response) - 1, 0);
+                    std::array<char, 1024> escaped_uri = {0};
+                    xml_escape_basic(g_current_uri.data(), escaped_uri.data(), escaped_uri.size());
+
+                    const bool has_uri = g_current_uri[0] != '\0';
+                    const bool is_playing = ascii_iequals(dlan::g_transport_state.data(), "PLAYING") ||
+                                            ascii_iequals(dlan::g_transport_state.data(), "TRANSITIONING") ||
+                                            ascii_iequals(dlan::g_transport_state.data(), "PAUSED_PLAYBACK");
+
+                    std::array<char, 1536> position_info_response = {0};
+                    snprintf(position_info_response.data(), position_info_response.size(),
+                             "HTTP/1.1 200 OK\r\n"
+                             "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                             "CONNECTION: close\r\n\r\n"
+                             "<?xml version=\"1.0\"?>"
+                             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                             "<s:Body>"
+                             "<u:GetPositionInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                             "<Track>%u</Track>"
+                             "<TrackDuration>%s</TrackDuration>"
+                             "<TrackMetaData>NOT_IMPLEMENTED</TrackMetaData>"
+                             "<TrackURI>%s</TrackURI>"
+                             "<RelTime>%s</RelTime>"
+                             "<AbsTime>%s</AbsTime>"
+                             "<RelCount>2147483647</RelCount>"
+                             "<AbsCount>2147483647</AbsCount>"
+                             "</u:GetPositionInfoResponse>"
+                             "</s:Body>"
+                             "</s:Envelope>",
+                             has_uri ? 1U : 0U, "00:00:00", has_uri ? escaped_uri.data() : "",
+                             is_playing ? "00:00:01" : "00:00:00", is_playing ? "00:00:01" : "00:00:00");
+                    lwip_send(client_sock, position_info_response.data(), strlen(position_info_response.data()), 0);
                     lwip_close(client_sock);
                     return;
                 } else {
@@ -821,7 +1086,7 @@ void dlan::http_process()
             }
             // ========== RenderingControl 服务的 SOAP 动作处理 ==========
             else if (is_renderingcontrol) {
-                if (strstr(soap_action_start, "#SetVolume") != nullptr) {
+                if (strstr(soap_action_value.data(), "#SetVolume") != nullptr) {
                     //  SED : 串口输出
                     osal_printk("http收到 SetVolume 命令\n");
                     static const char *set_volume_response =
@@ -837,7 +1102,7 @@ void dlan::http_process()
                     lwip_send(client_sock, set_volume_response, strlen(set_volume_response) - 1, 0);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#GetVolume") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#GetVolume") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetVolume 命令\n");
                     static const char *get_volume_response =
@@ -855,7 +1120,7 @@ void dlan::http_process()
                     lwip_send(client_sock, get_volume_response, strlen(get_volume_response) - 1, 0);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#SetMute") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#SetMute") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 SetMute 命令\n");
                     static const char *set_mute_response =
@@ -871,7 +1136,7 @@ void dlan::http_process()
                     lwip_send(client_sock, set_mute_response, strlen(set_mute_response) - 1, 0);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#GetMute") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#GetMute") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetMute 命令\n");
                     static const char *get_mute_response =
@@ -903,7 +1168,7 @@ void dlan::http_process()
             }
             // ========== ConnectionManager 服务的 SOAP 动作处理 ==========
             else if (is_connectionmanager) {
-                if (strstr(soap_action_start, "#GetProtocolInfo") != nullptr) {
+                if (strstr(soap_action_value.data(), "#GetProtocolInfo") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetProtocolInfo 命令\n");
                     static const char *protocol_info_response =
@@ -914,15 +1179,15 @@ void dlan::http_process()
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
                         "<s:Body>"
                         "<u:GetProtocolInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:ConnectionManager:1\">"
-                        "<Source>http-get:*:audio/mpeg:*,http-get:*:audio/mp4:*</Source>"
-                        "<Sink></Sink>"
+                        "<Source></Source>"
+                        "<Sink>http-get:*:audio/mpeg:*,http-get:*:audio/mp3:*,http-get:*:audio/mp4:*</Sink>"
                         "</u:GetProtocolInfoResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
                     lwip_send(client_sock, protocol_info_response, strlen(protocol_info_response) - 1, 0);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_start, "#GetCurrentConnectionIDs") != nullptr) {
+                } else if (strstr(soap_action_value.data(), "#GetCurrentConnectionIDs") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到 GetCurrentConnectionIDs 命令\n");
                     static const char *connection_ids_response =
@@ -939,6 +1204,30 @@ void dlan::http_process()
                         "</s:Body>"
                         "</s:Envelope>";
                     lwip_send(client_sock, connection_ids_response, strlen(connection_ids_response) - 1, 0);
+                    lwip_close(client_sock);
+                    return;
+                } else if (strstr(soap_action_value.data(), "#GetCurrentConnectionInfo") != nullptr) {
+                    osal_printk("http收到 GetCurrentConnectionInfo 命令\n");
+                    static const char *connection_info_response =
+                        "HTTP/1.1 200 OK\r\n"
+                        "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                        "CONNECTION: close\r\n\r\n"
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetCurrentConnectionInfoResponse "
+                        "xmlns:u=\"urn:schemas-upnp-org:service:ConnectionManager:1\">"
+                        "<RcsID>-1</RcsID>"
+                        "<AVTransportID>-1</AVTransportID>"
+                        "<ProtocolInfo></ProtocolInfo>"
+                        "<PeerConnectionManager></PeerConnectionManager>"
+                        "<PeerConnectionID>-1</PeerConnectionID>"
+                        "<Direction>Input</Direction>"
+                        "<Status>OK</Status>"
+                        "</u:GetCurrentConnectionInfoResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    lwip_send(client_sock, connection_info_response, strlen(connection_info_response) - 1, 0);
                     lwip_close(client_sock);
                     return;
                 } else {
@@ -1002,14 +1291,4 @@ void dlan::dlan_stop()
         lwip_close(http_sock);
         http_sock = -1;
     }
-}
-
-void dlan::set_data_clear_fuction(data_clear_t callback)
-{
-    data_clear = callback;
-}
-
-void dlan::set_data_process_fuction(data_process_t callback)
-{
-    data_process = callback;
 }
