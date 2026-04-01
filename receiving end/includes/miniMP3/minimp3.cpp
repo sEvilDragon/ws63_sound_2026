@@ -238,8 +238,8 @@ void minimp3::stream_mp3_to_iis()
         static constexpr int k_max_decode_loops_per_round = 6;
         static constexpr int k_stall_drop_threshold = 64;
         static constexpr int k_rebuffer_threshold_bytes = 192;
-        static constexpr int k_queue_soft_high = 46;
-        static constexpr int k_queue_hard_high = 49;
+        static constexpr int k_queue_soft_high = 44;
+        static constexpr int k_queue_hard_high = 47;
         static constexpr int k_queue_recover_low = 8;
         static constexpr int k_decode_loops_recover = 16;
         static constexpr int k_recv_block_avoid_threshold = 1024;
@@ -270,6 +270,7 @@ void minimp3::stream_mp3_to_iis()
 
         while (is_playing) {
             // 使用滑动窗口，避免每帧都对整段数据 memmove。
+            // 当缓冲区内的字节不足最小解码帧长（这里假设为最少需要2000字节触发优先解码）时，强制接收
             if (bytes_in_buf < static_cast<int>(mp3_buffer_size)) {
                 // 本地缓冲足够时优先解码，避免被阻塞式 recv 打断造成可闻卡顿。
                 if (bytes_in_buf >= k_recv_block_avoid_threshold && !need_rebuffer) {
@@ -352,11 +353,11 @@ void minimp3::stream_mp3_to_iis()
                     decode_loops_budget = k_decode_loops_recover;
                 }
                 if (queue_level >= k_queue_hard_high) {
-                    // 不再硬暂停，避免形成“等待-突发-等待”的可闻卡顿。
-                    decode_loops_budget = 1;
+                    // 恢复硬暂停，因为IIS底层缓冲满时会直接将后续数据截断丢弃，引发严重破音和卡顿！
+                    decode_loops_budget = 0;
                     stat_backpressure_waits++;
                 } else if (queue_level >= k_queue_soft_high) {
-                    decode_loops_budget = 2;
+                    decode_loops_budget = 1;
                 }
             }
 
@@ -414,8 +415,15 @@ void minimp3::stream_mp3_to_iis()
                     }
                 }
 
+                // 强制要求最少要有1000个字节才能去尝试解下一帧。因为如果不足，可能解出一半的数据导致错误判断。
+                if (bytes_in_buf < 1000) {
+                    break;
+                }
+
                 // 当缓冲区已满且解码器不前进时，丢弃1字节避免死循环空转。
                 if (!frame_consumed) {
+                    // 如果单帧太大，由于当前没有足够的数据，解码器也可能返回 frame_bytes == 0。
+                    // 只有在接收缓冲真的达到上限，且真的无法前进时才丢弃数据。
                     ++no_progress_count;
                     if (bytes_in_buf >= static_cast<int>(mp3_buffer_size - 1) &&
                         no_progress_count >= k_stall_drop_threshold) {
@@ -429,17 +437,24 @@ void minimp3::stream_mp3_to_iis()
                         }
                         osal_printk("MP3解码长时间无进展，已丢弃1字节尝试自恢复\n");
                         no_progress_count = 0;
+                    } else if (bytes_in_buf < static_cast<int>(mp3_buffer_size)) {
+                        // 如果缓冲区没满，而且又没有消费，说明帧不完整，需要退出 decode 循环去继续 recv。
+                        break;
                     }
                     break;
                 }
 
                 decode_loops++;
-                if (bytes_in_buf < 1024) {
+                if (bytes_in_buf < 512) {
                     break;
                 }
             }
 
-            if (decode_loops == 0 && bytes_in_buf == 0) {
+            if (decode_loops == 0) {
+                // 如果是因为没有数据而暂停，稍微休眠即可；如果是因为背压，稍微休眠。
+                // 确保休眠不会因为死锁导致网络不再接收数据
+                osal_msleep(5);
+            } else if (bytes_in_buf == 0) {
                 osal_msleep(1);
             }
 

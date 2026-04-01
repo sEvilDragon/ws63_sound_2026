@@ -45,7 +45,7 @@ private:
     static bool is_url_ready;
 
     // 定义解码相关的成员变量
-    static constexpr size_t mp3_buffer_size = 1024; // 4KB的MP3数据缓冲区
+    static constexpr size_t mp3_buffer_size = 4096; // 4KB的MP3数据缓冲区
 };
 
 #endif
