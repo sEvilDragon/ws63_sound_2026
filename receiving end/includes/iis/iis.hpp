@@ -85,11 +85,11 @@ private:
     static uint8_t dma_channel; // DMA通道号，实际值由系统分配
 
     // 定义缓冲区
-    static constexpr int prebuffer_num = 10;     // 低水位恢复门限，避免长时间停播等待
+    static constexpr int prebuffer_num = 6;     // 低水位恢复门限，避免长时间停播等待
     static constexpr int min_buffer_num = 1;     // 仅在几乎耗尽时才停播，降低启停抖动
     static constexpr uint8_t if_small_num = 5;   // 补帧/删除帧数量
-    static constexpr uint8_t if_fill_num = 20;   // 补帧预设值
-    static constexpr uint8_t if_reduce_num = 62; // 删除帧预设值
+    static constexpr uint8_t if_fill_num = 15;   // 补帧预设值
+    static constexpr uint8_t if_reduce_num = 42; // 删除帧预设值
     // 记录最后的左右帧
     static int16_t last_left_sample;
     static int16_t last_right_sample;

@@ -22,12 +22,15 @@ public:
     // 注册播放队列水位读取函数（用于解码侧闭环背压）
     using playback_queue_level_getter = int (*)();
     static void playback_queue_level_getter_set(playback_queue_level_getter getter_func);
+    // 仅准备URL，不改变播放开关；用于DLNA SetAVTransportURI。
+    static void prepare_url(const char *url);
     static void play_url(const char *url);
     static void stop_playback();
     static void clear_playback_url();
     static void stream_mp3_to_iis();
 
 private:
+    static void http_set_url(const char *url, bool start_playback);
     static void http_get_url(const char *url);
     static void http_stop();
     static void http_clear_url();
@@ -45,7 +48,7 @@ private:
     static bool is_url_ready;
 
     // 定义解码相关的成员变量
-    static constexpr size_t mp3_buffer_size = 4096; // 4KB的MP3数据缓冲区
+    static constexpr size_t mp3_buffer_size = 4098; // 4KB的MP3数据缓冲区
 };
 
 #endif

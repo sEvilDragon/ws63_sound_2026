@@ -1,7 +1,7 @@
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3.hpp"
 
-// åˆå§‹åŒ–é™æ€æˆå‘˜å˜é‡
+// ³õÊ¼»¯¾²Ì¬³ÉÔ±±äÁ¿
 std::array<char, 512> minimp3::current_url = {0};
 bool minimp3::is_playing = false;
 bool minimp3::is_url_ready = false;
@@ -24,6 +24,11 @@ void minimp3::playback_queue_level_getter_set(playback_queue_level_getter getter
     playback_queue_level_getter_func = getter_func;
 }
 
+void minimp3::prepare_url(const char *url)
+{
+    http_set_url(url, false);
+}
+
 void minimp3::play_url(const char *url)
 {
     http_get_url(url);
@@ -39,62 +44,84 @@ void minimp3::clear_playback_url()
     http_clear_url();
 }
 
-void minimp3::http_get_url(const char *url)
+void minimp3::http_set_url(const char *url, bool start_playback)
 {
     if (url == nullptr || url[0] == '\0') {
+        if (start_playback) {
+            // ÔÊĞíPlayÃüÁîÔÚÒÑÓĞURL³¡¾°ÏÂ½öÀ­Æğ²¥·Å¿ª¹Ø¡£
+            if (current_url[0] != '\0') {
+                is_playing = true;
+                if (!is_url_ready) {
+                    is_url_ready = true;
+                }
+            }
+        }
         return;
     }
-    copy_string_safe(current_url.data(), current_url.size(), url);
 
-    // æ›´æ–°çŠ¶æ€
-    is_playing = true;
-    is_url_ready = true;
+    const bool is_same_url = (strncmp(current_url.data(), url, current_url.size()) == 0);
+    if (!is_same_url) {
+        copy_string_safe(current_url.data(), current_url.size(), url);
+        is_url_ready = true;
+    } else if (!is_playing && !is_url_ready) {
+        // Í¬URL´ÓÔİÍ£/Í£Ö¹»Ö¸´Ê±£¬È·±£ÄÜÖØÆôÀ­Á÷¡£
+        is_url_ready = true;
+    }
+
+    if (start_playback) {
+        is_playing = true;
+    }
+}
+
+void minimp3::http_get_url(const char *url)
+{
+    http_set_url(url, true);
 }
 
 void minimp3::http_stop()
 {
-    // æ›´æ–°çŠ¶æ€
+    // ¸üĞÂ×´Ì¬
     is_playing = false;
     is_url_ready = false;
 }
 
 void minimp3::http_clear_url()
 {
-    // æ¸…ç©ºURLæ•°æ®
+    // Çå¿ÕURLÊı¾İ
     memset(current_url.data(), 0, current_url.size());
-    // æ›´æ–°çŠ¶æ€
+    // ¸üĞÂ×´Ì¬
     is_playing = false;
     is_url_ready = false;
 }
 
 void minimp3::stream_mp3_to_iis()
 {
-    // ç½‘ç»œæ’­æ”¾ä»»åŠ¡
+    // ÍøÂç²¥·ÅÈÎÎñ
     mp3dec_t mp3d;
     mp3dec_frame_info_t info;
 
     uint8_t *mp3_buffer = (uint8_t *)osal_kmalloc(mp3_buffer_size, OSAL_GFP_KERNEL);
     if (mp3_buffer == nullptr) {
-        osal_printk("mp3_bufferå†…å­˜åˆ†é…å¤±è´¥\n");
+        osal_printk("mp3_bufferÄÚ´æ·ÖÅäÊ§°Ü\n");
         return;
     }
     int16_t *pcm_buffer = (int16_t *)osal_kmalloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t),
-                                                  OSAL_GFP_KERNEL); // PCMç¼“å†²åŒºï¼Œé¢„ç•™è¶³å¤Ÿç©ºé—´
+                                                  OSAL_GFP_KERNEL); // PCM»º³åÇø£¬Ô¤Áô×ã¹»¿Õ¼ä
     if (pcm_buffer == nullptr) {
-        osal_printk("pcm_bufferå†…å­˜åˆ†é…å¤±è´¥\n");
+        osal_printk("pcm_bufferÄÚ´æ·ÖÅäÊ§°Ü\n");
         osal_kfree(mp3_buffer);
         return;
     }
 
-    // å¼€å¯ä»»åŠ¡å¾ªç¯
+    // ¿ªÆôÈÎÎñÑ­»·
     while (true) {
-        // æœªå¤„äºæ’­æ”¾æ€æ—¶ç­‰å¾…
+        // Î´´¦ÓÚ²¥·ÅÌ¬Ê±µÈ´ı
         if (!is_playing) {
             osal_msleep(100);
             continue;
         }
 
-        // æ¥ç®¡ä¸€æ¬¡æ–°çš„URLè¯·æ±‚
+        // ½Ó¹ÜÒ»´ÎĞÂµÄURLÇëÇó
         if (is_url_ready) {
             is_url_ready = false;
         }
@@ -113,37 +140,37 @@ void minimp3::stream_mp3_to_iis()
 
         simple_http_url parsed_url;
         if (!parse_http_url(working_url.data(), parsed_url)) {
-            osal_printk("URLè§£æå¤±è´¥: %s\n", working_url.data());
+            osal_printk("URL½âÎöÊ§°Ü: %s\n", working_url.data());
             osal_msleep(300);
             continue;
         }
 
-        // åˆ›å»ºsocketè¿æ¥åˆ°æœåŠ¡å™¨
+        // ´´½¨socketÁ¬½Óµ½·şÎñÆ÷
         int32_t sock = lwip_socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) {
-            osal_printk("åˆ›å»ºsocketå¤±è´¥\n");
+            osal_printk("´´½¨socketÊ§°Ü\n");
             osal_msleep(500);
             continue;
         }
 
-        // ç»™é¦–åŒ…å’Œå“åº”å¤´æ›´å……è¶³æ—¶é—´ï¼Œé¿å…ç½‘ç»œæŠ–åŠ¨ä¸‹è¯¯åˆ¤å¤±è´¥ã€‚
+        // ¸øÊ×°üºÍÏìÓ¦Í·¸ü³ä×ãÊ±¼ä£¬±ÜÃâÍøÂç¶¶¶¯ÏÂÎóÅĞÊ§°Ü¡£
         timeval timeout = {5, 0};
         lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
         lwip_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-        // é…ç½®æœåŠ¡å™¨åœ°å€
+        // ÅäÖÃ·şÎñÆ÷µØÖ·
         sockaddr_in addr = {0};
         addr.sin_family = AF_INET;
         addr.sin_port = lwip_htons(parsed_url.port);
         if (!resolve_ipv4_addr(parsed_url.host.data(), &addr.sin_addr)) {
-            osal_printk("æ— æ³•è§£æä¸»æœºåœ°å€: %s\n", parsed_url.host.data());
+            osal_printk("ÎŞ·¨½âÎöÖ÷»úµØÖ·: %s\n", parsed_url.host.data());
             lwip_close(sock);
             osal_msleep(300);
             continue;
         }
 
         if (lwip_connect(sock, (sockaddr *)&addr, sizeof(addr)) < 0) {
-            osal_printk("è¿æ¥æœåŠ¡å™¨å¤±è´¥: %s\n", parsed_url.host.data());
+            osal_printk("Á¬½Ó·şÎñÆ÷Ê§°Ü: %s\n", parsed_url.host.data());
             lwip_close(sock);
             osal_msleep(300);
             continue;
@@ -158,13 +185,13 @@ void minimp3::stream_mp3_to_iis()
                  parsed_url.path.data(), parsed_url.host.data());
 
         if (lwip_send(sock, request.data(), strlen(request.data()), 0) <= 0) {
-            osal_printk("å‘é€HTTPè¯·æ±‚å¤±è´¥\n");
+            osal_printk("·¢ËÍHTTPÇëÇóÊ§°Ü\n");
             lwip_close(sock);
             osal_msleep(200);
             continue;
         }
 
-        // è·³è¿‡HTTPå“åº”å¤´
+        // Ìø¹ıHTTPÏìÓ¦Í·
         std::array<char, 1024> resp_header = {0};
         int32_t header_len = 0;
         bool header_ended = false;
@@ -177,7 +204,7 @@ void minimp3::stream_mp3_to_iis()
 
             int32_t ret = lwip_recv(sock, resp_header.data() + header_len, want, 0);
             if (ret <= 0) {
-                osal_printk("æ¥æ”¶HTTPå“åº”å¤´å¤±è´¥\n");
+                osal_printk("½ÓÊÕHTTPÏìÓ¦Í·Ê§°Ü\n");
                 break;
             }
             header_len += ret;
@@ -194,38 +221,72 @@ void minimp3::stream_mp3_to_iis()
             continue;
         }
 
+        {
+            char *status_end = strstr(resp_header.data(), "\r\n");
+            if (status_end != nullptr) {
+                char saved = *status_end;
+                *status_end = '\0';
+                osal_printk("HTTP×´Ì¬ĞĞ: %s\n", resp_header.data());
+                *status_end = saved;
+            }
+        }
+
         std::array<char, 128> content_type = {0};
         std::array<char, 64> transfer_encoding = {0};
+        std::array<char, 32> icy_metaint_text = {0};
 
         bool has_content_type =
             extract_http_header_value(resp_header.data(), "Content-Type", content_type.data(), content_type.size());
         bool has_transfer_encoding = extract_http_header_value(resp_header.data(), "Transfer-Encoding",
                                                                transfer_encoding.data(), transfer_encoding.size());
+        bool has_icy_metaint = extract_http_header_value(resp_header.data(), "icy-metaint", icy_metaint_text.data(),
+                                                         icy_metaint_text.size());
         bool is_chunked_transfer = false;
+        bool likely_mp3_content = true;
+        int icy_metaint = 0;
+        int icy_audio_remaining = 0;
+        int icy_metadata_remaining = 0;
 
-        // SED : ä¸²å£è¾“å‡ºï¼Œæ‰“å°HTTPå“åº”å¤´ä¸­çš„Content-Typeå’ŒTransfer-Encodingï¼Œæ–¹ä¾¿è°ƒè¯•éªŒè¯æœåŠ¡å™¨å“åº”çš„æ ¼å¼æ˜¯å¦æ­£ç¡®ã€‚
+        // SED : ´®¿ÚÊä³ö£¬´òÓ¡HTTPÏìÓ¦Í·ÖĞµÄContent-TypeºÍTransfer-Encoding£¬·½±ãµ÷ÊÔÑéÖ¤·şÎñÆ÷ÏìÓ¦µÄ¸ñÊ½ÊÇ·ñÕıÈ·¡£
         if (has_content_type) {
             trim_ascii_whitespace(content_type.data());
-            // SED : ä¸²å£è¾“å‡ºï¼Œæ‰“å°Content-Typeï¼Œæ–¹ä¾¿è°ƒè¯•éªŒè¯æœåŠ¡å™¨å“åº”çš„å†…å®¹ç±»å‹æ˜¯å¦æ­£ç¡®ã€‚
+            // SED : ´®¿ÚÊä³ö£¬´òÓ¡Content-Type£¬·½±ãµ÷ÊÔÑéÖ¤·şÎñÆ÷ÏìÓ¦µÄÄÚÈİÀàĞÍÊÇ·ñÕıÈ·¡£
             osal_printk("HTTP Content-Type: %s\n", content_type.data());
+
+            likely_mp3_content = ascii_icontains(content_type.data(), "audio/mpeg") ||
+                                 ascii_icontains(content_type.data(), "audio/mp3") ||
+                                 ascii_icontains(content_type.data(), "audio/x-mpeg") ||
+                                 ascii_icontains(content_type.data(), "application/octet-stream");
+            if (!likely_mp3_content) {
+                osal_printk("¾¯¸æ: µ±Ç°Content-Type¿ÉÄÜ·ÇMP3£¬½âÂë¿ÉÄÜÎŞPCMÊä³ö\n");
+            }
         }
 
         if (has_transfer_encoding) {
             trim_ascii_whitespace(transfer_encoding.data());
             is_chunked_transfer = ascii_icontains(transfer_encoding.data(), "chunked");
-            // SED : ä¸²å£è¾“å‡ºï¼Œæ‰“å°Transfer-Encodingï¼Œæ–¹ä¾¿è°ƒè¯•éªŒè¯æœåŠ¡å™¨å“åº”çš„ä¼ è¾“ç¼–ç æ˜¯å¦æ­£ç¡®ã€‚
+            // SED : ´®¿ÚÊä³ö£¬´òÓ¡Transfer-Encoding£¬·½±ãµ÷ÊÔÑéÖ¤·şÎñÆ÷ÏìÓ¦µÄ´«Êä±àÂëÊÇ·ñÕıÈ·¡£
             osal_printk("HTTP Transfer-Encoding: %s\n", transfer_encoding.data());
         }
 
-        // å½“å‰æ¥æ”¶é€»è¾‘ä»…æ”¯æŒè¿ç»­å­—èŠ‚æµï¼Œä¸æ”¯æŒchunkedåˆ†å—ä½“ã€‚
+        if (has_icy_metaint) {
+            trim_ascii_whitespace(icy_metaint_text.data());
+            icy_metaint = atoi(icy_metaint_text.data());
+            if (icy_metaint > 0) {
+                icy_audio_remaining = icy_metaint;
+                osal_printk("¼ì²âµ½ICYÔªÊı¾İ: metaint=%d£¬ÒÑÆôÓÃ¹ıÂË\n", icy_metaint);
+            }
+        }
+
+        // µ±Ç°½ÓÊÕÂß¼­½öÖ§³ÖÁ¬Ğø×Ö½ÚÁ÷£¬²»Ö§³Öchunked·Ö¿éÌå¡£
         if (is_chunked_transfer) {
-            osal_printk("æ£€æµ‹åˆ°chunkedä¼ è¾“ï¼Œå½“å‰ç‰ˆæœ¬ä¸æ”¯æŒï¼Œåœæ­¢æœ¬æ¬¡æ’­æ”¾\n");
+            osal_printk("¼ì²âµ½chunked´«Êä£¬µ±Ç°°æ±¾²»Ö§³Ö£¬Í£Ö¹±¾´Î²¥·Å\n");
             lwip_close(sock);
             is_playing = false;
             continue;
         }
 
-        // å¹³è¡¡è¶…æ—¶ä¸é˜»å¡ï¼šé¿å…timeouté£æš´ï¼ŒåŒæ—¶ä¸è¿‡åº¦æ‹‰é•¿å¯é—»ç©ºç™½ã€‚
+        // Æ½ºâ³¬Ê±Óë×èÈû£º±ÜÃâtimeout·ç±©£¬Í¬Ê±²»¹ı¶ÈÀ­³¤¿ÉÎÅ¿Õ°×¡£
         timeval stream_timeout = {0, 180000};
         lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &stream_timeout, sizeof(stream_timeout));
 
@@ -238,9 +299,10 @@ void minimp3::stream_mp3_to_iis()
         static constexpr int k_max_decode_loops_per_round = 6;
         static constexpr int k_stall_drop_threshold = 64;
         static constexpr int k_rebuffer_threshold_bytes = 192;
-        static constexpr int k_queue_soft_high = 44;
-        static constexpr int k_queue_hard_high = 47;
-        static constexpr int k_queue_recover_low = 8;
+        // ÓëIIS²àÔ¤»º³åÃÅÏŞ(prebuffer_num=30)¶ÔÆë£¬±ÜÃâÆô¶¯ÆÚ¹ıÔç±³Ñ¹µ¼ÖÂ³¤¾²Òô¡£
+        static constexpr int k_queue_soft_high = 34;
+        static constexpr int k_queue_hard_high = 46;
+        static constexpr int k_queue_recover_low = 6;
         static constexpr int k_decode_loops_recover = 16;
         static constexpr int k_recv_block_avoid_threshold = 1024;
         static constexpr int k_recv_chunk_bytes = 1024;
@@ -248,9 +310,17 @@ void minimp3::stream_mp3_to_iis()
         int stat_loop_count = 0;
         int stat_recv_bytes = 0;
         int stat_decode_frames = 0;
+        int stat_pcm_frames = 0;
+        int stat_pcm_samples = 0;
+        int stat_no_pcm_parsed_frames = 0;
+        int stat_last_queue_level = -1;
+        int stat_peak_queue_level = -1;
+        int stat_icy_meta_bytes = 0;
+        int stat_icy_meta_blocks = 0;
         int stat_timeouts = 0;
         int stat_rebuffer_waits = 0;
         int stat_backpressure_waits = 0;
+        int no_pcm_streak = 0;
 
         {
             char *header_end = strstr(resp_header.data(), "\r\n\r\n");
@@ -264,15 +334,36 @@ void minimp3::stream_mp3_to_iis()
                     }
                     memcpy(mp3_buffer, body_start, body_len);
                     bytes_in_buf = body_len;
+
+                    // Ê×°üÌØÕ÷Ê¶±ğ£º¿ìËÙÅĞ¶ÏÊÇ·ñÎªMP3/ID3/AAC/RIFF£¬¸¨Öú¶¨Î»¡°ÓĞÁ÷Á¿ÎŞÉùÒô¡±¡£
+                    if (body_len >= 3) {
+                        const uint8_t b0 = mp3_buffer[0];
+                        const uint8_t b1 = mp3_buffer[1];
+                        const uint8_t b2 = mp3_buffer[2];
+                        if (b0 == 'I' && b1 == 'D' && b2 == '3') {
+                            osal_printk("ÒôÆµÌåÇ°µ¼: ID3 (MP3±êÇ©Í·)\n");
+                        } else if (body_len >= 2 && b0 == 0xFF && (b1 & 0xF6) == 0xF0) {
+                            osal_printk("ÒôÆµÌåÇ°µ¼: ADTS/AAC£¬Í¬²½×ÖÃüÖĞ£¬minimp3ÎŞ·¨½âÂë\n");
+                        } else if (body_len >= 12 && mp3_buffer[0] == 'R' && mp3_buffer[1] == 'I' &&
+                                   mp3_buffer[2] == 'F' && mp3_buffer[3] == 'F') {
+                            osal_printk("ÒôÆµÌåÇ°µ¼: RIFFÈİÆ÷£¬µ±Ç°Á´Â·Î´ÊµÏÖÈİÆ÷½âÎö\n");
+                        } else if (body_len >= 12 && mp3_buffer[4] == 'f' && mp3_buffer[5] == 't' &&
+                                   mp3_buffer[6] == 'y' && mp3_buffer[7] == 'p') {
+                            osal_printk("ÒôÆµÌåÇ°µ¼: MP4/ISO-BMFF(ftyp)£¬minimp3ÎŞ·¨½âÂë\n");
+                        } else {
+                            osal_printk("ÒôÆµÌåÇ°µ¼HEX: %02X %02X %02X %02X\n", mp3_buffer[0], mp3_buffer[1],
+                                        mp3_buffer[2], body_len >= 4 ? mp3_buffer[3] : 0);
+                        }
+                    }
                 }
             }
         }
 
         while (is_playing) {
-            // ä½¿ç”¨æ»‘åŠ¨çª—å£ï¼Œé¿å…æ¯å¸§éƒ½å¯¹æ•´æ®µæ•°æ® memmoveã€‚
-            // å½“ç¼“å†²åŒºå†…çš„å­—èŠ‚ä¸è¶³æœ€å°è§£ç å¸§é•¿ï¼ˆè¿™é‡Œå‡è®¾ä¸ºæœ€å°‘éœ€è¦2000å­—èŠ‚è§¦å‘ä¼˜å…ˆè§£ç ï¼‰æ—¶ï¼Œå¼ºåˆ¶æ¥æ”¶
+            // Ê¹ÓÃ»¬¶¯´°¿Ú£¬±ÜÃâÃ¿Ö¡¶¼¶ÔÕû¶ÎÊı¾İ memmove¡£
+            // µ±»º³åÇøÄÚµÄ×Ö½Ú²»×ã×îĞ¡½âÂëÖ¡³¤£¨ÕâÀï¼ÙÉèÎª×îÉÙĞèÒª2000×Ö½Ú´¥·¢ÓÅÏÈ½âÂë£©Ê±£¬Ç¿ÖÆ½ÓÊÕ
             if (bytes_in_buf < static_cast<int>(mp3_buffer_size)) {
-                // æœ¬åœ°ç¼“å†²è¶³å¤Ÿæ—¶ä¼˜å…ˆè§£ç ï¼Œé¿å…è¢«é˜»å¡å¼ recv æ‰“æ–­é€ æˆå¯é—»å¡é¡¿ã€‚
+                // ±¾µØ»º³å×ã¹»Ê±ÓÅÏÈ½âÂë£¬±ÜÃâ±»×èÈûÊ½ recv ´ò¶ÏÔì³É¿ÉÎÅ¿¨¶Ù¡£
                 if (bytes_in_buf >= k_recv_block_avoid_threshold && !need_rebuffer) {
                     goto decode_stage;
                 }
@@ -286,13 +377,14 @@ void minimp3::stream_mp3_to_iis()
 
                 int32_t ret = -1;
                 bool recv_called = false;
+                std::array<uint8_t, k_recv_chunk_bytes> recv_temp = {0};
                 if (tail_free > 0) {
                     recv_called = true;
                     int recv_want = tail_free;
                     if (recv_want > k_recv_chunk_bytes) {
                         recv_want = k_recv_chunk_bytes;
                     }
-                    ret = lwip_recv(sock, mp3_buffer + buf_start + bytes_in_buf, recv_want, 0);
+                    ret = lwip_recv(sock, recv_temp.data(), recv_want, 0);
                 }
 
                 if (!recv_called) {
@@ -305,14 +397,14 @@ void minimp3::stream_mp3_to_iis()
 
                     if (is_timeout) {
                         if (bytes_in_buf > 0) {
-                            // å…³é”®ï¼šè¶…æ—¶ä½†ç¼“å†²åŒºä»æœ‰æ•°æ®æ—¶ï¼Œä¸èƒ½è·³è¿‡è§£ç ï¼Œå¦åˆ™ä¼šäººä¸ºæ”¾å¤§å¡é¡¿ã€‚
+                            // ¹Ø¼ü£º³¬Ê±µ«»º³åÇøÈÔÓĞÊı¾İÊ±£¬²»ÄÜÌø¹ı½âÂë£¬·ñÔò»áÈËÎª·Å´ó¿¨¶Ù¡£
                             recv_fail_count = 0;
                             recv_timeout_count = 0;
                         } else {
                             recv_timeout_count++;
                             stat_timeouts++;
                             if (recv_timeout_count >= k_max_recv_timeout_count) {
-                                osal_printk("æ¥æ”¶MP3æ•°æ®ç©ºç¼“å†²è¶…æ—¶ï¼Œå‡†å¤‡é‡è¿\n");
+                                osal_printk("½ÓÊÕMP3Êı¾İ¿Õ»º³å³¬Ê±£¬×¼±¸ÖØÁ¬\n");
                                 break;
                             }
                             osal_msleep(10);
@@ -321,21 +413,52 @@ void minimp3::stream_mp3_to_iis()
                     }
 
                     recv_timeout_count = 0;
-                    // ç¼“å†²åŒºé‡Œè¿˜æœ‰å¯è§£ç æ•°æ®æ—¶ï¼Œä¼˜å…ˆç»§ç»­è§£ç ï¼Œé¿å…å› çŸ­æš‚ç½‘ç»œæŠ–åŠ¨äº§ç”Ÿå¡é¡¿ã€‚
+                    // »º³åÇøÀï»¹ÓĞ¿É½âÂëÊı¾İÊ±£¬ÓÅÏÈ¼ÌĞø½âÂë£¬±ÜÃâÒò¶ÌÔİÍøÂç¶¶¶¯²úÉú¿¨¶Ù¡£
                     if (bytes_in_buf == 0) {
                         recv_fail_count++;
                         if (recv_fail_count >= k_max_recv_fail_count) {
-                            osal_printk("æ¥æ”¶MP3æ•°æ®æŒç»­å¤±è´¥ï¼Œå‡†å¤‡é‡è¿\n");
+                            osal_printk("½ÓÊÕMP3Êı¾İ³ÖĞøÊ§°Ü£¬×¼±¸ÖØÁ¬\n");
                             break;
                         }
                         osal_msleep(10);
                         continue;
                     }
                 } else if (ret == 0) {
-                    osal_printk("æœåŠ¡å™¨å…³é—­äº†è¿æ¥\n");
+                    osal_printk("·şÎñÆ÷¹Ø±ÕÁËÁ¬½Ó\n");
                     break;
                 } else {
-                    bytes_in_buf += ret;
+                    int appended = 0;
+                    if (icy_metaint > 0) {
+                        for (int i = 0; i < ret; ++i) {
+                            uint8_t b = recv_temp[i];
+
+                            if (icy_metadata_remaining > 0) {
+                                icy_metadata_remaining--;
+                                stat_icy_meta_bytes++;
+                                continue;
+                            }
+
+                            if (icy_audio_remaining == 0) {
+                                icy_metadata_remaining = static_cast<int>(b) * 16;
+                                if (icy_metadata_remaining > 0) {
+                                    stat_icy_meta_blocks++;
+                                }
+                                icy_audio_remaining = icy_metaint;
+                                continue;
+                            }
+
+                            if (bytes_in_buf + appended < static_cast<int>(mp3_buffer_size)) {
+                                mp3_buffer[buf_start + bytes_in_buf + appended] = b;
+                                appended++;
+                            }
+                            icy_audio_remaining--;
+                        }
+                    } else {
+                        appended = ret;
+                        memcpy(mp3_buffer + buf_start + bytes_in_buf, recv_temp.data(), appended);
+                    }
+
+                    bytes_in_buf += appended;
                     stat_recv_bytes += ret;
                     recv_fail_count = 0;
                     recv_timeout_count = 0;
@@ -343,25 +466,29 @@ void minimp3::stream_mp3_to_iis()
             }
 
         decode_stage:
-            // æ ¹æ®IISå¾…æ’­é˜Ÿåˆ—åšè½¯èƒŒå‹ï¼šé«˜æ°´ä½æ—¶é™ä½è§£ç æ¨è¿›é€Ÿåº¦ï¼Œè€Œéå®Œå…¨æš‚åœã€‚
+            // ¸ù¾İIIS´ı²¥¶ÓÁĞ×öÈí±³Ñ¹£º¸ßË®Î»Ê±½µµÍ½âÂëÍÆ½øËÙ¶È£¬¶ø·ÇÍêÈ«ÔİÍ£¡£
             int queue_level = -1;
             int decode_loops_budget = k_max_decode_loops_per_round;
             if (playback_queue_level_getter_func != nullptr) {
                 queue_level = playback_queue_level_getter_func();
+                stat_last_queue_level = queue_level;
+                if (queue_level > stat_peak_queue_level) {
+                    stat_peak_queue_level = queue_level;
+                }
                 if (queue_level <= k_queue_recover_low) {
-                    // ä½æ°´ä½å¿«é€Ÿè¿½èµ¶ï¼Œå°½é‡é¿å…IISæ‰åˆ°åœæ’­åŒºé—´é€ æˆé•¿ç©ºç™½ã€‚
+                    // µÍË®Î»¿ìËÙ×·¸Ï£¬¾¡Á¿±ÜÃâIISµôµ½Í£²¥Çø¼äÔì³É³¤¿Õ°×¡£
                     decode_loops_budget = k_decode_loops_recover;
                 }
                 if (queue_level >= k_queue_hard_high) {
-                    // æ¢å¤ç¡¬æš‚åœï¼Œå› ä¸ºIISåº•å±‚ç¼“å†²æ»¡æ—¶ä¼šç›´æ¥å°†åç»­æ•°æ®æˆªæ–­ä¸¢å¼ƒï¼Œå¼•å‘ä¸¥é‡ç ´éŸ³å’Œå¡é¡¿ï¼
-                    decode_loops_budget = 0;
+                    // ±ÜÃâÍêÈ«Í£ÍÆ½øÔì³ÉÍøÂç½ÓÊÕ¼¢¶ö£¬¸ÄÎª×îĞ¡ÍÆ½ø¡£
+                    decode_loops_budget = 1;
                     stat_backpressure_waits++;
                 } else if (queue_level >= k_queue_soft_high) {
                     decode_loops_budget = 1;
                 }
             }
 
-            // å†ç¼“å†²ä»…åœ¨è§åº•é˜¶æ®µè§¦å‘ï¼Œå¹¶æ ¹æ®è¾“å‡ºé˜Ÿåˆ—çŠ¶æ€åŠ¨æ€æ”¾å®½é˜ˆå€¼ï¼Œé¿å…é•¿é™éŸ³ã€‚
+            // ÔÙ»º³å½öÔÚ¼ûµ×½×¶Î´¥·¢£¬²¢¸ù¾İÊä³ö¶ÓÁĞ×´Ì¬¶¯Ì¬·Å¿íãĞÖµ£¬±ÜÃâ³¤¾²Òô¡£
             if (need_rebuffer) {
                 int threshold = k_rebuffer_threshold_bytes;
                 if (queue_level > k_queue_soft_high) {
@@ -377,32 +504,48 @@ void minimp3::stream_mp3_to_iis()
 
             int decode_loops = 0;
             while (is_playing && bytes_in_buf > 0 && decode_loops < decode_loops_budget) {
-                // è§£ç MP3æ•°æ®å¹¶é€å…¥IIS
+                memset(&info, 0, sizeof(info));
+                // ½âÂëMP3Êı¾İ²¢ËÍÈëIIS
                 int samples = mp3dec_decode_frame(&mp3d, mp3_buffer + buf_start, bytes_in_buf, pcm_buffer, &info);
 
                 if (samples > 0) {
-                    // å¦‚æœé‡‡æ ·ç‡å˜åŒ–äº†ï¼Œè°ƒç”¨iis_set_rate_funcè®¾ç½®æ–°çš„é‡‡æ ·ç‡
+                    // Èç¹û²ÉÑùÂÊ±ä»¯ÁË£¬µ÷ÓÃiis_set_rate_funcÉèÖÃĞÂµÄ²ÉÑùÂÊ
                     if (info.hz != current_hz && iis_set_rate_func) {
                         iis_set_rate_func(info.hz);
                         current_hz = info.hz;
                     }
 
-                    // å°†è§£ç å¾—åˆ°çš„PCMæ•°æ®é€å…¥IIS
-                    if (mp3_get_into_iis_func) {
-                        mp3_get_into_iis_func(pcm_buffer, samples * info.channels);
+                    uint32_t output_samples = static_cast<uint32_t>(samples * info.channels);
+                    if (info.channels == 1) {
+                        // µ¥ÉùµÀÀ©Õ¹ÎªË«ÉùµÀ£¬±ÜÃâ½ö×óÉùµÀÓĞÉù¡£
+                        for (int i = samples - 1; i >= 0; --i) {
+                            const int16_t s = pcm_buffer[i];
+                            pcm_buffer[2 * i] = s;
+                            pcm_buffer[2 * i + 1] = s;
+                        }
+                        output_samples = static_cast<uint32_t>(samples * 2);
                     }
+
+                    // ½«½âÂëµÃµ½µÄPCMÊı¾İËÍÈëIIS
+                    if (mp3_get_into_iis_func) {
+                        mp3_get_into_iis_func(pcm_buffer, output_samples);
+                    }
+                    stat_pcm_frames++;
+                    stat_pcm_samples += static_cast<int>(output_samples);
+                    no_pcm_streak = 0;
                 }
 
-                // ç½‘ç»œåŠå¸§æ•°æ®å°¾å·´ä¿æŠ¤ç®—æ³• (æ»‘åŠ¨çª—å£å‰ç§»)
+                // ÍøÂç°ëÖ¡Êı¾İÎ²°Í±£»¤Ëã·¨ (»¬¶¯´°¿ÚÇ°ÒÆ)
                 bool frame_consumed = false;
-                if (info.frame_bytes > 0 && info.frame_bytes <= bytes_in_buf) {
-                    buf_start += info.frame_bytes;
-                    bytes_in_buf -= info.frame_bytes;
+                if (samples > 0 && info.frame_bytes > 0) {
+                    int consume = (info.frame_bytes <= bytes_in_buf) ? info.frame_bytes : bytes_in_buf;
+                    buf_start += consume;
+                    bytes_in_buf -= consume;
                     frame_consumed = true;
                     stat_decode_frames++;
                     no_progress_count = 0;
 
-                    // ä»…åœ¨ç¼“å†²çœŸæ­£è€—å°½æ—¶æ‰å†ç¼“å†²ï¼Œé¿å…é¢‘ç¹è§¦å‘å¯¼è‡´é•¿ç©ºç™½ã€‚
+                    // ½öÔÚ»º³åÕæÕıºÄ¾¡Ê±²ÅÔÙ»º³å£¬±ÜÃâÆµ·±´¥·¢µ¼ÖÂ³¤¿Õ°×¡£
                     if (bytes_in_buf == 0) {
                         need_rebuffer = true;
                     }
@@ -413,17 +556,46 @@ void minimp3::stream_mp3_to_iis()
                         memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
                         buf_start = 0;
                     }
+                } else if (info.frame_bytes > 0) {
+                    // ÍøÂç¶¶¶¯Ê±¿ÉÄÜÏÈÃüÖĞÖ¡Í·µ«Êı¾İÉĞÎ´ÍêÕû£¬ÏÈ¸ø¼¸´Î»ú»á¼ÌĞøÊÕ°ü£¬±ÜÃâÎó¶ªÓĞĞ§Ö¡¡£
+                    ++no_pcm_streak;
+                    if (no_pcm_streak <= 2 && bytes_in_buf < (info.frame_bytes + 256)) {
+                        break;
+                    }
+
+                    // Á¬ĞøÎŞPCMÔÙ×öµ¥×Ö½ÚÖØÍ¬²½£¬±ÜÃâÕûÖ¡Ìø¹ı¿ç¹ıÕæÊµÒôÆµ¡£
+                    if (bytes_in_buf > 0) {
+                        buf_start += 1;
+                        bytes_in_buf -= 1;
+                        frame_consumed = true;
+                        stat_decode_frames++;
+                        stat_no_pcm_parsed_frames++;
+                    }
+
+                    if (stat_no_pcm_parsed_frames <= 3) {
+                        osal_printk("ÎŞPCMÖ¡: layer=%d hz=%d ch=%d kbps=%d frame_bytes=%d\n", info.layer, info.hz,
+                                    info.channels, info.bitrate_kbps, info.frame_bytes);
+                    }
+
+                    if (bytes_in_buf <= 0) {
+                        bytes_in_buf = 0;
+                        buf_start = 0;
+                        need_rebuffer = true;
+                    } else if (buf_start > static_cast<int>(mp3_buffer_size / 2)) {
+                        memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
+                        buf_start = 0;
+                    }
                 }
 
-                // å¼ºåˆ¶è¦æ±‚æœ€å°‘è¦æœ‰1000ä¸ªå­—èŠ‚æ‰èƒ½å»å°è¯•è§£ä¸‹ä¸€å¸§ã€‚å› ä¸ºå¦‚æœä¸è¶³ï¼Œå¯èƒ½è§£å‡ºä¸€åŠçš„æ•°æ®å¯¼è‡´é”™è¯¯åˆ¤æ–­ã€‚
-                if (bytes_in_buf < 1000) {
+                // ±£ÁôÉÙÁ¿Î²²¿×Ö½Ú¼´¿É£¬±ÜÃâ¶ÔµÍÂëÂÊ¶ÌÖ¡¹ı¶È±£ÊØµ¼ÖÂ½âÂëÍÆ½ø²»×ã¡£
+                if (bytes_in_buf < 128) {
                     break;
                 }
 
-                // å½“ç¼“å†²åŒºå·²æ»¡ä¸”è§£ç å™¨ä¸å‰è¿›æ—¶ï¼Œä¸¢å¼ƒ1å­—èŠ‚é¿å…æ­»å¾ªç¯ç©ºè½¬ã€‚
+                // µ±»º³åÇøÒÑÂúÇÒ½âÂëÆ÷²»Ç°½øÊ±£¬¶ªÆú1×Ö½Ú±ÜÃâËÀÑ­»·¿Õ×ª¡£
                 if (!frame_consumed) {
-                    // å¦‚æœå•å¸§å¤ªå¤§ï¼Œç”±äºå½“å‰æ²¡æœ‰è¶³å¤Ÿçš„æ•°æ®ï¼Œè§£ç å™¨ä¹Ÿå¯èƒ½è¿”å› frame_bytes == 0ã€‚
-                    // åªæœ‰åœ¨æ¥æ”¶ç¼“å†²çœŸçš„è¾¾åˆ°ä¸Šé™ï¼Œä¸”çœŸçš„æ— æ³•å‰è¿›æ—¶æ‰ä¸¢å¼ƒæ•°æ®ã€‚
+                    // Èç¹ûµ¥Ö¡Ì«´ó£¬ÓÉÓÚµ±Ç°Ã»ÓĞ×ã¹»µÄÊı¾İ£¬½âÂëÆ÷Ò²¿ÉÄÜ·µ»Ø frame_bytes == 0¡£
+                    // Ö»ÓĞÔÚ½ÓÊÕ»º³åÕæµÄ´ïµ½ÉÏÏŞ£¬ÇÒÕæµÄÎŞ·¨Ç°½øÊ±²Å¶ªÆúÊı¾İ¡£
                     ++no_progress_count;
                     if (bytes_in_buf >= static_cast<int>(mp3_buffer_size - 1) &&
                         no_progress_count >= k_stall_drop_threshold) {
@@ -435,10 +607,10 @@ void minimp3::stream_mp3_to_iis()
                             memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
                             buf_start = 0;
                         }
-                        osal_printk("MP3è§£ç é•¿æ—¶é—´æ— è¿›å±•ï¼Œå·²ä¸¢å¼ƒ1å­—èŠ‚å°è¯•è‡ªæ¢å¤\n");
+                        osal_printk("MP3½âÂë³¤Ê±¼äÎŞ½øÕ¹£¬ÒÑ¶ªÆú1×Ö½Ú³¢ÊÔ×Ô»Ö¸´\n");
                         no_progress_count = 0;
                     } else if (bytes_in_buf < static_cast<int>(mp3_buffer_size)) {
-                        // å¦‚æœç¼“å†²åŒºæ²¡æ»¡ï¼Œè€Œä¸”åˆæ²¡æœ‰æ¶ˆè´¹ï¼Œè¯´æ˜å¸§ä¸å®Œæ•´ï¼Œéœ€è¦é€€å‡º decode å¾ªç¯å»ç»§ç»­ recvã€‚
+                        // Èç¹û»º³åÇøÃ»Âú£¬¶øÇÒÓÖÃ»ÓĞÏû·Ñ£¬ËµÃ÷Ö¡²»ÍêÕû£¬ĞèÒªÍË³ö decode Ñ­»·È¥¼ÌĞø recv¡£
                         break;
                     }
                     break;
@@ -451,22 +623,35 @@ void minimp3::stream_mp3_to_iis()
             }
 
             if (decode_loops == 0) {
-                // å¦‚æœæ˜¯å› ä¸ºæ²¡æœ‰æ•°æ®è€Œæš‚åœï¼Œç¨å¾®ä¼‘çœ å³å¯ï¼›å¦‚æœæ˜¯å› ä¸ºèƒŒå‹ï¼Œç¨å¾®ä¼‘çœ ã€‚
-                // ç¡®ä¿ä¼‘çœ ä¸ä¼šå› ä¸ºæ­»é”å¯¼è‡´ç½‘ç»œä¸å†æ¥æ”¶æ•°æ®
+                // Èç¹ûÊÇÒòÎªÃ»ÓĞÊı¾İ¶øÔİÍ££¬ÉÔÎ¢ĞİÃß¼´¿É£»Èç¹ûÊÇÒòÎª±³Ñ¹£¬ÉÔÎ¢ĞİÃß¡£
+                // È·±£ĞİÃß²»»áÒòÎªËÀËøµ¼ÖÂÍøÂç²»ÔÙ½ÓÊÕÊı¾İ
                 osal_msleep(5);
             } else if (bytes_in_buf == 0) {
                 osal_msleep(1);
             }
 
             stat_loop_count++;
-            // è¿‘ä¼¼æŒ‰ç§’ç»Ÿè®¡ï¼ˆè¯¥å¾ªç¯åœ¨ç©ºé—²è·¯å¾„æœ‰msleepï¼Œæ•°é‡çº§è¶³å¤Ÿè§‚å¯Ÿç½‘ç»œæ³¢åŠ¨ï¼‰ã€‚
+            // ½üËÆ°´ÃëÍ³¼Æ£¨¸ÃÑ­»·ÔÚ¿ÕÏĞÂ·¾¶ÓĞmsleep£¬ÊıÁ¿¼¶×ã¹»¹Û²ìÍøÂç²¨¶¯£©¡£
             if (stat_loop_count >= 1000) {
-                osal_printk("MP3ç»Ÿè®¡(çª—å£): recv=%dB frames=%d timeout=%d rebuf=%d bp=%d in_buf=%d\n", stat_recv_bytes,
-                            stat_decode_frames, stat_timeouts, stat_rebuffer_waits, stat_backpressure_waits,
-                            bytes_in_buf);
+                osal_printk(
+                    "MP3Í³¼Æ(´°¿Ú): recv=%dB parsed=%d pcm_frames=%d pcm_samples=%d icy_blocks=%d icy_bytes=%d "
+                    "timeout=%d rebuf=%d bp=%d in_buf=%d q_last=%d q_peak=%d\n",
+                    stat_recv_bytes, stat_decode_frames, stat_pcm_frames, stat_pcm_samples, stat_icy_meta_blocks,
+                    stat_icy_meta_bytes, stat_timeouts, stat_rebuffer_waits, stat_backpressure_waits, bytes_in_buf,
+                    stat_last_queue_level, stat_peak_queue_level);
+                if (stat_decode_frames > 0 && stat_pcm_frames == 0 && stat_no_pcm_parsed_frames > 128) {
+                    osal_printk("¸æ¾¯: Á¬Ğø½âÎöµ½Ö¡Í·µ«Ê¼ÖÕÎŞPCMÊä³ö£¬Á÷ºÜ¿ÉÄÜ²»ÊÇMP3ÒôÆµÌå\n");
+                }
                 stat_loop_count = 0;
                 stat_recv_bytes = 0;
                 stat_decode_frames = 0;
+                stat_pcm_frames = 0;
+                stat_pcm_samples = 0;
+                stat_no_pcm_parsed_frames = 0;
+                stat_last_queue_level = -1;
+                stat_peak_queue_level = -1;
+                stat_icy_meta_blocks = 0;
+                stat_icy_meta_bytes = 0;
                 stat_timeouts = 0;
                 stat_rebuffer_waits = 0;
                 stat_backpressure_waits = 0;
@@ -479,12 +664,12 @@ void minimp3::stream_mp3_to_iis()
             continue;
         }
 
-        // è‹¥URLå‘ç”Ÿå˜åŒ–æˆ–æ”¶åˆ°æ–°URLï¼Œç«‹å³è¿›å…¥ä¸‹ä¸€è½®è¿æ¥ã€‚
+        // ÈôURL·¢Éú±ä»¯»òÊÕµ½ĞÂURL£¬Á¢¼´½øÈëÏÂÒ»ÂÖÁ¬½Ó¡£
         if (is_url_ready || strcmp(working_url.data(), current_url.data()) != 0) {
             continue;
         }
 
-        // é€‚åº¦é€€é¿ï¼Œé¿å…åœ¨å¼±ç½‘ç¯å¢ƒä¸‹å½¢æˆè¿ç»­é‡è¿é£æš´ã€‚
+        // ÊÊ¶ÈÍË±Ü£¬±ÜÃâÔÚÈõÍø»·¾³ÏÂĞÎ³ÉÁ¬ĞøÖØÁ¬·ç±©¡£
         osal_msleep(500);
     }
 }

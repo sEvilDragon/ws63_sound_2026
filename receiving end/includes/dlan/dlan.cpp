@@ -1227,7 +1227,7 @@ void dlan::http_process()
                         "<s:Body>"
                         "<u:GetProtocolInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:ConnectionManager:1\">"
                         "<Source></Source>"
-                        "<Sink>http-get:*:audio/mpeg:*,http-get:*:audio/mp3:*,http-get:*:audio/mp4:*</Sink>"
+                        "<Sink>http-get:*:audio/mpeg:*,http-get:*:audio/mp3:*</Sink>"
                         "</u:GetProtocolInfoResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
