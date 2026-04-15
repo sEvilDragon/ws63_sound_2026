@@ -106,8 +106,8 @@ void minimp3_task(void *arg)
     });
     minimp3::mp3_get_into_iis_set([](const int16_t *data, uint32_t size) { push_pcm_with_closed_loop(data, size); });
 
-    // 关闭minimp3内部队列背压，避免双闭环互相打架；闭环由wifi_task层独立接管。
-    minimp3::playback_queue_level_getter_set(nullptr);
+    // 启用解码侧队列水位反馈，避免解码超速喂数触发IIS端主动丢样本（听感会变成快进）。
+    minimp3::playback_queue_level_getter_set([]() -> int { return static_cast<int>(iis::pending_frames); });
 
     minimp3::stream_mp3_to_iis();
 }

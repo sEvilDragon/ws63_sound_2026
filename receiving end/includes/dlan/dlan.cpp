@@ -153,6 +153,75 @@ bool send_http_soap_response(int32_t client_sock, const char *body)
     return true;
 }
 
+bool send_http_soap_fault_response(int32_t client_sock, int upnp_error_code, const char *description)
+{
+    if (description == nullptr) {
+        description = "Invalid Args";
+    }
+
+    std::array<char, 768> body = {0};
+    snprintf(body.data(), body.size(),
+             "<?xml version=\"1.0\"?>"
+             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+             "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">"
+             "<s:Body>"
+             "<s:Fault>"
+             "<faultcode>s:Client</faultcode>"
+             "<faultstring>UPnPError</faultstring>"
+             "<detail>"
+             "<UPnPError xmlns=\"urn:schemas-upnp-org:control-1-0\">"
+             "<errorCode>%d</errorCode>"
+             "<errorDescription>%s</errorDescription>"
+             "</UPnPError>"
+             "</detail>"
+             "</s:Fault>"
+             "</s:Body>"
+             "</s:Envelope>",
+             upnp_error_code, description);
+
+    int body_len = static_cast<int>(strlen(body.data()));
+    std::array<char, 256> header = {0};
+    int header_len = snprintf(header.data(), header.size(),
+                              "HTTP/1.1 500 Internal Server Error\r\n"
+                              "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
+                              "CONTENT-LENGTH: %d\r\n"
+                              "CONNECTION: close\r\n\r\n",
+                              body_len);
+    if (header_len <= 0 || header_len >= static_cast<int>(header.size())) {
+        return false;
+    }
+
+    if (lwip_send(client_sock, header.data(), header_len, 0) <= 0) {
+        return false;
+    }
+    if (body_len > 0 && lwip_send(client_sock, (const uint8_t *)body.data(), body_len, 0) <= 0) {
+        return false;
+    }
+    return true;
+}
+
+bool is_mp3_candidate_from_uri_or_metadata(const char *uri, const char *metadata)
+{
+    const bool has_metadata = (metadata != nullptr && metadata[0] != '\0');
+    if (has_metadata) {
+        if (ascii_icontains(metadata, "audio/mpeg") || ascii_icontains(metadata, "audio/mp3") ||
+            ascii_icontains(metadata, "audio/x-mpeg") || ascii_icontains(metadata, "mp3")) {
+            return true;
+        }
+        return false;
+    }
+
+    if (uri == nullptr || uri[0] == '\0') {
+        return false;
+    }
+    if (ascii_icontains(uri, ".mp3") || ascii_icontains(uri, "format=mp3") || ascii_icontains(uri, "mime=audio/mpeg")) {
+        return true;
+    }
+
+    // 无元数据且URL也不带扩展时放行，避免误杀签名直链。
+    return true;
+}
+
 bool notify_avtransport_state(const char *state)
 {
     if (state == nullptr || state[0] == '\0' || g_avt_callback[0] == '\0' || g_avt_sid[0] == '\0') {
@@ -275,9 +344,8 @@ uint32_t get_playback_elapsed_seconds()
     uint32_t elapsed = g_playback_elapsed_base_sec;
     if (is_transport_playing_state(dlan::g_transport_state.data()) && g_playback_started_jiffies != 0) {
         unsigned long long now_jiffies = osal_get_jiffies();
-        unsigned long long delta_jiffies = (now_jiffies >= g_playback_started_jiffies)
-                                              ? (now_jiffies - g_playback_started_jiffies)
-                                              : 0ULL;
+        unsigned long long delta_jiffies =
+            (now_jiffies >= g_playback_started_jiffies) ? (now_jiffies - g_playback_started_jiffies) : 0ULL;
         unsigned int delta_ms = osal_jiffies_to_msecs(static_cast<unsigned int>(delta_jiffies));
         elapsed += delta_ms / 1000U;
     }
@@ -993,9 +1061,22 @@ void dlan::http_process()
                 if (strstr(soap_action_value.data(), "#SetAVTransportURI") != nullptr) {
                     // SED : 串口输出
                     osal_printk("http收到SetAVTransportURI命令\n");
-                    static std::array<char, 512> media_url = {0}; // 从SOAP请求中提取出媒体URL，方便后续实现真正的播放功能
+                    static std::array<char, 512> media_url = {
+                        0}; // 从SOAP请求中提取出媒体URL，方便后续实现真正的播放功能
+                    static std::array<char, 1024> media_metadata = {0};
                     extract_xml_tag_value(buffer.data(), "CurrentURI", media_url.data(), media_url.size());
+                    extract_xml_tag_value(buffer.data(), "CurrentURIMetaData", media_metadata.data(),
+                                          media_metadata.size());
                     html_entity_decode_amp(media_url.data());
+                    html_entity_decode_amp(media_metadata.data());
+
+                    if (!is_mp3_candidate_from_uri_or_metadata(media_url.data(), media_metadata.data())) {
+                        osal_printk("SetAVTransportURI拒绝: 非MP3媒体 URI=%s\n", media_url.data());
+                        send_http_soap_fault_response(client_sock, 714, "Illegal MIME-Type");
+                        lwip_close(client_sock);
+                        return;
+                    }
+
                     copy_string_safe(g_current_uri.data(), g_current_uri.size(), media_url.data());
                     if (media_set_uri_handler_func != nullptr) {
                         media_set_uri_handler_func(g_current_uri.data());
@@ -1129,8 +1210,8 @@ void dlan::http_process()
                              "</u:GetPositionInfoResponse>"
                              "</s:Body>"
                              "</s:Envelope>",
-                             has_uri ? 1U : 0U, "00:00:00", has_uri ? escaped_uri.data() : "",
-                             elapsed_hms.data(), elapsed_hms.data());
+                             has_uri ? 1U : 0U, "00:00:00", has_uri ? escaped_uri.data() : "", elapsed_hms.data(),
+                             elapsed_hms.data());
                     send_http_soap_response(client_sock, position_info_body.data());
                     lwip_close(client_sock);
                     return;

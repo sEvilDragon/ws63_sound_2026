@@ -48,7 +48,8 @@ private:
     static bool is_url_ready;
 
     // 定义解码相关的成员变量
-    static constexpr size_t mp3_buffer_size = 4098; // 4KB的MP3数据缓冲区
+    // minimp3流式解码建议尽量提供连续约10帧窗口（约16KB），否则容易假同步与漏解码。
+    static constexpr size_t mp3_buffer_size = 16384;
 };
 
 #endif

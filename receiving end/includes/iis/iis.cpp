@@ -3,8 +3,8 @@
 volatile int iis::write_idx = 0;
 volatile int iis::read_idx = 0;
 volatile int iis::pending_frames = 0;
-std::array<void *, 80> iis::raw_buffers;
-std::array<int16_t *, 80> iis::dma_buffers;
+std::array<void *, 60> iis::raw_buffers;
+std::array<int16_t *, 60> iis::dma_buffers;
 uint8_t iis::dma_channel = 0;
 bool iis::is_ready = false;
 int16_t iis::last_left_sample = 0;
