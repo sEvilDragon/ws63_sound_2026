@@ -19,4 +19,9 @@ config MAIN_RECEIVING_END
     help
         Build the receiving end (receiver side).
 
+config MAIN_CONTROL_END
+    bool "Control End"
+    help
+        Build the control end.
+
 endchoice
