@@ -9,7 +9,7 @@ cs43131::cs43131()
     // 拉高通讯引脚，通知iis可以启动
     uapi_pin_set_mode(GPIO_12, PIN_MODE_0);
     uapi_gpio_set_dir(GPIO_12, GPIO_DIRECTION_OUTPUT);
-    uapi_gpio_set_val(GPIO_12, 1);
+    uapi_gpio_set_val(GPIO_12, GPIO_LEVEL_HIGH);
 }
 
 void cs43131::cs43131_init()
@@ -17,8 +17,8 @@ void cs43131::cs43131_init()
     // 设置晶振偏置
     iic.iic_master_write(const_cast<uint8_t *>(crystal_cmd), sizeof(crystal_cmd), iic_addr);
     // 读取中断状态1
-    uint8_t statu = {0};
-    iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &statu, 1,
+    uint8_t status = 0;
+    iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &status, 1,
                         iic_addr);
     // 打开晶振相关中断
     iic.iic_master_write(const_cast<uint8_t *>(enable_xtal_irq_cmd), sizeof(enable_xtal_irq_cmd), iic_addr);
@@ -65,32 +65,43 @@ void cs43131::cs43131_init()
     iic.iic_master_write(const_cast<uint8_t *>(hp_detect_cfg_cmd), sizeof(hp_detect_cfg_cmd), iic_addr);
     iic.iic_master_write(const_cast<uint8_t *>(hp_detect_enable_cmd), sizeof(hp_detect_enable_cmd), iic_addr);
     // 清空中断状态
-    iic.iic_master_write(const_cast<uint8_t *>(read_interrupt1_cmd), sizeof(read_interrupt1_cmd), iic_addr);
-    iic.iic_master_write(const_cast<uint8_t *>(read_interrupt2_cmd), sizeof(read_interrupt2_cmd), iic_addr);
+    iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &status, 1,
+                        iic_addr);
+    iic.iic_master_read(const_cast<uint8_t *>(int_status_2_read_cmd), sizeof(int_status_2_read_cmd), &status, 1,
+                        iic_addr);
     // ASP 中断配置
     iic.iic_master_write(const_cast<uint8_t *>(enable_asp_irq_cmd), sizeof(enable_asp_irq_cmd), iic_addr);
     iic.iic_master_write(const_cast<uint8_t *>(enable_hp_irq_cmd), sizeof(enable_hp_irq_cmd), iic_addr);
-    // 读取中断状态，确认XTAL 已经稳定，ASP 和 HP detect 中断已经清除
-    iic.iic_master_read(const_cast<uint8_t *>(read_interrupt1_cmd), sizeof(read_interrupt1_cmd), &statu, 1, iic_addr);
+    // 轮询 XTAL ready，再切换内部时钟到 XTAL。
+    for (uint8_t retry = 0; retry < 50; ++retry) {
+        iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &status, 1,
+                            iic_addr);
+        if ((status & int_status_1_xtal_ready_mask) != 0) {
+            break;
+        }
+        osal_msleep(1);
+    }
     // 切换时钟源
     iic.iic_master_write(const_cast<uint8_t *>(switch_mclk_to_xtal_cmd), sizeof(switch_mclk_to_xtal_cmd), iic_addr);
+    osal_msleep(1);
     // pop_free 设置，沿用 PDF 推荐值。
     iic.iic_master_write(const_cast<uint8_t *>(pcm_popfree_stage1_cmd), sizeof(pcm_popfree_stage1_cmd), iic_addr);
     iic.iic_master_write(const_cast<uint8_t *>(pcm_popfree_stage2_cmd), sizeof(pcm_popfree_stage2_cmd), iic_addr);
-    // 读取中断状态，确认切换时钟源操作完成
-    // 读取中断状态2
-    iic.iic_master_read(const_cast<uint8_t *>(int_status_2_read_cmd), sizeof(int_status_2_read_cmd), &statu, 1,
-                        iic_addr);
-    // 开启 ASP 电源，正式启动 ASP 输出
-    uint8_t power_asp_cmd[5] = {0x02, 0x00, 0x00, 0x00, static_cast<uint8_t>(statu & power_down_enable_asp_mask)};
+    // 读取电源控制寄存器，再按 PDF 的读改写顺序打开 ASP 和 HP。
+    uint8_t power_down_ctrl = 0;
+    iic.iic_master_read(const_cast<uint8_t *>(power_down_ctrl_read_cmd), sizeof(power_down_ctrl_read_cmd),
+                        &power_down_ctrl, 1, iic_addr);
+    const uint8_t asp_power_ctrl = static_cast<uint8_t>(power_down_ctrl & power_down_enable_asp_mask);
+    // 开启 ASP 电源，Slave 模式下 ASP 只接收外部 BCLK/LRCK。
+    uint8_t power_asp_cmd[5] = {0x02, 0x00, 0x00, 0x00, asp_power_ctrl};
     iic.iic_master_write(power_asp_cmd, sizeof(power_asp_cmd), iic_addr);
     // 开启 HP 电源
     uint8_t power_hp_cmd[5] = {0x02, 0x00, 0x00, 0x00,
-                               static_cast<uint8_t>(statu & power_down_enable_asp_mask & power_down_enable_hp_mask)};
+                               static_cast<uint8_t>(asp_power_ctrl & power_down_enable_hp_mask)};
     iic.iic_master_write(power_hp_cmd, sizeof(power_hp_cmd), iic_addr);
     // 延时
-    osal_msleep(100);
-    // 回复默认设置
+    osal_msleep(12);
+    // 恢复默认设置
     iic.iic_master_write(const_cast<uint8_t *>(pcm_popfree_restore_1_cmd), sizeof(pcm_popfree_restore_1_cmd), iic_addr);
     iic.iic_master_write(const_cast<uint8_t *>(pcm_popfree_restore_2_cmd), sizeof(pcm_popfree_restore_2_cmd), iic_addr);
 }

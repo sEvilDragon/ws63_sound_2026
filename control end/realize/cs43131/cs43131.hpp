@@ -17,7 +17,7 @@ private:
     // CS43131 单寄存器写入格式不是 4 字节，而是 5 字节：
     // [MAP23:16] [MAP15:8] [MAP7:0] [CONTROL] [DATA]
     // 这里 CONTROL 固定用 0x00，表示 8-bit 单寄存器访问且不自增。
-    // 下面这组命令默认针对 22.5792 MHz 晶振、44.1 kHz、I2S Master、双声道 16-bit。
+    // 下面这组命令默认针对 22.5792 MHz 晶振、44.1 kHz、I2S Slave、双声道 16-bit。
     // 40 MHz 不能直接作为 CS43131 的晶振或 PLL 参考输入，这一点是 PDF 的硬限制。
 
     // 读取中断状态 1 的前导写，用于清除 sticky bit 或轮询 XTAL_READY_INT。
@@ -28,6 +28,9 @@ private:
 
     // 读取 Power Down Control 的前导写，后续需要读改写来打开 ASP/HP。
     static constexpr uint8_t power_down_ctrl_read_cmd[4] = {0x02, 0x00, 0x00, 0x00};
+
+    // Interrupt Status 1 的 bit4 对应 XTAL_READY_INT。
+    static constexpr uint8_t int_status_1_xtal_ready_mask = 0x10;
 
     // 配置晶振偏置电流，0x04 对应 12.5 uA，适用于 PDF 示例里的 22.5792 MHz 晶振。
     static constexpr uint8_t crystal_cmd[5] = {0x02, 0x00, 0x52, 0x00, 0x04};
@@ -44,6 +47,7 @@ private:
     // XSP 保持 24-bit 默认，ASP 改成 16-bit。
     static constexpr uint8_t asp_sample_bit_size_16_cmd[5] = {0x01, 0x00, 0x0C, 0x00, 0x06};
 
+    // 即使在 Slave 模式下，PDF 也要求把期望的 SCLK/LRCK 格式按同样方式写入。
     // ASP SCLK 分频分子 N = 1。
     static constexpr uint8_t asp_n_lsb_cmd[5] = {0x04, 0x00, 0x10, 0x00, 0x01};
 
@@ -64,8 +68,8 @@ private:
 
     static constexpr uint8_t asp_lrck_period_msb_cmd[5] = {0x04, 0x00, 0x17, 0x00, 0x00};
 
-    // ASP 工作在 Master 模式，时钟极性按 PDF 的 I2S 示例配置。
-    static constexpr uint8_t asp_clock_cfg_cmd[5] = {0x04, 0x00, 0x18, 0x00, 0x1C};
+    // ASP 工作在 Slave 模式，输入时钟极性按 PDF 的 I2S Slave 示例配置。
+    static constexpr uint8_t asp_clock_cfg_cmd[5] = {0x04, 0x00, 0x18, 0x00, 0x0C};
 
     // ASP 帧格式设为 I2S，50/50，占 1 bit 延迟。
     static constexpr uint8_t asp_frame_cfg_cmd[5] = {0x04, 0x00, 0x19, 0x00, 0x0A};
@@ -109,11 +113,6 @@ private:
     // 再正式打开 HP detect。
     static constexpr uint8_t hp_detect_enable_cmd[5] = {0x0D, 0x00, 0x00, 0x00, 0xC4};
 
-    // 读取中断
-    static constexpr uint8_t read_interrupt1_cmd[4] = {0x0F, 0x00, 0x00, 0x00};
-
-    static constexpr uint8_t read_interrupt2_cmd[4] = {0x0F, 0x00, 0x01, 0x00};
-
     // 打开耳机插拔相关中断。
     static constexpr uint8_t enable_hp_irq_cmd[5] = {0x0F, 0x00, 0x10, 0x00, 0x87};
 
@@ -125,9 +124,6 @@ private:
 
     // XTAL_READY 后，将内部 MCLK 切换到 XTAL，且目标频率为 22.5792 MHz。
     static constexpr uint8_t switch_mclk_to_xtal_cmd[5] = {0x01, 0x00, 0x06, 0x00, 0x04};
-
-    // 使能 ASP 主模式下的 BCLK/LRCK 输出。
-    static constexpr uint8_t enable_asp_clock_output_cmd[5] = {0x01, 0x00, 0x0D, 0x00, 0x02};
 
     // PCM 路径上电前的 pop-free 预处理 1。
     static constexpr uint8_t pcm_popfree_stage1_cmd[5] = {0x01, 0x00, 0x10, 0x00, 0x99};

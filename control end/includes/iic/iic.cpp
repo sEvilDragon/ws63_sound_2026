@@ -3,7 +3,7 @@
 namespace sed_ws63 {
 
 // 默认激活iic1
-iic_master::iic_master(pin_t scl = GPIO_16, pin_t sda = GPIO_15) : scl_pin(scl), sda_pin(sda)
+iic_master::iic_master(pin_t scl, pin_t sda) : scl_pin(scl), sda_pin(sda)
 {
     // 初始化iic
     iic_pin_init();
@@ -20,7 +20,7 @@ void iic_master::iic_pin_init()
 void iic_master::iic_master_write(uint8_t *data, uint8_t len, uint16_t addr)
 {
     // 基本iic写入代码
-    i2c_data_t data_ = {0};
+    i2c_data_t data_{};
     data_.send_buf = data;
     data_.send_len = len;
     uapi_i2c_master_write(I2C_BUS_0, addr, &data_);
@@ -29,7 +29,7 @@ void iic_master::iic_master_write(uint8_t *data, uint8_t len, uint16_t addr)
 void iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *data_res, uint8_t len_res, uint16_t addr)
 {
     // 基本iic读取代码
-    i2c_data_t data_ = {0};
+    i2c_data_t data_{};
     data_.send_buf = data_tar;
     data_.send_len = len_tra;
     data_.receive_buf = data_res;
@@ -37,4 +37,4 @@ void iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *da
     uapi_i2c_master_writeread(I2C_BUS_0, addr, &data_);
 }
 
-}
+} // namespace sed_ws63
