@@ -320,17 +320,17 @@ void minimp3::stream_mp3_to_iis()
     // 网络播放任务
     mp3dec_t mp3d;
     mp3dec_frame_info_t info;
+    static constexpr size_t k_mp3_buffer_chunk_size = 1024;
+    static constexpr size_t k_mp3_buffer_chunk_count = 20;
+    static_assert(k_mp3_buffer_chunk_size * k_mp3_buffer_chunk_count == mp3_buffer_size,
+                  "mp3_buffer_size must equal 20 x 1KB");
+    static std::array<std::array<uint8_t, k_mp3_buffer_chunk_size>, k_mp3_buffer_chunk_count> mp3_buffer_chunks = {0};
+    uint8_t *mp3_buffer = mp3_buffer_chunks[0].data();
 
-    uint8_t *mp3_buffer = (uint8_t *)osal_kmalloc(mp3_buffer_size, OSAL_GFP_KERNEL);
-    if (mp3_buffer == nullptr) {
-        osal_printk("mp3_buffer内存分配失败\n");
-        return;
-    }
     int16_t *pcm_buffer = (int16_t *)osal_kmalloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t),
                                                   OSAL_GFP_KERNEL); // PCM缓冲区，预留足够空间
     if (pcm_buffer == nullptr) {
         osal_printk("pcm_buffer内存分配失败\n");
-        osal_kfree(mp3_buffer);
         return;
     }
 
@@ -357,6 +357,7 @@ void minimp3::stream_mp3_to_iis()
         int current_hz = 0;
         int hz_candidate = 0;
         int hz_candidate_count = 0;
+        int rate_mismatch_streak = 0;
         int buf_start = 0;
         int bytes_in_buf = 0;
         mp3dec_init(&mp3d);
@@ -531,9 +532,9 @@ void minimp3::stream_mp3_to_iis()
         static constexpr int k_recv_chunk_bytes = 2048;
         static constexpr int k_max_sync_skip_bytes = 96;
         static constexpr int k_min_keep_tail_bytes = 4;
-        static constexpr int k_queue_soft_high = 36;
-        static constexpr int k_queue_hard_high = 42;
-        static constexpr int k_queue_recover_low = 8;
+        static constexpr int k_queue_soft_high = 30;
+        static constexpr int k_queue_hard_high = 34;
+        static constexpr int k_queue_recover_low = 6;
         static constexpr int k_decode_loops_recover = 10;
         int stat_loop_count = 0;
         int stat_recv_bytes = 0;
@@ -547,8 +548,24 @@ void minimp3::stream_mp3_to_iis()
         int stat_icy_meta_blocks = 0;
         int stat_timeouts = 0;
         int stat_sync_realigns = 0;
+        int stat_rate_switches = 0;
+        int stat_rate_rejects = 0;
         int non_mp3_window_count = 0;
         int invalid_header_streak = 0;
+
+        auto compact_window = [&]() {
+            if (bytes_in_buf <= 0) {
+                bytes_in_buf = 0;
+                buf_start = 0;
+                return;
+            }
+            if (buf_start <= 0) {
+                return;
+            }
+
+            memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
+            buf_start = 0;
+        };
 
         {
             char *header_end = strstr(resp_header.data(), "\r\n\r\n");
@@ -579,8 +596,7 @@ void minimp3::stream_mp3_to_iis()
 
                 int tail_free = static_cast<int>(mp3_buffer_size) - (buf_start + bytes_in_buf);
                 if (tail_free < k_compact_threshold && buf_start > 0) {
-                    memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
-                    buf_start = 0;
+                    compact_window();
                     tail_free = static_cast<int>(mp3_buffer_size) - bytes_in_buf;
                 }
 
@@ -704,14 +720,33 @@ void minimp3::stream_mp3_to_iis()
                 if (samples > 0) {
                     // 如果采样率变化了，调用iis_set_rate_func设置新的采样率
                     // 仅接受常见采样率并做防抖，避免伪帧导致播放速率被错误切换。
-                    const bool hz_allowed =
-                        (info.hz == 48000 || info.hz == 44100 || info.hz == 32000 || info.hz == 24000 ||
-                         info.hz == 22050 || info.hz == 16000 || info.hz == 12000 || info.hz == 11025 || info.hz == 8000);
+                    const bool hz_allowed = (info.hz == 48000 || info.hz == 44100 || info.hz == 32000 ||
+                                             info.hz == 24000 || info.hz == 22050 || info.hz == 16000 ||
+                                             info.hz == 12000 || info.hz == 11025 || info.hz == 8000);
                     if (hz_allowed && info.layer == 3) {
-                        if (info.hz == current_hz) {
+                        if (current_hz == 0) {
+                            // 启动阶段快速锁定，避免长时间用默认采样率播放导致整体变速。
+                            if (info.hz != hz_candidate) {
+                                hz_candidate = info.hz;
+                                hz_candidate_count = 1;
+                            } else {
+                                hz_candidate_count++;
+                            }
+                            if (hz_candidate_count >= 2 && iis_set_rate_func) {
+                                iis_set_rate_func(hz_candidate);
+                                current_hz = hz_candidate;
+                                stat_rate_switches++;
+                                osal_printk("采样率初次锁定: %d\n", current_hz);
+                                hz_candidate = 0;
+                                hz_candidate_count = 0;
+                                rate_mismatch_streak = 0;
+                            }
+                        } else if (info.hz == current_hz) {
                             hz_candidate = 0;
                             hz_candidate_count = 0;
+                            rate_mismatch_streak = 0;
                         } else {
+                            rate_mismatch_streak++;
                             if (info.hz != hz_candidate) {
                                 hz_candidate = info.hz;
                                 hz_candidate_count = 1;
@@ -719,12 +754,22 @@ void minimp3::stream_mp3_to_iis()
                                 hz_candidate_count++;
                             }
 
-                            if (hz_candidate_count >= 3 && iis_set_rate_func) {
-                                iis_set_rate_func(hz_candidate);
-                                current_hz = hz_candidate;
-                                osal_printk("采样率切换: %d\n", current_hz);
+                            // 运行中切速必须更保守：持续一致且队列接近空，避免边播边切产生快进/爆点。
+                            const bool queue_safe_to_switch = (queue_level >= 0 && queue_level <= 2);
+                            if (hz_candidate_count >= 24) {
+                                if (queue_safe_to_switch && iis_set_rate_func) {
+                                    int old_hz = current_hz;
+                                    iis_set_rate_func(hz_candidate);
+                                    current_hz = hz_candidate;
+                                    stat_rate_switches++;
+                                    osal_printk("采样率运行切换: %d -> %d (q=%d)\n", old_hz, current_hz,
+                                                queue_level);
+                                } else {
+                                    stat_rate_rejects++;
+                                }
                                 hz_candidate = 0;
                                 hz_candidate_count = 0;
+                                rate_mismatch_streak = 0;
                             }
                         }
                     }
@@ -763,8 +808,7 @@ void minimp3::stream_mp3_to_iis()
                     if (bytes_in_buf == 0) {
                         buf_start = 0;
                     } else if (buf_start > static_cast<int>(mp3_buffer_size / 2)) {
-                        memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
-                        buf_start = 0;
+                        compact_window();
                     }
                 } else if (info.frame_bytes > 0) {
                     // 契约优先：minimp3 的 frame_bytes 就是本轮建议推进量。
@@ -812,19 +856,28 @@ void minimp3::stream_mp3_to_iis()
                     // 关键：只有在头信息有效时，才按minimp3契约推进frame_bytes。
                     if (consume == 0 && !need_more_bytes) {
                         if (header_valid) {
-                            if (info.frame_bytes < bytes_in_buf) {
-                                consume = info.frame_bytes;
-                            } else if (info.frame_bytes == bytes_in_buf) {
-                                // 合法头但窗口刚好卡边界时，优先扩窗，避免吞掉潜在可解码边界数据。
+                            if (samples == 0) {
+                                // 关键收敛：有合法头但未产PCM时优先扩窗，避免误吞一整帧导致时间轴压缩。
                                 if (bytes_in_buf < static_cast<int>(mp3_buffer_size - 128)) {
                                     need_more_bytes = true;
                                 } else {
-                                    consume = (bytes_in_buf > k_min_keep_tail_bytes)
-                                                  ? (bytes_in_buf - k_min_keep_tail_bytes)
-                                                  : bytes_in_buf;
+                                    consume = 1;
                                 }
                             } else {
-                                consume = bytes_in_buf;
+                                if (info.frame_bytes < bytes_in_buf) {
+                                    consume = info.frame_bytes;
+                                } else if (info.frame_bytes == bytes_in_buf) {
+                                    // 合法头但窗口刚好卡边界时，优先扩窗，避免吞掉潜在可解码边界数据。
+                                    if (bytes_in_buf < static_cast<int>(mp3_buffer_size - 128)) {
+                                        need_more_bytes = true;
+                                    } else {
+                                        consume = (bytes_in_buf > k_min_keep_tail_bytes)
+                                                      ? (bytes_in_buf - k_min_keep_tail_bytes)
+                                                      : bytes_in_buf;
+                                    }
+                                } else {
+                                    consume = bytes_in_buf;
+                                }
                             }
                         } else {
                             // 无效头不按frame_bytes推进，先扩窗；仅满窗时最小推进防止死锁。
@@ -867,8 +920,7 @@ void minimp3::stream_mp3_to_iis()
                         bytes_in_buf = 0;
                         buf_start = 0;
                     } else if (buf_start > static_cast<int>(mp3_buffer_size / 2)) {
-                        memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
-                        buf_start = 0;
+                        compact_window();
                     }
 
                     if (need_more_bytes) {
@@ -904,8 +956,7 @@ void minimp3::stream_mp3_to_iis()
                         if (bytes_in_buf == 0) {
                             buf_start = 0;
                         } else if (buf_start > static_cast<int>(mp3_buffer_size / 2)) {
-                            memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
-                            buf_start = 0;
+                            compact_window();
                         }
                         continue;
                     }
@@ -917,8 +968,7 @@ void minimp3::stream_mp3_to_iis()
                         if (bytes_in_buf == 0) {
                             buf_start = 0;
                         } else if (buf_start > static_cast<int>(mp3_buffer_size / 2)) {
-                            memmove(mp3_buffer, mp3_buffer + buf_start, bytes_in_buf);
-                            buf_start = 0;
+                            compact_window();
                         }
                         osal_printk("MP3缓冲满且无法推进，丢弃1字节自恢复\n");
                         no_progress_count = 0;
@@ -945,9 +995,10 @@ void minimp3::stream_mp3_to_iis()
             if (stat_loop_count >= 1000) {
                 osal_printk(
                     "MP3统计(窗口): recv=%dB parsed=%d pcm_frames=%d pcm_samples=%d icy_blocks=%d icy_bytes=%d "
-                    "timeout=%d sync=%d in_buf=%d q_last=%d q_peak=%d\n",
+                    "timeout=%d sync=%d rate_sw=%d rate_rej=%d in_buf=%d q_last=%d q_peak=%d\n",
                     stat_recv_bytes, stat_decode_frames, stat_pcm_frames, stat_pcm_samples, stat_icy_meta_blocks,
-                    stat_icy_meta_bytes, stat_timeouts, stat_sync_realigns, bytes_in_buf, stat_last_queue_level,
+                    stat_icy_meta_bytes, stat_timeouts, stat_sync_realigns, stat_rate_switches, stat_rate_rejects,
+                    bytes_in_buf, stat_last_queue_level,
                     stat_peak_queue_level);
                 if (stat_decode_frames > 0 && stat_pcm_frames == 0 && stat_no_pcm_parsed_frames > 128) {
                     osal_printk("告警: 连续解析到帧头但始终无PCM输出，流很可能不是MP3音频体\n");
@@ -964,6 +1015,8 @@ void minimp3::stream_mp3_to_iis()
                 stat_icy_meta_bytes = 0;
                 stat_timeouts = 0;
                 stat_sync_realigns = 0;
+                stat_rate_switches = 0;
+                stat_rate_rejects = 0;
             }
         }
 

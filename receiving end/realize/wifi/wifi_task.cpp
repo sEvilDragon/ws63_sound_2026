@@ -2,12 +2,12 @@
 
 namespace {
 // 全新闭环：在wifi_task层直接控制解码推进节奏，不再依赖minimp3内部队列背压。
-static constexpr int k_queue_hard_high = 44;
-static constexpr int k_queue_soft_high = 38;
-static constexpr int k_queue_target_low = 10;
+static constexpr int k_queue_hard_high = static_cast<int>(iis::buffer_num) - 6;
+static constexpr int k_queue_soft_high = static_cast<int>(iis::buffer_num) - 10;
+static constexpr int k_queue_target_low = 6;
 static constexpr int k_queue_emergency_low = 2;
 static constexpr int k_wait_slice_ms = 2;
-static constexpr int k_max_wait_loops = 80;
+static constexpr int k_max_wait_loops = 160;
 
 void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
 {
@@ -35,7 +35,6 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
     // 低水位补偿：接近见底时插入少量保持帧，避免连续欠载造成静音缝隙。
     queue_level = static_cast<int>(iis::pending_frames);
     if (queue_level <= k_queue_emergency_low) {
-        iis::fill_buffer_if_needed();
         iis::fill_buffer_if_needed();
     } else if (queue_level <= k_queue_target_low) {
         iis::fill_buffer_if_needed();

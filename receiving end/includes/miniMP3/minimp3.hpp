@@ -48,8 +48,8 @@ private:
     static bool is_url_ready;
 
     // 定义解码相关的成员变量
-    // minimp3流式解码建议尽量提供连续约10帧窗口（约16KB），否则容易假同步与漏解码。
-    static constexpr size_t mp3_buffer_size = 16384;
+    // 固定20KB输入窗口，使用普通数组，避免动态分配带来的内存碎片和抖动。
+    static constexpr size_t mp3_buffer_size = 20 * 1024;
 };
 
 #endif
