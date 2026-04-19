@@ -1,0 +1,3 @@
+set(SOURCES "${SOURCES}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/wifi_tool.cpp"
+    PARENT_SCOPE)

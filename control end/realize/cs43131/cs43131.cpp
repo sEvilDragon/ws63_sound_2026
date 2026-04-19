@@ -7,25 +7,29 @@ cs43131::cs43131()
     cs43131_init();
     osal_msleep(200); // 等待 CS43131 内部稳定
     // 拉高通讯引脚，通知iis可以启动
-    uapi_pin_set_mode(GPIO_12, PIN_MODE_0);
-    uapi_gpio_set_dir(GPIO_12, GPIO_DIRECTION_OUTPUT);
-    uapi_gpio_set_val(GPIO_12, GPIO_LEVEL_HIGH);
+    //     uapi_pin_set_mode(GPIO_14, PIN_MODE_0);
+    //     uapi_gpio_set_dir(GPIO_14, GPIO_DIRECTION_OUTPUT);
+    //     uapi_gpio_set_val(GPIO_14, GPIO_LEVEL_HIGH);
 }
 
 void cs43131::cs43131_init()
 {
     // 设置晶振偏置
-    iic.iic_master_write(const_cast<uint8_t *>(crystal_cmd), sizeof(crystal_cmd), iic_addr);
+    // iic.iic_master_write(const_cast<uint8_t *>(crystal_cmd), sizeof(crystal_cmd), iic_addr);
     // 读取中断状态1
     uint8_t status = 0;
     iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &status, 1,
                         iic_addr);
     // 打开晶振相关中断
-    iic.iic_master_write(const_cast<uint8_t *>(enable_xtal_irq_cmd), sizeof(enable_xtal_irq_cmd), iic_addr);
+    // iic.iic_master_write(const_cast<uint8_t *>(enable_xtal_irq_cmd), sizeof(enable_xtal_irq_cmd), iic_addr);
     // 启动晶振
-    iic.iic_master_write(const_cast<uint8_t *>(start_xtal_cmd), sizeof(start_xtal_cmd), iic_addr);
+    // iic.iic_master_write(const_cast<uint8_t *>(start_xtal_cmd), sizeof(start_xtal_cmd), iic_addr);
     // 开启44100Hz采样率
     iic.iic_master_write(const_cast<uint8_t *>(asp_sample_rate_44k1_cmd), sizeof(asp_sample_rate_44k1_cmd), iic_addr);
+    // 读取一次来判断iic是否写入成功
+    uint8_t nn[] = {0x01, 0x00, 0x0B, 0x00};
+    iic.iic_master_read(nn, sizeof(nn), &status, 1, iic_addr);
+    osal_printk("CS43131 ASP sample rate set status: 0x%02X\n, 应该为0x01", status);
     // 设置16-bit采样位宽
     iic.iic_master_write(const_cast<uint8_t *>(asp_sample_bit_size_16_cmd), sizeof(asp_sample_bit_size_16_cmd),
                          iic_addr);
@@ -73,16 +77,16 @@ void cs43131::cs43131_init()
     iic.iic_master_write(const_cast<uint8_t *>(enable_asp_irq_cmd), sizeof(enable_asp_irq_cmd), iic_addr);
     iic.iic_master_write(const_cast<uint8_t *>(enable_hp_irq_cmd), sizeof(enable_hp_irq_cmd), iic_addr);
     // 轮询 XTAL ready，再切换内部时钟到 XTAL。
-    for (uint8_t retry = 0; retry < 50; ++retry) {
-        iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &status, 1,
-                            iic_addr);
-        if ((status & int_status_1_xtal_ready_mask) != 0) {
-            break;
-        }
-        osal_msleep(1);
-    }
+    // for (uint8_t retry = 0; retry < 50; ++retry) {
+    //     iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &status, 1,
+    //                         iic_addr);
+    //     if ((status & int_status_1_xtal_ready_mask) != 0) {
+    //         break;
+    //     }
+    //     osal_msleep(1);
+    //}
     // 切换时钟源
-    iic.iic_master_write(const_cast<uint8_t *>(switch_mclk_to_xtal_cmd), sizeof(switch_mclk_to_xtal_cmd), iic_addr);
+    // iic.iic_master_write(const_cast<uint8_t *>(switch_mclk_to_xtal_cmd), sizeof(switch_mclk_to_xtal_cmd), iic_addr);
     osal_msleep(1);
     // pop_free 设置，沿用 PDF 推荐值。
     iic.iic_master_write(const_cast<uint8_t *>(pcm_popfree_stage1_cmd), sizeof(pcm_popfree_stage1_cmd), iic_addr);

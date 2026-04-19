@@ -1,0 +1,7 @@
+add_subdirectory_if_exist(sta)
+add_subdirectory_if_exist(softap)
+add_subdirectory_if_exist(wifi_tool)
+add_subdirectory_if_exist(udp)
+add_subdirectory_if_exist(tcp)
+add_subdirectory_if_exist(dlna)
+set(SOURCES "${SOURCES}" PARENT_SCOPE)

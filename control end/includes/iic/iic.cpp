@@ -23,7 +23,10 @@ void iic_master::iic_master_write(uint8_t *data, uint8_t len, uint16_t addr)
     i2c_data_t data_{};
     data_.send_buf = data;
     data_.send_len = len;
-    uapi_i2c_master_write(I2C_BUS_0, addr, &data_);
+    errcode_t err = uapi_i2c_master_write(I2C_BUS_0, addr, &data_);
+    if (err != 0) {
+        osal_printk("I2C write error: %d\n", err);
+    }
 }
 
 void iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *data_res, uint8_t len_res, uint16_t addr)
@@ -34,7 +37,10 @@ void iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *da
     data_.send_len = len_tra;
     data_.receive_buf = data_res;
     data_.receive_len = len_res;
-    uapi_i2c_master_writeread(I2C_BUS_0, addr, &data_);
+    errcode_t err = uapi_i2c_master_writeread(I2C_BUS_0, addr, &data_);
+    if (err != 0) {
+        osal_printk("I2C read error: %d\n", err);
+    }
 }
 
 } // namespace sed_ws63
