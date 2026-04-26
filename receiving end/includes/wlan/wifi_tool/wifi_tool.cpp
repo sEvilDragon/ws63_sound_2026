@@ -287,8 +287,10 @@ errcode_t wifi_tool::strict_atoi(const char *text, auto &answer)
             return 0x04; // 字符串格式错误
         }
         int digit = ch - '0';
+        auto answer_ = answer - 1;
+        auto answer_max = std::numeric_limits<decltype(answer_)>::max();
         result = result * 10 + digit;
-        if (result > static_cast<uint64_t>(std::numeric_limits<decltype(answer)>::max())) {
+        if (result > static_cast<uint64_t>(answer_max)) {
             return 0x05; // 数字超出范围
         }
     }

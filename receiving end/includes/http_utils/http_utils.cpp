@@ -1,15 +1,69 @@
 #include "http_utils.hpp"
+#include "wifi_tool.hpp"
 
-void copy_string_safe(char *dst, size_t dst_size, const char *src)
+using wifi_tool_t = sed_ws63::wifi_tool;
+
+namespace {
+
+bool copy_span_compat(char *dst, size_t dst_size, const char *src, size_t src_len)
 {
     if (dst == nullptr || dst_size == 0) {
-        return;
+        return false;
     }
     if (src == nullptr) {
         dst[0] = '\0';
-        return;
+        return false;
     }
-    snprintf(dst, dst_size, "%s", src);
+    if (src_len == 0) {
+        dst[0] = '\0';
+        return true;
+    }
+
+    size_t copy_len = src_len;
+    if (copy_len >= dst_size) {
+        copy_len = dst_size - 1;
+    }
+
+    return wifi_tool_t::copy_str(dst, dst_size, src, copy_len) == ERRCODE_SUCC;
+}
+
+bool copy_cstr_compat(char *dst, size_t dst_size, const char *src)
+{
+    if (src == nullptr) {
+        if (dst != nullptr && dst_size > 0) {
+            dst[0] = '\0';
+        }
+        return false;
+    }
+
+    return copy_span_compat(dst, dst_size, src, strlen(src));
+}
+
+bool ascii_equals_span_ignore_case(const char *text, size_t text_len, const char *expected)
+{
+    if (text == nullptr || expected == nullptr) {
+        return false;
+    }
+
+    const size_t expected_len = strlen(expected);
+    if (text_len != expected_len) {
+        return false;
+    }
+
+    for (size_t i = 0; i < text_len; ++i) {
+        if (wifi_tool_t::to_lower(text[i]) != wifi_tool_t::to_lower(expected[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+} // namespace
+
+void copy_string_safe(char *dst, size_t dst_size, const char *src)
+{
+    (void)copy_cstr_compat(dst, dst_size, src);
 }
 
 void html_entity_decode_amp(char *text)
@@ -18,17 +72,7 @@ void html_entity_decode_amp(char *text)
         return;
     }
 
-    char *read_p = text;
-    char *write_p = text;
-    while (*read_p != '\0') {
-        if (strncmp(read_p, "&amp;", 5) == 0) {
-            *write_p++ = '&';
-            read_p += 5;
-            continue;
-        }
-        *write_p++ = *read_p++;
-    }
-    *write_p = '\0';
+    (void)wifi_tool_t::decode_xml_basic(text);
 }
 
 void strip_angle_brackets(char *text)
@@ -37,83 +81,38 @@ void strip_angle_brackets(char *text)
         return;
     }
 
-    trim_ascii_whitespace(text);
-    size_t len = strlen(text);
-    if (len >= 2 && text[0] == '<' && text[len - 1] == '>') {
-        memmove(text, text + 1, len - 2);
-        text[len - 2] = '\0';
-    }
+    (void)wifi_tool_t::trim_and_strip(text, '<', '>');
 }
 
 bool parse_http_url(const char *url, simple_http_url &out)
 {
-    if (url == nullptr) {
+    if (url == nullptr || strncmp(url, "http://", 7) != 0) {
         return false;
     }
 
-    const char *p = url;
-    if (strncmp(p, "http://", 7) != 0) {
+    wifi_tool_t::parse_url parsed = {};
+    if (wifi_tool_t::get_url(url, parsed) != ERRCODE_SUCC) {
         return false;
     }
-    p += 7;
 
-    const char *path_start = strchr(p, '/');
-    const char *host_end = (path_start != nullptr) ? path_start : (p + strlen(p));
-    const char *port_sep = nullptr;
-    for (const char *it = p; it < host_end; ++it) {
-        if (*it == ':') {
-            port_sep = it;
-        }
-    }
-
-    size_t host_len = (port_sep != nullptr) ? static_cast<size_t>(port_sep - p) : static_cast<size_t>(host_end - p);
-    if (host_len == 0 || host_len >= out.host.size()) {
+    if (!wifi_tool_t::strcmp_ignore_case(parsed.scheme.data(), "http")) {
         return false;
     }
-    memcpy(out.host.data(), p, host_len);
-    out.host[host_len] = '\0';
 
-    if (port_sep != nullptr) {
-        int port = atoi(port_sep + 1);
-        if (port <= 0 || port > 65535) {
-            return false;
-        }
-        out.port = static_cast<uint16_t>(port);
-    } else {
-        out.port = 80;
+    if (!copy_cstr_compat(out.host.data(), out.host.size(), parsed.host.data())) {
+        return false;
+    }
+    if (!copy_cstr_compat(out.path.data(), out.path.size(), parsed.path.data())) {
+        return false;
     }
 
-    if (path_start != nullptr) {
-        copy_string_safe(out.path.data(), out.path.size(), path_start);
-    } else {
-        copy_string_safe(out.path.data(), out.path.size(), "/");
-    }
-
+    out.port = parsed.port;
     return true;
 }
 
 bool resolve_ipv4_addr(const char *host, in_addr *out_addr)
 {
-    if (host == nullptr || out_addr == nullptr) {
-        return false;
-    }
-
-    // Fast path: dotted-decimal IPv4 literal.
-    if (inet_aton(host, out_addr) != 0) {
-        return true;
-    }
-
-    // Fallback: resolve DNS host name via lwIP netdb API.
-    hostent *entry = lwip_gethostbyname(host);
-    if (entry == nullptr || entry->h_addr_list == nullptr || entry->h_addr_list[0] == nullptr) {
-        return false;
-    }
-    if (entry->h_addrtype != AF_INET || entry->h_length < static_cast<int>(sizeof(in_addr))) {
-        return false;
-    }
-
-    memcpy(out_addr, entry->h_addr_list[0], sizeof(in_addr));
-    return true;
+    return wifi_tool_t::get_ipv4_addr(host, out_addr) == ERRCODE_SUCC;
 }
 
 bool extract_http_header_value(const char *request, const char *key, char *out, size_t out_size)
@@ -122,37 +121,24 @@ bool extract_http_header_value(const char *request, const char *key, char *out, 
         return false;
     }
 
-    const size_t key_len = strlen(key);
     const char *line = request;
     while (*line != '\0') {
-        const char *line_end = strstr(line, "\r\n");
+        const char *line_end = wifi_tool_t::strstr_s(line, "\r\n");
         if (line_end == nullptr) {
             line_end = line + strlen(line);
         }
 
-        size_t i = 0;
-        while (i < key_len && (line + i) < line_end) {
-            char a = static_cast<char>(tolower(static_cast<unsigned char>(line[i])));
-            char b = static_cast<char>(tolower(static_cast<unsigned char>(key[i])));
-            if (a != b) {
-                break;
-            }
-            ++i;
-        }
+        const char *colon_pos = wifi_tool_t::strstr_s(line, ":");
+        if (colon_pos != nullptr && colon_pos < line_end) {
+            const size_t field_len = static_cast<size_t>(colon_pos - line);
+            if (ascii_equals_span_ignore_case(line, field_len, key)) {
+                const char *value = colon_pos + 1;
+                while (value < line_end && (*value == ' ' || *value == '\t')) {
+                    ++value;
+                }
 
-        if (i == key_len && (line + i) < line_end && line[i] == ':') {
-            const char *val = line + i + 1;
-            while (val < line_end && (*val == ' ' || *val == '\t')) {
-                ++val;
+                return copy_span_compat(out, out_size, value, static_cast<size_t>(line_end - value));
             }
-
-            size_t copy_len = static_cast<size_t>(line_end - val);
-            if (copy_len >= out_size) {
-                copy_len = out_size - 1;
-            }
-            memcpy(out, val, copy_len);
-            out[copy_len] = '\0';
-            return true;
         }
 
         if (*line_end == '\0') {
@@ -166,67 +152,17 @@ bool extract_http_header_value(const char *request, const char *key, char *out, 
 
 void trim_ascii_whitespace(char *text)
 {
-    if (text == nullptr || text[0] == '\0') {
-        return;
-    }
-
-    size_t start = 0;
-    size_t end = strlen(text);
-
-    while (start < end && isspace(static_cast<unsigned char>(text[start])) != 0) {
-        ++start;
-    }
-    while (end > start && isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-        --end;
-    }
-
-    if (start > 0) {
-        memmove(text, text + start, end - start);
-    }
-    text[end - start] = '\0';
+    (void)wifi_tool_t::trim(text);
 }
 
 bool ascii_iequals(const char *a, const char *b)
 {
-    if (a == nullptr || b == nullptr) {
-        return false;
-    }
-
-    while (*a != '\0' && *b != '\0') {
-        char ca = static_cast<char>(tolower(static_cast<unsigned char>(*a)));
-        char cb = static_cast<char>(tolower(static_cast<unsigned char>(*b)));
-        if (ca != cb) {
-            return false;
-        }
-        ++a;
-        ++b;
-    }
-
-    return (*a == '\0' && *b == '\0');
+    return wifi_tool_t::strcmp_ignore_case(a, b);
 }
 
 bool ascii_icontains(const char *haystack, const char *needle)
 {
-    if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
-        return false;
-    }
-
-    const size_t needle_len = strlen(needle);
-    for (size_t i = 0; haystack[i] != '\0'; ++i) {
-        size_t j = 0;
-        while (j < needle_len && haystack[i + j] != '\0') {
-            char ch = static_cast<char>(tolower(static_cast<unsigned char>(haystack[i + j])));
-            char cn = static_cast<char>(tolower(static_cast<unsigned char>(needle[j])));
-            if (ch != cn) {
-                break;
-            }
-            ++j;
-        }
-        if (j == needle_len) {
-            return true;
-        }
-    }
-    return false;
+    return wifi_tool_t::is_strstr_ignore_case(haystack, needle);
 }
 
 char *extract_xml_tag_value(const char *buffer, const char *tag, char *out, size_t out_size)
@@ -235,26 +171,16 @@ char *extract_xml_tag_value(const char *buffer, const char *tag, char *out, size
         return nullptr;
     }
 
-    char start_tag[256] = {0};
-    char end_tag[256] = {0};
-    snprintf(start_tag, sizeof(start_tag), "<%s>", tag);
-    snprintf(end_tag, sizeof(end_tag), "</%s>", tag);
-
-    const char *tag_start = strstr(buffer, start_tag);
-    if (tag_start == nullptr) {
+    const wifi_tool_t::span_text value = wifi_tool_t::find_html_tag_value(buffer, tag);
+    if (value.ptr == nullptr) {
         return nullptr;
     }
 
-    tag_start += strlen(start_tag);
-    const char *tag_end = strstr(tag_start, end_tag);
-    if (tag_end == nullptr) {
+    if (value.len == 0 || value.len >= out_size - 1) {
         return nullptr;
     }
 
-    int value_len = tag_end - tag_start;
-    if (value_len > 0 && value_len < (int)out_size - 1) {
-        strncpy(out, tag_start, value_len);
-        out[value_len] = '\0';
+    if (copy_span_compat(out, out_size, value.ptr, value.len)) {
         return out;
     }
 
