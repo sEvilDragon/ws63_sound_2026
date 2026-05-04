@@ -1,0 +1,3 @@
+set(SOURCES "${SOURCES}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tcp.cpp"
+    PARENT_SCOPE)

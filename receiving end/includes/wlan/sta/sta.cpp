@@ -51,7 +51,9 @@ errcode_t sta::sta_connect(const stacredential &cred)
 void sta::sta_disconnect()
 {
     auto_reconnect_ = false;
-    (void)wifi_sta_disable();
+    if (is_connected_) {
+        (void)wifi_sta_disable();
+    }
     is_connected_ = false;
 }
 
@@ -119,7 +121,14 @@ errcode_t sta::do_connect_once(const stacredential &cred)
         return ret;
     }
 
-    // 启动dhcp
+    ret = wifi_sta_connect(&sta_config);
+    if (ret != 0) {
+        return ret;
+    }
+
+    osal_sem_down(&connect_sem_);
+
+    // 连接成功后再启动DHCP
     netif *netif_p = get_netif();
     if (netif_p == nullptr) {
         return 0x01; // 没有找到接口，返回错误码
@@ -188,9 +197,10 @@ errcode_t sta::find_and_build_config(const stacredential &cred, wifi_sta_config_
 
     // 填充连接配置
     uint32_t password_len = strlen(cred.password);
-    bool ok = (memcpy_s(sta_config->ssid, sizeof(sta_config->ssid), cred.ssid, ssid_len) == 0) &&
-              (memcpy_s(sta_config->bssid, sizeof(sta_config->bssid), results[found_index].bssid, 6) == 0) &&
-              (memcpy_s(sta_config->pre_shared_key, sizeof(sta_config->pre_shared_key), cred.password, password_len) == 0);
+    bool ok =
+        (memcpy_s(sta_config->ssid, sizeof(sta_config->ssid), cred.ssid, ssid_len) == 0) &&
+        (memcpy_s(sta_config->bssid, sizeof(sta_config->bssid), results[found_index].bssid, 6) == 0) &&
+        (memcpy_s(sta_config->pre_shared_key, sizeof(sta_config->pre_shared_key), cred.password, password_len) == 0);
 
     if (!ok) {
         osal_kfree(results);
@@ -198,22 +208,21 @@ errcode_t sta::find_and_build_config(const stacredential &cred, wifi_sta_config_
     }
 
     sta_config->security_type = results[found_index].security_type;
-    sta_config->ip_type = DHCP; 
+    sta_config->ip_type = DHCP;
 
     osal_kfree(results);
     return ERRCODE_SUCC;
 }
 
-void sta::wifi_connection_changed_callback(int32_t state,
-                                                 const wifi_linked_info_stru *scan_result,
-                                                 int32_t reason_code)
+void sta::wifi_connection_changed_callback(int32_t state, const wifi_linked_info_stru *scan_result, int32_t reason_code)
 {
     if (instance == nullptr) {
         return; // 没有实例，无法处理回调
     }
-    if (state == 1){
+    if (state == 1) {
+        instance->is_connected_ = true;
         osal_sem_up(&instance->connect_sem_); // 连接成功，释放连接完成信号量
-    }else{
+    } else {
         instance->is_connected_ = false; // 连接断开，更新连接状态
     }
 }

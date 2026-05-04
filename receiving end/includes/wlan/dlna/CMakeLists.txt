@@ -1,0 +1,8 @@
+add_subdirectory_if_exist(dlna_types)
+add_subdirectory_if_exist(event)
+add_subdirectory_if_exist(playback_bridge)
+add_subdirectory_if_exist(renderer)
+add_subdirectory_if_exist(soap)
+add_subdirectory_if_exist(ssdp)
+add_subdirectory_if_exist(xml)
+set(SOURCES "${SOURCES}" PARENT_SCOPE)

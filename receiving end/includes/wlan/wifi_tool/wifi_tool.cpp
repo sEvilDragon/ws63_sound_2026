@@ -196,9 +196,16 @@ const wifi_tool::span_text wifi_tool::find_http_header_value(const char *text, c
         // 查找冒号分隔符
         const char *colon_pos = strstr_s(line_start, ":");
         if (colon_pos != nullptr && colon_pos < line_end) {
-            // 提取键和值
-            size_t key_len = colon_pos - line_start;
-            if (key_len == strlen(key) && strcmp_ignore_case(line_start, key)) {
+            // 这里只比较冒号前的头字段名，不能把整行 "Key: value" 直接拿去做全串比较。
+            size_t key_len = static_cast<size_t>(colon_pos - line_start);
+            size_t expected_len = strlen(key);
+            bool matched = (key_len == expected_len);
+            for (size_t index = 0; matched && index < key_len; ++index) {
+                if (to_lower(line_start[index]) != to_lower(key[index])) {
+                    matched = false;
+                }
+            }
+            if (matched) {
                 // 找到匹配的键，提取值
                 const char *value_start = colon_pos + 1;
                 while (*value_start == ' ' || *value_start == '\t') {

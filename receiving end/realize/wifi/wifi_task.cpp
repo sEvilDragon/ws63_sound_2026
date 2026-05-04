@@ -8,6 +8,43 @@ static constexpr int k_queue_target_low = 6;
 static constexpr int k_queue_emergency_low = 2;
 static constexpr int k_wait_slice_ms = 2;
 static constexpr int k_max_wait_loops = 160;
+static bool g_minimp3_uri_ready = false;
+static sed_ws63::playback_bridge g_dlna_bridge;
+static sed_ws63::renderer g_dlna_renderer(g_dlna_bridge);
+
+errcode_t dlna_set_uri_adapter(const char *uri, const char *metadata)
+{
+    unused(metadata);
+    if (uri == nullptr || uri[0] == '\0') {
+        return ERRCODE_FAIL;
+    }
+
+    minimp3::prepare_url(uri);
+    g_minimp3_uri_ready = true;
+    return ERRCODE_SUCC;
+}
+
+errcode_t dlna_play_adapter()
+{
+    if (!g_minimp3_uri_ready) {
+        return ERRCODE_FAIL;
+    }
+
+    minimp3::play_url(nullptr);
+    return ERRCODE_SUCC;
+}
+
+errcode_t dlna_pause_adapter()
+{
+    minimp3::stop_playback();
+    return ERRCODE_SUCC;
+}
+
+errcode_t dlna_stop_adapter()
+{
+    minimp3::stop_playback();
+    return ERRCODE_SUCC;
+}
 
 void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
 {
@@ -46,31 +83,30 @@ void *wifi_task(void *arg)
 {
     unused(arg);
 
-    wifi wifi_;
-    dlan dlan_;
-    // 注册dlan的回调函数
-    dlan_.register_media_set_uri_handler(minimp3::prepare_url);
-    dlan_.register_media_play_handler([](const char *uri) -> bool {
-        if (uri == nullptr || uri[0] == '\0') {
-            return false;
-        }
-        minimp3::play_url(uri);
-        return true;
-    });
-    dlan_.register_media_pause_handler(minimp3::stop_playback);
-    dlan_.register_media_stop_handler(minimp3::stop_playback);
+    sed_ws63::sta sta_;
+    while (wifi_is_wifi_inited() == 0) {
+        osal_printk("fail");
+        osal_msleep(100);
+    }
 
-    osal_printk("wifi任务启动，等待网络就绪后启动dlan\n");
-    while (true) {
-        if (wifi_.is_ready) {
-            dlan_.is_ready_set(true);
-            osal_printk("wifi已就绪，启动dlan扫描\n");
-            break;
-        }
+    sta_.enable_auto_reconnect();
+
+    sed_ws63::softapconfig ap_config;
+    sed_ws63::softap_provisioner provisioner;
+
+    while (provisioner.run(sta_, ap_config) != ERRCODE_SUCC) {
+        osal_printk("[App] 配网失败，1秒后重试...\n");
         osal_msleep(1000);
     }
 
-    dlan_.ssdp_and_http_scan();
+    g_dlna_bridge.set_uri_handler_set(dlna_set_uri_adapter);
+    g_dlna_bridge.play_handler_set(dlna_play_adapter);
+    g_dlna_bridge.pause_handler_set(dlna_pause_adapter);
+    g_dlna_bridge.stop_handler_set(dlna_stop_adapter);
+
+    osal_printk("wifi任务启动，启动新的dlna renderer\n");
+
+    g_dlna_renderer.run();
     return NULL;
 }
 

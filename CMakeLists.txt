@@ -7,12 +7,12 @@ set(SOURCES
 )
 
 if(DEFINED CONFIG_MAIN_RECEIVING_END)
-    set(PUBLIC_HEADER
+    set(PRIVATE_HEADER
         "${CMAKE_CURRENT_SOURCE_DIR}/receiving end/includes"
     )
     add_subdirectory("receiving end" receiving_end)
 elseif(DEFINED CONFIG_MAIN_CONTROL_END)
-    set(PUBLIC_HEADER
+    set(PRIVATE_HEADER
         "${CMAKE_CURRENT_SOURCE_DIR}/control end/includes"
     )
     add_subdirectory("control end" control_end)

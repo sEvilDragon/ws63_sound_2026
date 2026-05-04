@@ -1,4 +1,8 @@
 set(PUBLIC_HEADER "${PUBLIC_HEADER}"
+    "${CMAKE_SOURCE_DIR}/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/compat/linux/include"
+    "${CMAKE_SOURCE_DIR}/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/compat/cmsis"
+    "${CMAKE_SOURCE_DIR}/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/compat/nuttx/include"
+
     "${CMAKE_CURRENT_SOURCE_DIR}/includes"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/led_test"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/sle"
@@ -20,9 +24,6 @@ set(PUBLIC_HEADER "${PUBLIC_HEADER}"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/wlan/wifi_types"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/wlan/sta_softap_provisioner"
 
-    "${CMAKE_SOURCE_DIR}/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/compat/linux/include"
-    "${CMAKE_SOURCE_DIR}/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/compat/cmsis"
-    "${CMAKE_SOURCE_DIR}/kernel/liteos/liteos_v208.5.0/Huawei_LiteOS/compat/nuttx/include"
     PARENT_SCOPE
 )
 

@@ -29,7 +29,7 @@ private:
 
     char wifi_ifname[16] = {0}; // WiFi接口名称，后续会通过接口名称获取netif指针进行相关操作
 
-    bool is_connected_ = false; // 连接状态标志，初始值为false，连接成功后设置为true
+    bool is_connected_ = false;  // 连接状态标志，初始值为false，连接成功后设置为true
     bool auto_reconnect_ = true; // 自动重连标志，默认为true，连接断开后会自动尝试重连
 
     static constexpr uint32_t max_scan_num = 64;
@@ -87,7 +87,7 @@ private:
             0x02: SSID长度不合法
             0x03: 连接错误，具体错误码查看底层定义
             0x04: 内存分配失败
-            0x05: 没有找到对应扫描结果
+                0x05: 没有找到对应扫描结果
             其他错误码查看底层定义
     */
     errcode_t do_connect_once(const stacredential &cred);

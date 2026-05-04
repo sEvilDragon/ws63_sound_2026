@@ -20,7 +20,7 @@ class softapconfig {
 public:
     // SED : 这里的SSID和密码在后续应该添加不易失读写存储的功能，允许用户修改并保存配置
     char ssid[33] = "ws63_softap";      // SSID
-    char password[65] = "202604";  // 密码
+    char password[65] = "20260502";  // 密码
     static constexpr char ifname[17] = "ap0";    // 接口，通常为ap0
 
     static constexpr uint8_t ip[4] = {192, 168, 43, 1};        // SoftAP的IP地址
@@ -32,7 +32,7 @@ public:
     static constexpr int32_t psk_type = 0;    // PSK类型，设置为0表示默认类型
 
     static constexpr uint32_t beacon_interval = 100; // 信标间隔，单位为毫秒
-    static constexpr uint32_t dtim_period = 1;      // DTIM周期
+    static constexpr uint32_t dtim_period = 2;      // DTIM周期
     static constexpr uint32_t gi = 0;              // GI（Guard Interval）类型，设置为0表示默认关闭
     static constexpr protocol_mode_enum protocol_mode =
         WIFI_MODE_11B_G_N_AX; // softap协议

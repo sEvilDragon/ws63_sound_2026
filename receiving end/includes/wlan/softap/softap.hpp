@@ -47,10 +47,7 @@ public:
         功能：检查SoftAP是否已启动（就是返回is_started的值）
         返回值：true表示已启动，false表示未启动
     */
-    bool is_enabled() const
-    {
-        return is_started;
-    }
+    bool is_enabled() const;
 
 private:
 };
