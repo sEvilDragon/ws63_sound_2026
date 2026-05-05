@@ -31,20 +31,27 @@ public:
 
 private:
     // 初始化引脚
-    static void pin_init();
-    static void i2s_dma_init_1();
-    static void i2s_init();
-    static void i2s_dma_init_2();
-    static void sem_mutex_init();
-    static void dma_lli_init();
+    void pin_init();
+    void i2s_dma_init_1();
+    void i2s_init();
+    void i2s_dma_init_2();
+    void sem_mutex_init();
+    void dma_lli_init();
     static void i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg);
 
 public:
-    static std::array<void *, 60> raw_buffers;    // 用于 kfree
-    static std::array<int16_t *, 60> dma_buffers; // 用于实际读写
-    static constexpr uint32_t buffer_size = 960;  // 传输数据大小
-    static constexpr uint32_t buffer_num = 40;    // 传输缓冲区数量
-    static constexpr uint16_t cache_size = 32;    // Cache Line大小
+    static std::array<void *, 100> raw_buffers;    // 用于 kfree
+    static std::array<int16_t *, 100> dma_buffers; // 用于实际读写
+    static constexpr uint32_t buffer_size = 960;   // 传输数据大小
+    static constexpr uint32_t buffer_num = 60;     // 传输缓冲区数量
+    static constexpr uint16_t cache_size = 32;     // Cache Line大小
+
+    // 定义缓冲区
+    static constexpr int prebuffer_num = buffer_num * 0.6;      // 低水位恢复门限，避免长时间停播等待
+    static constexpr int min_buffer_num = buffer_num * 0.05;    // 仅在几乎耗尽时才停播，降低启停抖动
+    static constexpr uint8_t if_small_num = buffer_num * 0.25;  // 补帧/删除帧数量
+    static constexpr uint8_t if_fill_num = 5;                   // 补帧预设值
+    static constexpr uint8_t if_reduce_num = buffer_num * 0.85; // 删除帧预设值
 
     // 定义互斥锁相关的一些变量
     static volatile int write_idx;      // 当前写入缓冲区索引
@@ -84,12 +91,6 @@ private:
     // 定义dma lli 相关的一些变量
     static uint8_t dma_channel; // DMA通道号，实际值由系统分配
 
-    // 定义缓冲区
-    static constexpr int prebuffer_num = 6;       // 低水位恢复门限，避免长时间停播等待
-    static constexpr int min_buffer_num = 1;      // 仅在几乎耗尽时才停播，降低启停抖动
-    static constexpr uint8_t if_small_num = 5;    // 补帧/删除帧数量
-    static constexpr uint8_t if_fill_num = 5;     // 补帧预设值
-    static constexpr uint8_t if_reduce_num = 42; // 删除帧预设值
     // 记录最后的左右帧
     static int16_t last_left_sample;
     static int16_t last_right_sample;
