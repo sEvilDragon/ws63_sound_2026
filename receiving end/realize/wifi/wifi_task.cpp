@@ -191,18 +191,9 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
 }
 } // namespace
 
-void *wifi_task(void *arg)
+void ap_provisioning(sed_ws63::sta &sta_)
 {
-    unused(arg);
-
-    sed_ws63::sta sta_;
-    while (wifi_is_wifi_inited() == 0) {
-        osal_printk("fail");
-        osal_msleep(100);
-    }
-
-    sta_.enable_auto_reconnect();
-
+    // 下面是典型配网流程
     sed_ws63::softapconfig ap_config;
     sed_ws63::softap_provisioner provisioner;
 
@@ -210,7 +201,10 @@ void *wifi_task(void *arg)
         osal_printk("[App] 配网失败，1秒后重试...\n");
         osal_msleep(1000);
     }
+}
 
+void dlna(sed_ws63::sta &sta_)
+{
     dlan dlan_;
     // 注册dlan的回调函数
     dlan_.register_media_set_uri_handler(minimp3::prepare_url);
@@ -235,6 +229,29 @@ void *wifi_task(void *arg)
     }
 
     dlan_.ssdp_and_http_scan();
+}
+
+void *wifi_task(void *arg)
+{
+    unused(arg);
+
+    sed_ws63::sta sta_;
+    while (wifi_is_wifi_inited() == 0) {
+        osal_printk("fail");
+        osal_msleep(100);
+    }
+
+    sta_.enable_auto_reconnect();
+
+    sed_ws63::stacredential cred;
+    memset(&cred, 0, sizeof(cred));
+    snprintf(cred.ssid, sizeof(cred.ssid), "%s", "OPPO Find X8 972E");
+    snprintf(cred.password, sizeof(cred.password), "%s", "mytc4386");
+
+    sta_.sta_connect(cred);
+
+    dlna(sta_);
+
     return NULL;
 }
 

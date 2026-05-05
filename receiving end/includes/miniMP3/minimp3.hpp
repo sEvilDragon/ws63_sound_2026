@@ -49,7 +49,9 @@ private:
 
     // 定义解码相关的成员变量
     // 固定20KB输入窗口，使用普通数组，避免动态分配带来的内存碎片和抖动。
-    static constexpr size_t mp3_buffer_size = 20 * 1024;
+    static constexpr size_t k_mp3_buffer_chunk_size = 1024;
+    static constexpr size_t k_mp3_buffer_chunk_count = 20;
+    static constexpr size_t mp3_buffer_size = k_mp3_buffer_chunk_size * k_mp3_buffer_chunk_count;
 };
 
 #endif

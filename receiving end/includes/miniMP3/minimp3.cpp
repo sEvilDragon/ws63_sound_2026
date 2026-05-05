@@ -1,7 +1,415 @@
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3.hpp"
 
+#include "systick.h"
+#include "trng.h"
+
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/entropy.h"
+#include "mbedtls/net_sockets.h"
+#include "mbedtls/ssl.h"
+
 namespace {
+enum class stream_url_scheme : uint8_t { http, https };
+
+struct stream_url_desc {
+    std::array<char, 128> host = {0};
+    std::array<char, 512> path = {0};
+    uint16_t port = 80;
+    stream_url_scheme scheme = stream_url_scheme::http;
+};
+
+struct stream_transport {
+    bool use_tls = false;
+    bool tls_inited = false;
+    int32_t plain_sock = -1;
+    mbedtls_net_context tls_net;
+    mbedtls_ssl_context tls_ssl;
+    mbedtls_ssl_config tls_conf;
+    mbedtls_ctr_drbg_context tls_ctr_drbg;
+    mbedtls_entropy_context tls_entropy;
+};
+
+static constexpr int k_stream_retry_later = -2;
+static constexpr uint32_t k_tls_initial_read_timeout_ms = 10;
+static constexpr uint32_t k_tls_handshake_timeout_ms = 4000;
+static constexpr uint32_t k_http_header_timeout_ms = 5000;
+static constexpr size_t k_tls_entropy_min_hardclock = 4;
+
+uint64_t stream_now_ms()
+{
+    return uapi_systick_get_ms();
+}
+
+uint64_t stream_elapsed_ms(uint64_t start_ms)
+{
+    const uint64_t now_ms = stream_now_ms();
+    if (now_ms >= start_ms) {
+        return now_ms - start_ms;
+    }
+    return (UINT64_MAX - start_ms) + now_ms + 1;
+}
+
+int tls_entropy_source_callback(void *context, unsigned char *output, size_t len, size_t *out_len)
+{
+    (void)context;
+
+    if (output == nullptr || out_len == nullptr || len == 0 || len > UINT32_MAX) {
+        return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+    }
+
+    if (uapi_drv_cipher_trng_get_random_bytes(output, static_cast<uint32_t>(len)) != ERRCODE_SUCC) {
+        *out_len = 0;
+        return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
+    }
+
+    *out_len = len;
+    return 0;
+}
+
+bool seed_tls_random(stream_transport &transport)
+{
+    int ret = mbedtls_entropy_add_source(&transport.tls_entropy, tls_entropy_source_callback, nullptr,
+                                         k_tls_entropy_min_hardclock, MBEDTLS_ENTROPY_SOURCE_STRONG);
+    if (ret != 0) {
+        osal_printk("HTTPS熵源注册失败: ret=-0x%04X\n", -ret);
+        return false;
+    }
+
+    static const char *k_tls_personalization = "ws63-minimp3";
+    ret = mbedtls_ctr_drbg_seed(&transport.tls_ctr_drbg, mbedtls_entropy_func, &transport.tls_entropy,
+                                reinterpret_cast<const unsigned char *>(k_tls_personalization),
+                                strlen(k_tls_personalization));
+    if (ret != 0) {
+        osal_printk("HTTPS随机数初始化失败: ret=-0x%04X\n", -ret);
+        return false;
+    }
+
+    mbedtls_ctr_drbg_set_prediction_resistance(&transport.tls_ctr_drbg, MBEDTLS_CTR_DRBG_PR_OFF);
+    return true;
+}
+
+char ascii_to_lower_local(char value)
+{
+    if (value >= 'A' && value <= 'Z') {
+        return static_cast<char>(value - 'A' + 'a');
+    }
+    return value;
+}
+
+bool starts_with_ascii_ignore_case_local(const char *text, const char *prefix)
+{
+    if (text == nullptr || prefix == nullptr) {
+        return false;
+    }
+
+    for (size_t index = 0; prefix[index] != '\0'; ++index) {
+        if (text[index] == '\0') {
+            return false;
+        }
+        if (ascii_to_lower_local(text[index]) != ascii_to_lower_local(prefix[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool copy_text_range(char *dst, size_t dst_size, const char *begin, const char *end)
+{
+    if (dst == nullptr || dst_size == 0 || begin == nullptr || end == nullptr || end < begin) {
+        return false;
+    }
+
+    const size_t text_len = static_cast<size_t>(end - begin);
+    if (text_len == 0 || text_len >= dst_size) {
+        return false;
+    }
+
+    memcpy(dst, begin, text_len);
+    dst[text_len] = '\0';
+    return true;
+}
+
+bool parse_stream_url(const char *url, stream_url_desc &out)
+{
+    if (url == nullptr || url[0] == '\0') {
+        return false;
+    }
+
+    if (starts_with_ascii_ignore_case_local(url, "http://")) {
+        simple_http_url parsed = {};
+        if (!parse_http_url(url, parsed)) {
+            return false;
+        }
+        copy_string_safe(out.host.data(), out.host.size(), parsed.host.data());
+        copy_string_safe(out.path.data(), out.path.size(), parsed.path.data());
+        out.port = parsed.port;
+        out.scheme = stream_url_scheme::http;
+        return true;
+    }
+
+    if (!starts_with_ascii_ignore_case_local(url, "https://")) {
+        return false;
+    }
+
+    const char *authority = url + 8;
+    const char *authority_end = authority;
+    while (*authority_end != '\0' && *authority_end != '/' && *authority_end != '?' && *authority_end != '#') {
+        ++authority_end;
+    }
+
+    const char *port_sep = nullptr;
+    for (const char *cursor = authority; cursor < authority_end; ++cursor) {
+        if (*cursor == ':') {
+            port_sep = cursor;
+        }
+    }
+
+    const char *host_end = (port_sep != nullptr) ? port_sep : authority_end;
+    if (!copy_text_range(out.host.data(), out.host.size(), authority, host_end)) {
+        return false;
+    }
+
+    if (port_sep != nullptr) {
+        unsigned long parsed_port = 0;
+        for (const char *cursor = port_sep + 1; cursor < authority_end; ++cursor) {
+            if (*cursor < '0' || *cursor > '9') {
+                return false;
+            }
+            parsed_port = parsed_port * 10UL + static_cast<unsigned long>(*cursor - '0');
+            if (parsed_port > 65535UL) {
+                return false;
+            }
+        }
+        if (parsed_port == 0) {
+            return false;
+        }
+        out.port = static_cast<uint16_t>(parsed_port);
+    } else {
+        out.port = 443;
+    }
+
+    if (*authority_end == '\0') {
+        copy_string_safe(out.path.data(), out.path.size(), "/");
+    } else if (!copy_text_range(out.path.data(), out.path.size(), authority_end, url + strlen(url))) {
+        return false;
+    }
+
+    out.scheme = stream_url_scheme::https;
+    return true;
+}
+
+void free_stream_transport(stream_transport &transport)
+{
+    if (transport.tls_inited) {
+        (void)mbedtls_ssl_close_notify(&transport.tls_ssl);
+        mbedtls_ssl_free(&transport.tls_ssl);
+        mbedtls_ssl_config_free(&transport.tls_conf);
+        mbedtls_ctr_drbg_free(&transport.tls_ctr_drbg);
+        mbedtls_entropy_free(&transport.tls_entropy);
+        mbedtls_net_free(&transport.tls_net);
+        transport.tls_inited = false;
+    }
+
+    if (transport.plain_sock >= 0) {
+        lwip_close(transport.plain_sock);
+        transport.plain_sock = -1;
+    }
+
+    transport.use_tls = false;
+}
+
+bool open_plain_stream_transport(stream_transport &transport, const stream_url_desc &url)
+{
+    transport.use_tls = false;
+    transport.plain_sock = lwip_socket(AF_INET, SOCK_STREAM, 0);
+    if (transport.plain_sock < 0) {
+        osal_printk("创建socket失败\n");
+        return false;
+    }
+
+    timeval timeout = {5, 0};
+    lwip_setsockopt(transport.plain_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    lwip_setsockopt(transport.plain_sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = lwip_htons(url.port);
+    if (!resolve_ipv4_addr(url.host.data(), &addr.sin_addr)) {
+        osal_printk("无法解析主机地址: %s\n", url.host.data());
+        return false;
+    }
+
+    if (lwip_connect(transport.plain_sock, (sockaddr *)&addr, sizeof(addr)) < 0) {
+        osal_printk("连接服务器失败: %s\n", url.host.data());
+        return false;
+    }
+
+    return true;
+}
+
+bool open_tls_stream_transport(stream_transport &transport, const stream_url_desc &url)
+{
+    transport.use_tls = true;
+    mbedtls_net_init(&transport.tls_net);
+    mbedtls_ssl_init(&transport.tls_ssl);
+    mbedtls_ssl_config_init(&transport.tls_conf);
+    mbedtls_ctr_drbg_init(&transport.tls_ctr_drbg);
+    mbedtls_entropy_init(&transport.tls_entropy);
+    transport.tls_inited = true;
+
+    if (!seed_tls_random(transport)) {
+        return false;
+    }
+
+    int ret = mbedtls_ssl_config_defaults(&transport.tls_conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
+                                          MBEDTLS_SSL_PRESET_DEFAULT);
+    if (ret != 0) {
+        osal_printk("HTTPS配置失败: ret=-0x%04X\n", -ret);
+        return false;
+    }
+
+    mbedtls_ssl_conf_authmode(&transport.tls_conf, MBEDTLS_SSL_VERIFY_NONE);
+    mbedtls_ssl_conf_rng(&transport.tls_conf, mbedtls_ctr_drbg_random, &transport.tls_ctr_drbg);
+    mbedtls_ssl_conf_min_version(&transport.tls_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+    mbedtls_ssl_conf_max_version(&transport.tls_conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+    mbedtls_ssl_conf_read_timeout(&transport.tls_conf, k_tls_initial_read_timeout_ms);
+
+    ret = mbedtls_ssl_setup(&transport.tls_ssl, &transport.tls_conf);
+    if (ret != 0) {
+        osal_printk("HTTPS SSL setup失败: ret=-0x%04X\n", -ret);
+        return false;
+    }
+
+    ret = mbedtls_ssl_set_hostname(&transport.tls_ssl, url.host.data());
+    if (ret != 0) {
+        osal_printk("HTTPS设置SNI失败: host=%s ret=-0x%04X\n", url.host.data(), -ret);
+        return false;
+    }
+
+    std::array<char, 8> port_text = {0};
+    snprintf(port_text.data(), port_text.size(), "%u", static_cast<unsigned int>(url.port));
+    ret = mbedtls_net_connect(&transport.tls_net, url.host.data(), port_text.data(), MBEDTLS_NET_PROTO_TCP);
+    if (ret != 0) {
+        osal_printk("HTTPS连接服务器失败: host=%s ret=-0x%04X\n", url.host.data(), -ret);
+        return false;
+    }
+
+    timeval send_timeout = {5, 0};
+    lwip_setsockopt(transport.tls_net.fd, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout));
+    mbedtls_ssl_set_bio(&transport.tls_ssl, &transport.tls_net, mbedtls_net_send, nullptr, mbedtls_net_recv_timeout);
+
+    const uint64_t handshake_start_ms = stream_now_ms();
+    do {
+        ret = mbedtls_ssl_handshake(&transport.tls_ssl);
+        if (ret == 0) {
+            osal_printk("HTTPS握手成功: host=%s\n", url.host.data());
+            return true;
+        }
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret != MBEDTLS_ERR_SSL_TIMEOUT) {
+            break;
+        }
+    } while (stream_elapsed_ms(handshake_start_ms) < k_tls_handshake_timeout_ms);
+
+    osal_printk("HTTPS握手失败: host=%s ret=-0x%04X elapsed=%llu ms\n", url.host.data(), -ret,
+                static_cast<unsigned long long>(stream_elapsed_ms(handshake_start_ms)));
+    return false;
+}
+
+bool open_stream_transport(stream_transport &transport, const stream_url_desc &url)
+{
+    free_stream_transport(transport);
+    if (url.scheme == stream_url_scheme::https) {
+        if (open_tls_stream_transport(transport, url)) {
+            return true;
+        }
+        free_stream_transport(transport);
+        return false;
+    }
+    if (open_plain_stream_transport(transport, url)) {
+        return true;
+    }
+    free_stream_transport(transport);
+    return false;
+}
+
+void set_stream_transport_read_timeout(stream_transport &transport, uint32_t timeout_ms)
+{
+    if (transport.use_tls && transport.tls_inited) {
+        mbedtls_ssl_conf_read_timeout(&transport.tls_conf, timeout_ms);
+        return;
+    }
+
+    if (transport.plain_sock >= 0) {
+        timeval timeout = {static_cast<long>(timeout_ms / 1000U), static_cast<long>((timeout_ms % 1000U) * 1000U)};
+        lwip_setsockopt(transport.plain_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    }
+}
+
+int stream_send_all(stream_transport &transport, const uint8_t *data, int len)
+{
+    if (data == nullptr || len <= 0) {
+        return -1;
+    }
+
+    if (!transport.use_tls) {
+        return lwip_send(transport.plain_sock, data, len, 0);
+    }
+
+    int total_written = 0;
+    while (total_written < len) {
+        int ret = mbedtls_ssl_write(&transport.tls_ssl, data + total_written, static_cast<size_t>(len - total_written));
+        if (ret > 0) {
+            total_written += ret;
+            continue;
+        }
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_TIMEOUT) {
+            osal_msleep(1);
+            continue;
+        }
+        osal_printk("HTTPS发送失败: ret=-0x%04X\n", -ret);
+        return -1;
+    }
+
+    return total_written;
+}
+
+int stream_recv_some(stream_transport &transport, uint8_t *data, int len, bool *timed_out)
+{
+    if (timed_out != nullptr) {
+        *timed_out = false;
+    }
+
+    if (!transport.use_tls) {
+        int ret = lwip_recv(transport.plain_sock, data, len, 0);
+        if (ret < 0 && timed_out != nullptr) {
+            const int socket_errno = errno;
+            if (socket_errno == EWOULDBLOCK || socket_errno == EAGAIN) {
+                *timed_out = true;
+            }
+        }
+        return ret;
+    }
+
+    int ret = mbedtls_ssl_read(&transport.tls_ssl, data, static_cast<size_t>(len));
+    if (ret > 0) {
+        return ret;
+    }
+    if (ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+        return 0;
+    }
+    if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        return k_stream_retry_later;
+    }
+    if (timed_out != nullptr && ret == MBEDTLS_ERR_SSL_TIMEOUT) {
+        *timed_out = true;
+        return -1;
+    }
+
+    osal_printk("HTTPS接收失败: ret=-0x%04X\n", -ret);
+    return -1;
+}
+
 bool has_known_non_mp3_signature(const uint8_t *data, int len)
 {
     if (data == nullptr || len < 4) {
@@ -220,6 +628,179 @@ int find_mp3_sync_offset(const uint8_t *data, int len)
     }
     return -1;
 }
+
+// ============================================================
+// HTTP Chunked 传输解码器
+// 状态机处理 "size\r\n data\r\n ... 0\r\n\r\n" 格式
+// 参考 RFC 7230 §4.1；仅解析流式场景所需的子集。
+// ============================================================
+struct chunked_decoder {
+    // 解码状态
+    enum class st : uint8_t {
+        rd_size,  // 读取 chunk 大小的十六进制字符串
+        skip_ext, // 跳过 chunk-extension（分号后直到\r）
+        rd_lf,    // 等待 \n（size 行的 CRLF 的第二字节）
+        rd_data,  // 读取 chunk 体数据
+        data_cr,  // 等待 chunk 数据后的 \r
+        data_lf,  // 等待 chunk 数据后的 \n
+        trailer,  // 读取 trailing headers（0-chunk 后）
+        done,     // 最终 0-chunk + CRLF 已消费
+        err       // 解析错误
+    };
+
+    st state = st::rd_size;
+    int32_t chunk_remaining = 0;
+    std::array<char, 20> hex_buf = {0};
+    int hex_len = 0;
+    // trailer 状态下需要跳过 \r\n 结尾的空行
+    bool trailer_prev_cr = false;
+
+    void reset()
+    {
+        state = st::rd_size;
+        chunk_remaining = 0;
+        hex_buf[0] = '\0';
+        hex_len = 0;
+        trailer_prev_cr = false;
+    }
+
+    bool is_finished() const
+    {
+        return state == st::done;
+    }
+    bool has_error() const
+    {
+        return state == st::err;
+    }
+
+    // 向解码器喂入原始接收字节，将解码后的音频体写入 out[0..out_cap)。
+    // 返回写入 out 的字节数（>=0）；-1 表示解析错误；通过 is_done 报告最终 0-chunk。
+    int feed(const uint8_t *in, int in_len, uint8_t *out, int out_cap, bool &is_done)
+    {
+        is_done = false;
+        if (in == nullptr || in_len <= 0 || out == nullptr || out_cap <= 0) {
+            return 0;
+        }
+        int out_pos = 0;
+        for (int i = 0; i < in_len; ++i) {
+            if (state == st::done) {
+                is_done = true;
+                break;
+            }
+            if (state == st::err) {
+                return -1;
+            }
+            const uint8_t b = in[i];
+            switch (state) {
+                case st::rd_size:
+                    if (b == '\r') {
+                        hex_buf[hex_len] = '\0';
+                        state = st::rd_lf;
+                    } else if (b == ';') {
+                        hex_buf[hex_len] = '\0';
+                        state = st::skip_ext;
+                    } else if ((b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')) {
+                        if (hex_len < static_cast<int>(hex_buf.size()) - 1) {
+                            hex_buf[hex_len++] = static_cast<char>(b);
+                        } else {
+                            osal_printk("chunked: chunk-size 字段过长\n");
+                            state = st::err;
+                            return -1;
+                        }
+                    } else {
+                        osal_printk("chunked: chunk-size 含非法字符 0x%02X\n", b);
+                        state = st::err;
+                        return -1;
+                    }
+                    break;
+
+                case st::skip_ext:
+                    if (b == '\r') {
+                        state = st::rd_lf;
+                    }
+                    break;
+
+                case st::rd_lf:
+                    if (b != '\n') {
+                        osal_printk("chunked: 期望 '\\n'，得到 0x%02X\n", b);
+                        state = st::err;
+                        return -1;
+                    }
+                    {
+                        // 解析十六进制 chunk 大小（允许 hex_len==0 只在 rd_size 阶段被 \r 触发时）
+                        if (hex_len == 0) {
+                            osal_printk("chunked: 空 chunk-size 字段\n");
+                            state = st::err;
+                            return -1;
+                        }
+                        char *end_ptr = nullptr;
+                        unsigned long sz = strtoul(hex_buf.data(), &end_ptr, 16);
+                        hex_buf[0] = '\0';
+                        hex_len = 0;
+                        chunk_remaining = static_cast<int32_t>(sz);
+                        if (chunk_remaining == 0) {
+                            // 最终 0-chunk，进入 trailer 消费阶段
+                            state = st::trailer;
+                            trailer_prev_cr = false;
+                        } else {
+                            state = st::rd_data;
+                        }
+                    }
+                    break;
+
+                case st::rd_data:
+                    if (out_pos < out_cap) {
+                        out[out_pos++] = b;
+                    }
+                    if (--chunk_remaining == 0) {
+                        state = st::data_cr;
+                    }
+                    break;
+
+                case st::data_cr:
+                    if (b != '\r') {
+                        osal_printk("chunked: chunk 尾部期望 '\\r'，得到 0x%02X\n", b);
+                        state = st::err;
+                        return -1;
+                    }
+                    state = st::data_lf;
+                    break;
+
+                case st::data_lf:
+                    if (b != '\n') {
+                        osal_printk("chunked: chunk 尾部期望 '\\n'，得到 0x%02X\n", b);
+                        state = st::err;
+                        return -1;
+                    }
+                    // 准备读取下一个 chunk
+                    state = st::rd_size;
+                    break;
+
+                case st::trailer:
+                    // 消费 trailer headers，等待空行 (\r\n) 表示结束
+                    if (b == '\r') {
+                        trailer_prev_cr = true;
+                    } else if (b == '\n' && trailer_prev_cr) {
+                        // 遇到 \r\n，已是空行（简化：第一个 \r\n 即终止）
+                        state = st::done;
+                        is_done = true;
+                        trailer_prev_cr = false;
+                    } else {
+                        trailer_prev_cr = false;
+                    }
+                    break;
+
+                case st::done:
+                    is_done = true;
+                    break;
+                case st::err:
+                    return -1;
+            }
+        }
+        return out_pos;
+    }
+};
+
 } // namespace
 
 // 初始化静态成员变量
@@ -320,11 +901,9 @@ void minimp3::stream_mp3_to_iis()
     // 网络播放任务
     mp3dec_t mp3d;
     mp3dec_frame_info_t info;
-    static constexpr size_t k_mp3_buffer_chunk_size = 1024;
-    static constexpr size_t k_mp3_buffer_chunk_count = 20;
-    static_assert(k_mp3_buffer_chunk_size * k_mp3_buffer_chunk_count == mp3_buffer_size,
-                  "mp3_buffer_size must equal 20 x 1KB");
+
     static std::array<std::array<uint8_t, k_mp3_buffer_chunk_size>, k_mp3_buffer_chunk_count> mp3_buffer_chunks = {0};
+    static stream_transport transport = {};
     uint8_t *mp3_buffer = mp3_buffer_chunks[0].data();
 
     int16_t *pcm_buffer = (int16_t *)osal_kmalloc(MINIMP3_MAX_SAMPLES_PER_FRAME * sizeof(int16_t),
@@ -334,6 +913,15 @@ void minimp3::stream_mp3_to_iis()
         return;
     }
 
+    // HTTP 重定向跳转支持：跨外层循环迭代保存重定向目标 URL 和跳转计数。
+    static constexpr int k_max_redirect_hops = 3;
+    static std::array<char, 512> s_redirect_url = {0};
+    static int s_redirect_hops = 0;
+    // chunked 解码器：跨帧保持状态（每次建立新连接时必须 reset）。
+    static chunked_decoder s_chunked = {};
+    // chunked 解码输出缓冲（2048 与内层 recv_temp 相同尺寸，解码后体积只会更小）。
+    static std::array<uint8_t, 2048> s_chunked_out = {0};
+
     // 开启任务循环
     while (true) {
         // 未处于播放态时等待
@@ -342,13 +930,24 @@ void minimp3::stream_mp3_to_iis()
             continue;
         }
 
-        // 接管一次新的URL请求
-        if (is_url_ready) {
+        // 判断本次连接 URL 来源：
+        //   - 有外部 URL 更新（is_url_ready）→ 重置重定向计数，从 current_url 取。
+        //   - 有待跳转的重定向 URL → 直接使用，不重置 current_url。
+        std::array<char, 512> working_url = {0};
+        const bool has_redirect = (s_redirect_hops > 0 && s_redirect_url[0] != '\0');
+        if (has_redirect) {
+            copy_string_safe(working_url.data(), working_url.size(), s_redirect_url.data());
+            s_redirect_url[0] = '\0';
+        } else {
+            // 外部 URL 更新时重置重定向状态
+            if (is_url_ready) {
+                s_redirect_hops = 0;
+                s_redirect_url[0] = '\0';
+            }
             is_url_ready = false;
+            copy_string_safe(working_url.data(), working_url.size(), current_url.data());
         }
 
-        std::array<char, 512> working_url = {0};
-        copy_string_safe(working_url.data(), working_url.size(), current_url.data());
         if (working_url[0] == '\0') {
             osal_msleep(100);
             continue;
@@ -362,40 +961,14 @@ void minimp3::stream_mp3_to_iis()
         int bytes_in_buf = 0;
         mp3dec_init(&mp3d);
 
-        simple_http_url parsed_url;
-        if (!parse_http_url(working_url.data(), parsed_url)) {
+        stream_url_desc parsed_url = {};
+        if (!parse_stream_url(working_url.data(), parsed_url)) {
             osal_printk("URL解析失败: %s\n", working_url.data());
             osal_msleep(300);
             continue;
         }
 
-        // 创建socket连接到服务器
-        int32_t sock = lwip_socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0) {
-            osal_printk("创建socket失败\n");
-            osal_msleep(500);
-            continue;
-        }
-
-        // 给首包和响应头更充足时间，避免网络抖动下误判失败。
-        timeval timeout = {5, 0};
-        lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        lwip_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-        // 配置服务器地址
-        sockaddr_in addr = {0};
-        addr.sin_family = AF_INET;
-        addr.sin_port = lwip_htons(parsed_url.port);
-        if (!resolve_ipv4_addr(parsed_url.host.data(), &addr.sin_addr)) {
-            osal_printk("无法解析主机地址: %s\n", parsed_url.host.data());
-            lwip_close(sock);
-            osal_msleep(300);
-            continue;
-        }
-
-        if (lwip_connect(sock, (sockaddr *)&addr, sizeof(addr)) < 0) {
-            osal_printk("连接服务器失败: %s\n", parsed_url.host.data());
-            lwip_close(sock);
+        if (!open_stream_transport(transport, parsed_url)) {
             osal_msleep(300);
             continue;
         }
@@ -410,9 +983,10 @@ void minimp3::stream_mp3_to_iis()
                  "Icy-MetaData: 0\r\n\r\n",
                  parsed_url.path.data(), parsed_url.host.data());
 
-        if (lwip_send(sock, request.data(), strlen(request.data()), 0) <= 0) {
+        if (stream_send_all(transport, reinterpret_cast<const uint8_t *>(request.data()),
+                            static_cast<int>(strlen(request.data()))) <= 0) {
             osal_printk("发送HTTP请求失败\n");
-            lwip_close(sock);
+            free_stream_transport(transport);
             osal_msleep(200);
             continue;
         }
@@ -421,6 +995,7 @@ void minimp3::stream_mp3_to_iis()
         std::array<char, 1024> resp_header = {0};
         int32_t header_len = 0;
         bool header_ended = false;
+        const uint64_t header_start_ms = stream_now_ms();
 
         while (is_playing && !header_ended && header_len < (resp_header.size() - 1)) {
             int32_t want = static_cast<int32_t>(resp_header.size() - 1 - header_len);
@@ -428,7 +1003,21 @@ void minimp3::stream_mp3_to_iis()
                 want = 64;
             }
 
-            int32_t ret = lwip_recv(sock, resp_header.data() + header_len, want, 0);
+            bool recv_timed_out = false;
+            int32_t ret = stream_recv_some(transport, reinterpret_cast<uint8_t *>(resp_header.data() + header_len),
+                                           want, &recv_timed_out);
+            if (ret == k_stream_retry_later) {
+                osal_msleep(5);
+                continue;
+            }
+            if (ret < 0 && recv_timed_out) {
+                if (stream_elapsed_ms(header_start_ms) < k_http_header_timeout_ms) {
+                    osal_msleep(5);
+                    continue;
+                }
+                osal_printk("接收HTTP响应头超时\n");
+                break;
+            }
             if (ret <= 0) {
                 osal_printk("接收HTTP响应头失败\n");
                 break;
@@ -442,7 +1031,7 @@ void minimp3::stream_mp3_to_iis()
             }
         }
         if (!header_ended) {
-            lwip_close(sock);
+            free_stream_transport(transport);
             osal_msleep(500);
             continue;
         }
@@ -456,6 +1045,43 @@ void minimp3::stream_mp3_to_iis()
                 *status_end = saved;
             }
         }
+        int http_status_code = parse_http_status_code_from_header(resp_header.data());
+        if (http_status_code != 200) {
+            std::array<char, 512> redirect_location = {0};
+            const bool has_location = extract_http_header_value(resp_header.data(), "Location",
+                                                                redirect_location.data(), redirect_location.size());
+            if (has_location) {
+                trim_ascii_whitespace(redirect_location.data());
+            }
+
+            // 支持 301/302/303/307/308 重定向，最多跳转 k_max_redirect_hops 次。
+            const bool is_redirect = (http_status_code == 301 || http_status_code == 302 || http_status_code == 303 ||
+                                      http_status_code == 307 || http_status_code == 308);
+            if (is_redirect && has_location && redirect_location[0] != '\0' && s_redirect_hops < k_max_redirect_hops) {
+                osal_printk("HTTP %d 重定向 (跳转 %d/%d): %s\n", http_status_code, s_redirect_hops + 1,
+                            k_max_redirect_hops, redirect_location.data());
+                copy_string_safe(s_redirect_url.data(), s_redirect_url.size(), redirect_location.data());
+                s_redirect_hops++;
+                free_stream_transport(transport);
+                continue; // 外层循环将使用 s_redirect_url 重连
+            }
+
+            if (has_location) {
+                osal_printk("HTTP状态码=%d, Location=%s（重定向跳转已耗尽或不支持）\n", http_status_code,
+                            redirect_location.data());
+            } else {
+                osal_printk("HTTP状态码=%d，非200且无重定向\n", http_status_code);
+            }
+            // 重定向失败或非重定向错误时重置计数，避免污染下一首歌
+            s_redirect_hops = 0;
+            s_redirect_url[0] = '\0';
+            free_stream_transport(transport);
+            osal_msleep(500);
+            continue;
+        }
+        // 成功拿到 200，重置重定向状态
+        s_redirect_hops = 0;
+        s_redirect_url[0] = '\0';
         std::array<char, 128> content_type = {0};
         std::array<char, 64> content_encoding = {0};
         std::array<char, 64> transfer_encoding = {0};
@@ -494,7 +1120,7 @@ void minimp3::stream_mp3_to_iis()
             if (ascii_icontains(content_encoding.data(), "gzip") ||
                 ascii_icontains(content_encoding.data(), "deflate") || ascii_icontains(content_encoding.data(), "br")) {
                 osal_printk("检测到压缩内容编码，当前版本不支持，停止本次播放\n");
-                lwip_close(sock);
+                free_stream_transport(transport);
                 is_playing = false;
                 continue;
             }
@@ -509,17 +1135,15 @@ void minimp3::stream_mp3_to_iis()
             }
         }
 
-        // 当前接收逻辑仅支持连续字节流，不支持chunked分块体。
+        // 当前接收逻辑支持 chunked 分块传输（HTTPS CDN 常用）——使用静态 chunked_decoder。
+        // 每次新连接时必须重置状态机，避免上一次解析残留污染本次流。
         if (is_chunked_transfer) {
-            osal_printk("检测到chunked传输，当前版本不支持，停止本次播放\n");
-            lwip_close(sock);
-            is_playing = false;
-            continue;
+            s_chunked.reset();
+            osal_printk("检测到 chunked 传输，已启用分块解码器\n");
         }
 
         // 平衡超时与阻塞：避免timeout风暴，同时不过度拉长可闻空白。
-        timeval stream_timeout = {0, 180000};
-        lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &stream_timeout, sizeof(stream_timeout));
+        set_stream_transport_read_timeout(transport, 180);
 
         int no_progress_count = 0;
         int recv_fail_count = 0;
@@ -589,6 +1213,16 @@ void minimp3::stream_mp3_to_iis()
             // 使用滑动窗口，避免每帧都对整段数据 memmove。
             // 当缓冲区内的字节不足最小解码帧长（这里假设为最少需要2000字节触发优先解码）时，强制接收
             if (bytes_in_buf < static_cast<int>(mp3_buffer_size)) {
+                // chunked 流已正常结束时，循环排空缓冲后退出，避免接收到无效后续字节。
+                if (is_chunked_transfer && s_chunked.is_finished()) {
+                    if (bytes_in_buf > 0) {
+                        goto decode_stage; // 继续解码剩余缓冲
+                    } else {
+                        osal_printk("chunked 缓冲已完全解码，关闭连接\n");
+                        break; // 退出 inner while(is_playing)，触发重连逻辑
+                    }
+                }
+
                 // 本地缓冲足够时优先解码，避免被阻塞式 recv 打断造成可闻卡顿。
                 if (bytes_in_buf >= k_recv_block_avoid_threshold) {
                     goto decode_stage;
@@ -609,7 +1243,17 @@ void minimp3::stream_mp3_to_iis()
                     if (recv_want > k_recv_chunk_bytes) {
                         recv_want = k_recv_chunk_bytes;
                     }
-                    ret = lwip_recv(sock, recv_temp.data(), recv_want, 0);
+                    bool recv_timed_out = false;
+                    ret = stream_recv_some(transport, recv_temp.data(), recv_want, &recv_timed_out);
+                    if (ret == k_stream_retry_later) {
+                        if (bytes_in_buf == 0) {
+                            osal_msleep(10);
+                        }
+                        goto decode_stage;
+                    }
+                    if (ret < 0 && recv_timed_out) {
+                        errno = EWOULDBLOCK;
+                    }
                 }
 
                 if (!recv_called) {
@@ -652,41 +1296,69 @@ void minimp3::stream_mp3_to_iis()
                     osal_printk("服务器关闭了连接\n");
                     break;
                 } else {
-                    int appended = 0;
-                    if (icy_metaint > 0) {
-                        for (int i = 0; i < ret; ++i) {
-                            uint8_t b = recv_temp[i];
+                    // ── Chunked 解码层（HTTPS CDN 常用 chunked 编码）─────────────────
+                    // 若是 chunked 传输，先用状态机剥离 chunk framing，
+                    // 再把纯音频体送入 ICY 过滤或直接复制路径。
+                    const uint8_t *body_src = recv_temp.data();
+                    int body_len = ret;
+                    bool chunk_stream_ended = false;
 
-                            if (icy_metadata_remaining > 0) {
-                                icy_metadata_remaining--;
-                                stat_icy_meta_bytes++;
-                                continue;
-                            }
-
-                            if (icy_audio_remaining == 0) {
-                                icy_metadata_remaining = static_cast<int>(b) * 16;
-                                if (icy_metadata_remaining > 0) {
-                                    stat_icy_meta_blocks++;
-                                }
-                                icy_audio_remaining = icy_metaint;
-                                continue;
-                            }
-
-                            if (bytes_in_buf + appended < static_cast<int>(mp3_buffer_size)) {
-                                mp3_buffer[buf_start + bytes_in_buf + appended] = b;
-                                appended++;
-                            }
-                            icy_audio_remaining--;
+                    if (is_chunked_transfer && !s_chunked.is_finished()) {
+                        bool chunk_done = false;
+                        int decoded = s_chunked.feed(recv_temp.data(), ret, s_chunked_out.data(),
+                                                     static_cast<int>(s_chunked_out.size()), chunk_done);
+                        if (decoded < 0) {
+                            osal_printk("chunked 解码错误，关闭连接\n");
+                            free_stream_transport(transport);
+                            break;
                         }
-                    } else {
-                        appended = ret;
-                        memcpy(mp3_buffer + buf_start + bytes_in_buf, recv_temp.data(), appended);
+                        body_src = s_chunked_out.data();
+                        body_len = decoded;
+                        chunk_stream_ended = chunk_done;
+                    }
+
+                    int appended = 0;
+                    if (body_len > 0) {
+                        if (icy_metaint > 0) {
+                            for (int i = 0; i < body_len; ++i) {
+                                uint8_t b = body_src[i];
+
+                                if (icy_metadata_remaining > 0) {
+                                    icy_metadata_remaining--;
+                                    stat_icy_meta_bytes++;
+                                    continue;
+                                }
+
+                                if (icy_audio_remaining == 0) {
+                                    icy_metadata_remaining = static_cast<int>(b) * 16;
+                                    if (icy_metadata_remaining > 0) {
+                                        stat_icy_meta_blocks++;
+                                    }
+                                    icy_audio_remaining = icy_metaint;
+                                    continue;
+                                }
+
+                                if (bytes_in_buf + appended < static_cast<int>(mp3_buffer_size)) {
+                                    mp3_buffer[buf_start + bytes_in_buf + appended] = b;
+                                    appended++;
+                                }
+                                icy_audio_remaining--;
+                            }
+                        } else {
+                            appended = body_len;
+                            memcpy(mp3_buffer + buf_start + bytes_in_buf, body_src, appended);
+                        }
                     }
 
                     bytes_in_buf += appended;
                     stat_recv_bytes += ret;
                     recv_fail_count = 0;
                     recv_timeout_count = 0;
+
+                    if (chunk_stream_ended) {
+                        osal_printk("chunked 流已结束（最终 0-chunk），跳转解码剩余缓冲\n");
+                        goto decode_stage;
+                    }
                 }
             }
 
@@ -762,8 +1434,7 @@ void minimp3::stream_mp3_to_iis()
                                     iis_set_rate_func(hz_candidate);
                                     current_hz = hz_candidate;
                                     stat_rate_switches++;
-                                    osal_printk("采样率运行切换: %d -> %d (q=%d)\n", old_hz, current_hz,
-                                                queue_level);
+                                    osal_printk("采样率运行切换: %d -> %d (q=%d)\n", old_hz, current_hz, queue_level);
                                 } else {
                                     stat_rate_rejects++;
                                 }
@@ -998,8 +1669,7 @@ void minimp3::stream_mp3_to_iis()
                     "timeout=%d sync=%d rate_sw=%d rate_rej=%d in_buf=%d q_last=%d q_peak=%d\n",
                     stat_recv_bytes, stat_decode_frames, stat_pcm_frames, stat_pcm_samples, stat_icy_meta_blocks,
                     stat_icy_meta_bytes, stat_timeouts, stat_sync_realigns, stat_rate_switches, stat_rate_rejects,
-                    bytes_in_buf, stat_last_queue_level,
-                    stat_peak_queue_level);
+                    bytes_in_buf, stat_last_queue_level, stat_peak_queue_level);
                 if (stat_decode_frames > 0 && stat_pcm_frames == 0 && stat_no_pcm_parsed_frames > 128) {
                     osal_printk("告警: 连续解析到帧头但始终无PCM输出，流很可能不是MP3音频体\n");
                 }
@@ -1020,7 +1690,7 @@ void minimp3::stream_mp3_to_iis()
             }
         }
 
-        lwip_close(sock);
+        free_stream_transport(transport);
 
         if (!is_playing) {
             continue;

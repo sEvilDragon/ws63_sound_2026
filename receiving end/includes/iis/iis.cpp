@@ -22,6 +22,18 @@ iis::iis()
     dma_lli_init();
 }
 
+iis::~iis()
+{
+    // 释放分配的DMA缓冲区
+    for (int i = 0; i < buffer_num; i++) {
+        if (raw_buffers[i] != nullptr) {
+            osal_kfree(raw_buffers[i]);
+            raw_buffers[i] = nullptr;
+            dma_buffers[i] = nullptr;
+        }
+    }
+}
+
 void iis::pin_init()
 {
     // 配置引脚功能

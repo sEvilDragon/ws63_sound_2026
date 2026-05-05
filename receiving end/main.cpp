@@ -18,7 +18,7 @@ void app_entry(void)
     taskid = osal_kthread_create((osal_kthread_handler)wifi_task, NULL, "wifi_task", 8192);
     (void)taskid; /* 创建后无需持有句柄，显式丢弃以消除 unused-but-set-variable 警告 */
 
-    taskid = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", 8192 * 9);
+    taskid = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", 8192 * 4);
     (void)taskid;
 
     osal_kthread_unlock();

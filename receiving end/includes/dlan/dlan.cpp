@@ -328,6 +328,14 @@ bool is_transport_playing_state(const char *state)
     return ascii_iequals(state, "PLAYING") || ascii_iequals(state, "TRANSITIONING");
 }
 
+bool soap_action_has(const char *soap_action, const char *action_name)
+{
+    if (soap_action == nullptr || action_name == nullptr) {
+        return false;
+    }
+    return ascii_icontains(soap_action, action_name);
+}
+
 void format_hms(uint32_t total_seconds, char *out, size_t out_size)
 {
     if (out == nullptr || out_size == 0) {
@@ -951,7 +959,11 @@ void dlan::http_process()
             "    <action><name>Play</name></action>\r\n"
             "    <action><name>Pause</name></action>\r\n"
             "    <action><name>Stop</name></action>\r\n"
+            "    <action><name>GetMediaInfo</name></action>\r\n"
+            "    <action><name>GetDeviceCapabilities</name></action>\r\n"
             "    <action><name>GetTransportInfo</name></action>\r\n"
+            "    <action><name>GetTransportSettings</name></action>\r\n"
+            "    <action><name>GetCurrentTransportActions</name></action>\r\n"
             "    <action><name>GetPositionInfo</name></action>\r\n"
             "  </actionList>\r\n"
             "</scpd>";
@@ -1058,7 +1070,7 @@ void dlan::http_process()
 
             // ========== AVTransport 服务的 SOAP 动作处理 ==========
             if (is_avtransport) {
-                if (strstr(soap_action_value.data(), "#SetAVTransportURI") != nullptr) {
+                if (soap_action_has(soap_action_value.data(), "SetAVTransportURI")) {
                     // SED : 串口输出
                     osal_printk("http收到SetAVTransportURI命令\n");
                     static std::array<char, 512> media_url = {
@@ -1098,7 +1110,20 @@ void dlan::http_process()
                     update_transport_state("STOPPED", true);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_value.data(), "#Play") != nullptr) {
+                } else if (soap_action_has(soap_action_value.data(), "SetNextAVTransportURI")) {
+                    osal_printk("http收到 SetNextAVTransportURI 命令，按空操作兼容处理\n");
+                    static const char *set_next_uri_response_body =
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:SetNextAVTransportURIResponse "
+                        "xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    send_http_soap_response(client_sock, set_next_uri_response_body);
+                    lwip_close(client_sock);
+                    return;
+                } else if (soap_action_has(soap_action_value.data(), "Play")) {
                     // SED : 串口输出
                     osal_printk("http收到play相关命令\n");
                     // 回复一个固定的成功响应
@@ -1128,7 +1153,7 @@ void dlan::http_process()
 
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_value.data(), "#Pause") != nullptr) {
+                } else if (soap_action_has(soap_action_value.data(), "Pause")) {
                     // SED : 串口输出
                     osal_printk("http收到pause相关命令\n");
                     static const char *pause_response_body =
@@ -1145,7 +1170,7 @@ void dlan::http_process()
                     update_transport_state("PAUSED_PLAYBACK", true);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_value.data(), "#Stop") != nullptr) {
+                } else if (soap_action_has(soap_action_value.data(), "Stop")) {
                     // SED : 串口输出
                     osal_printk("http收到stop相关命令\n");
                     static const char *stop_response_body =
@@ -1162,7 +1187,51 @@ void dlan::http_process()
                     update_transport_state("STOPPED", true);
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_value.data(), "#GetTransportInfo") != nullptr) {
+                } else if (soap_action_has(soap_action_value.data(), "GetMediaInfo")) {
+                    osal_printk("http收到 GetMediaInfo 命令\n");
+                    static std::array<char, 1024> escaped_uri = {0};
+                    xml_escape_basic(g_current_uri.data(), escaped_uri.data(), escaped_uri.size());
+
+                    const bool has_uri = g_current_uri[0] != '\0';
+                    static std::array<char, 1536> media_info_body = {0};
+                    snprintf(media_info_body.data(), media_info_body.size(),
+                             "<?xml version=\"1.0\"?>"
+                             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                             "<s:Body>"
+                             "<u:GetMediaInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                             "<NrTracks>%u</NrTracks>"
+                             "<MediaDuration>00:00:00</MediaDuration>"
+                             "<CurrentURI>%s</CurrentURI>"
+                             "<CurrentURIMetaData></CurrentURIMetaData>"
+                             "<NextURI></NextURI>"
+                             "<NextURIMetaData></NextURIMetaData>"
+                             "<PlayMedium>NETWORK</PlayMedium>"
+                             "<RecordMedium>NOT_IMPLEMENTED</RecordMedium>"
+                             "<WriteStatus>NOT_IMPLEMENTED</WriteStatus>"
+                             "</u:GetMediaInfoResponse>"
+                             "</s:Body>"
+                             "</s:Envelope>",
+                             has_uri ? 1U : 0U, has_uri ? escaped_uri.data() : "");
+                    send_http_soap_response(client_sock, media_info_body.data());
+                    lwip_close(client_sock);
+                    return;
+                } else if (soap_action_has(soap_action_value.data(), "GetDeviceCapabilities")) {
+                    osal_printk("http收到 GetDeviceCapabilities 命令\n");
+                    static const char *device_capabilities_body =
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetDeviceCapabilitiesResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                        "<PlayMedia>NETWORK</PlayMedia>"
+                        "<RecMedia>NOT_IMPLEMENTED</RecMedia>"
+                        "<RecQualityModes>NOT_IMPLEMENTED</RecQualityModes>"
+                        "</u:GetDeviceCapabilitiesResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    send_http_soap_response(client_sock, device_capabilities_body);
+                    lwip_close(client_sock);
+                    return;
+                } else if (soap_action_has(soap_action_value.data(), "GetTransportInfo")) {
                     // SED : 串口输出
                     osal_printk("http收到 GetTransportInfo 命令\n");
                     // 获取传输状态：PLAYING, PAUSED_PLAYBACK, STOPPED, NO_MEDIA_PRESENT
@@ -1182,7 +1251,50 @@ void dlan::http_process()
                     send_http_soap_response(client_sock, transport_info_body.data());
                     lwip_close(client_sock);
                     return;
-                } else if (strstr(soap_action_value.data(), "#GetPositionInfo") != nullptr) {
+                } else if (soap_action_has(soap_action_value.data(), "GetTransportSettings")) {
+                    osal_printk("http收到 GetTransportSettings 命令\n");
+                    static const char *transport_settings_body =
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:GetTransportSettingsResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                        "<PlayMode>NORMAL</PlayMode>"
+                        "<RecQualityMode>NOT_IMPLEMENTED</RecQualityMode>"
+                        "</u:GetTransportSettingsResponse>"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    send_http_soap_response(client_sock, transport_settings_body);
+                    lwip_close(client_sock);
+                    return;
+                } else if (soap_action_has(soap_action_value.data(), "GetCurrentTransportActions")) {
+                    osal_printk("http收到 GetCurrentTransportActions 命令\n");
+                    const bool has_uri = g_current_uri[0] != '\0';
+                    const char *actions = "";
+                    if (ascii_iequals(dlan::g_transport_state.data(), "PLAYING") ||
+                        ascii_iequals(dlan::g_transport_state.data(), "TRANSITIONING")) {
+                        actions = "Pause,Stop";
+                    } else if (ascii_iequals(dlan::g_transport_state.data(), "PAUSED_PLAYBACK")) {
+                        actions = "Play,Stop";
+                    } else if (has_uri) {
+                        actions = "Play,Stop";
+                    }
+
+                    static std::array<char, 768> current_actions_body = {0};
+                    snprintf(current_actions_body.data(), current_actions_body.size(),
+                             "<?xml version=\"1.0\"?>"
+                             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                             "<s:Body>"
+                             "<u:GetCurrentTransportActionsResponse "
+                             "xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
+                             "<Actions>%s</Actions>"
+                             "</u:GetCurrentTransportActionsResponse>"
+                             "</s:Body>"
+                             "</s:Envelope>",
+                             actions);
+                    send_http_soap_response(client_sock, current_actions_body.data());
+                    lwip_close(client_sock);
+                    return;
+                } else if (soap_action_has(soap_action_value.data(), "GetPositionInfo")) {
                     // SED : 串口输出
                     osal_printk("http收到 GetPositionInfo 命令\n");
                     static std::array<char, 1024> escaped_uri = {0};
@@ -1217,7 +1329,7 @@ void dlan::http_process()
                     return;
                 } else {
                     // AVTransport 中未匹配的动作，返回 501
-                    osal_printk("http收到AVTransport未知动作\n");
+                    osal_printk("http收到AVTransport未知动作: %s\n", soap_action_value.data());
                     static const char *k501 =
                         "HTTP/1.1 501 Not Implemented\r\n"
                         "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
@@ -1308,7 +1420,12 @@ void dlan::http_process()
                         "<s:Body>"
                         "<u:GetProtocolInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:ConnectionManager:1\">"
                         "<Source></Source>"
-                        "<Sink>http-get:*:audio/mpeg:*,http-get:*:audio/mp3:*</Sink>"
+                        "<Sink>"
+                        "http-get:*:audio/mpeg:*,"
+                        "http-get:*:audio/mp3:*,"
+                        "https-get:*:audio/mpeg:*,"
+                        "https-get:*:audio/mp3:*"
+                        "</Sink>"
                         "</u:GetProtocolInfoResponse>"
                         "</s:Body>"
                         "</s:Envelope>";
