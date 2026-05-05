@@ -48,29 +48,38 @@ errcode_t control_router::handle_get(const char *request,
                                      dlna_control_response *out)
 {
     unused(state);
-
+    // SED_LOG: 串口调试打印，用于确认进入了GET请求处理函数，调试完成后应删除。
+    osal_printk("伟大撒啊我的好\n");
     // 根路径和 description.xml 统一落到设备描述文档，便于手机端直接探活。
     if (strstr(request, "GET /description.xml") != nullptr || strstr(request, "HEAD /description.xml") != nullptr ||
         strstr(request, "GET / HTTP/1.1") != nullptr || strstr(request, "GET / HTTP/1.0") != nullptr ||
         strstr(request, "HEAD / HTTP/1.1") != nullptr || strstr(request, "HEAD / HTTP/1.0") != nullptr) {
-        xml::create_description_xml(out->body, sizeof(out->body), local_ip, http_port, udn);
+        errcode_t a = xml::create_description_xml(out->body, sizeof(out->body), local_ip, http_port, udn);
+        // SED_LOG: 串口调试打印，用于确认设备描述文档的生成结果，调试完成后应删除。
+        osal_printk("啊啊啊啊啊啊%d\n", a);
         return ERRCODE_SUCC;
     }
 
     if (strstr(request, "GET /AVTransport.xml") != nullptr || strstr(request, "HEAD /AVTransport.xml") != nullptr) {
         xml::create_avtransport_service_xml(out->body, sizeof(out->body));
+        // SED_LOG: 串口调试打印，用于确认AVTransport服务描述文档的生成结果，调试完成后应删除。
+        osal_printk("11111111111111111111111111111111111111\n");
         return ERRCODE_SUCC;
     }
 
     if (strstr(request, "GET /RenderingControl.xml") != nullptr ||
         strstr(request, "HEAD /RenderingControl.xml") != nullptr) {
         xml::create_renderingcontrol_service_xml(out->body, sizeof(out->body));
+        // SED_LOG: 串口调试打印，用于确认RenderingControl服务描述文档的生成结果，调试完成后应删除。
+        osal_printk("111111111111111111111111111111122222222222\n");
         return ERRCODE_SUCC;
     }
 
     if (strstr(request, "GET /ConnectionManager.xml") != nullptr ||
         strstr(request, "HEAD /ConnectionManager.xml") != nullptr) {
         xml::create_connectionmanager_service_xml(out->body, sizeof(out->body));
+        // SED_LOG: 串口调试打印，用于确认ConnectionManager服务描述文档的生成结果，调试完成后应删除。
+        osal_printk("111111111111111111111111111111122222222222333333333333333333333333333\n");
         return ERRCODE_SUCC;
     }
 
@@ -332,20 +341,31 @@ errcode_t control_router::handle_request(const char *request,
         return 0x01; // 无效的请求
     }
 
+    // SED_LOG: 串口调试打印，用于确认控制路由拿到的原始HTTP请求内容，调试完成后应删除。
+    osal_printk("收到HTTP请求，前64字节：\n%.*s\n", 64, request);
+
     // 每次请求都先拿一份默认响应，再按分支覆盖。
     *out = dlna_control_response{};
 
     // 这里仅做方法级分发，具体业务逻辑下沉到各 handle_xxx_。
     if (strncmp(request, "GET ", 4) == 0 || strncmp(request, "HEAD ", 5) == 0) {
+        // SED_LOG: 串口调试打印，用于确认进入了GET/HEAD请求处理分支，调试完成后应删除。
+        osal_printk("进入GET/HEAD请求处理\n");
         return handle_get(request, local_ip, http_port, udn, state, out);
     }
     if (strncmp(request, "SUBSCRIBE ", 10) == 0) {
+        // SED_LOG: 串口调试打印，用于确认进入了SUBSCRIBE请求处理分支，调试完成后应删除。
+        osal_printk("进入SUBSCRIBE请求处理\n");
         return handle_subscribe(request, subs, out);
     }
     if (strncmp(request, "UNSUBSCRIBE ", 12) == 0) {
+        // SED_LOG: 串口调试打印，用于确认进入了UNSUBSCRIBE请求处理分支，调试完成后应删除。
+        osal_printk("进入UNSUBSCRIBE请求处理\n");
         return handle_unsubscribe(request, subs, out);
     }
     if (strncmp(request, "POST ", 5) == 0) {
+        // SED_LOG: 串口调试打印，用于确认进入了POST请求处理分支，调试完成后应删除。
+        osal_printk("进入POST请求处理\n");
         return handle_post(request, state, subs, bridge, out);
     }
 

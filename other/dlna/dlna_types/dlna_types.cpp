@@ -2,9 +2,9 @@
 
 namespace sed_ws63 {
 
-    const char * dlna_renderer_state::transport_state_text()
-    {
-        switch (state) {
+const char *dlna_renderer_state::transport_state_text() const
+{
+    switch (state) {
         case dlna_transport_state::stopped:
             return "STOPPED";
         case dlna_transport_state::transitioning:
@@ -17,7 +17,7 @@ namespace sed_ws63 {
             return "NO_MEDIA_PRESENT";
         default:
             return "STOPPED";
-        }
     }
-
 }
+
+} // namespace sed_ws63

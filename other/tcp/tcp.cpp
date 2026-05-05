@@ -134,6 +134,10 @@ errcode_t tcp_listener::start_listen(uint16_t port, const char *bind_ip, int bac
         return 0x03; // 监听失败
     }
 
+    // SED_LOG: 串口调试打印，用于确认HTTP监听套接字已成功建立，调试完成后应删除。
+    osal_printk("dlna http listener ready: fd=%d port=%u bind=%s backlog=%d\n", sfd, port,
+                (bind_ip == nullptr) ? "0.0.0.0" : bind_ip, backlog);
+
     return ERRCODE_SUCC; // 成功
 }
 

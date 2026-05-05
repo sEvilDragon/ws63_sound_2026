@@ -61,7 +61,7 @@ public:
     unsigned long long playback_started_jiffies = 0;
 
 public:
-    const char *transport_state_text();
+    const char *transport_state_text() const;
 };
 
 class dlna_control_response {

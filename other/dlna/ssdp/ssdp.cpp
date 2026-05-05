@@ -67,6 +67,9 @@ errcode_t ssdp::open_socket()
         return 0x04; // 加入组播组失败
     }
 
+    // SED_LOG: 串口调试打印，用于确认SSDP监听套接字已成功建立，调试完成后应删除。
+    osal_printk("dlna ssdp socket ready: fd=%d port=%u mcast=%s\n", sfd, ssdp_port, ssdp_multicast_addr);
+
     return ERRCODE_SUCC; // 成功
 }
 
@@ -104,11 +107,11 @@ errcode_t ssdp::process_once(const char *local_ip, uint16_t http_port, const cha
     const wifi_tool::span_text st_span = wifi_tool::trim_and_find_http_header_value(buffer, "ST");
     const wifi_tool::span_text man_span = wifi_tool::trim_and_find_http_header_value(buffer, "MAN");
     const wifi_tool::span_text host_span = wifi_tool::trim_and_find_http_header_value(buffer, "HOST");
-    if (st_span.ptr == nullptr || man_span.ptr == nullptr || host_span.ptr == nullptr) {
-        // SED_LOG: 串口调试打印，用于确认SSDP请求是否缺头，调试完成后应删除。
+    if (st_span.ptr == nullptr || man_span.ptr == nullptr) {
+        // SED_LOG: 串口调试打印，用于确认SSDP请求是否缺少旧版要求的关键头，调试完成后应删除。
         osal_printk("dlna ssdp missing header: st=%d man=%d host=%d\n", st_span.ptr != nullptr, man_span.ptr != nullptr,
                     host_span.ptr != nullptr);
-        return 0x08; // 请求缺少必要的ST、MAN或HOST头部
+        return 0x08; // 请求缺少必要的ST或MAN头部
     }
     ret = wifi_tool::copy_str(st, sizeof(st), st_span.ptr, st_span.len);
     if (ret != ERRCODE_SUCC) {
@@ -118,20 +121,24 @@ errcode_t ssdp::process_once(const char *local_ip, uint16_t http_port, const cha
     if (ret != ERRCODE_SUCC) {
         return 0x0A; // 复制MAN头部值失败
     }
-    ret = wifi_tool::copy_str(host, sizeof(host), host_span.ptr, host_span.len);
-    if (ret != ERRCODE_SUCC) {
-        return 0x0B; // 复制HOST头部值失败
+    if (host_span.ptr != nullptr) {
+        ret = wifi_tool::copy_str(host, sizeof(host), host_span.ptr, host_span.len);
+        if (ret != ERRCODE_SUCC) {
+            return 0x0B; // 复制HOST头部值失败
+        }
     }
     wifi_tool::trim(st);
     wifi_tool::trim(man);
-    wifi_tool::trim(host);
+    if (host[0] != '\0') {
+        wifi_tool::trim(host);
+    }
 
     if (wifi_tool::is_strstr_ignore_case(man, "ssdp:discover") == false) {
         // SED_LOG: 串口调试打印，用于确认MAN过滤原因，调试完成后应删除。
         osal_printk("dlna ssdp ignored: invalid MAN=%s\n", man);
         return 0x0C; // MAN头部值不是"ssdp:discover"，忽略
     }
-    if (host[0] == '\0' || !wifi_tool::strcmp_ignore_case(host, "239.255.255.250:1900")) {
+    if (host[0] != '\0' && !wifi_tool::strcmp_ignore_case(host, "239.255.255.250:1900")) {
         // SED_LOG: 串口调试打印，用于确认HOST过滤原因，调试完成后应删除。
         osal_printk("dlna ssdp ignored: invalid HOST=%s\n", host);
         return 0x0D; // HOST头部值不正确，忽略

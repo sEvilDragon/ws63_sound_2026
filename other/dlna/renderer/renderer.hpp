@@ -1,13 +1,8 @@
 #pragma once
 
-/*
-    sed_ws63: renderer.hpp
-    DLNA渲染器的核心类，负责处理控制点的请求并维护渲染器状态
-*/
-
 extern "C" {
 #include "lwip/netif.h"
-#include "lwip/ip4_addr.h"
+#include "netinet/in.h"
 }
 
 #include "dlna_types/dlna_types.hpp"
@@ -21,6 +16,14 @@ namespace sed_ws63 {
 
 class renderer {
 public:
+    explicit renderer(playback_bridge &bridge);
+    ~renderer();
+
+    renderer(const renderer &) = delete;
+    renderer &operator=(const renderer &) = delete;
+
+    errcode_t run();
+
 private:
     playback_bridge &bridge_;
     ssdp ssdp_;
@@ -34,14 +37,12 @@ private:
     static constexpr uint16_t http_port_ = 49152;
     static constexpr const char *udn_ = "uuid:20260321-1612-2007-0423-a1b2c3d4e5f6";
 
-public:
-    explicit renderer(playback_bridge &bridge);
-    errcode_t run();
-
-private:
     errcode_t wait_valid_ip_(char *out_ip, size_t out_size);
     errcode_t handle_http_client_(int32_t client_fd, const sockaddr_in &peer_addr);
     errcode_t send_initial_notify_if_needed_(const dlna_control_response &resp);
+    errcode_t send_state_notify_if_needed_(const dlna_renderer_state &previous_state,
+                                           const char *request,
+                                           int http_status);
 };
 
 } // namespace sed_ws63
