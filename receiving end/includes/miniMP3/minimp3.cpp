@@ -450,6 +450,87 @@ bool has_known_non_mp3_signature(const uint8_t *data, int len)
     return false;
 }
 
+// 轻量级 MPEG 帧边界定位：仅通过帧头解析计算帧长，验证连续两个同步字。
+// 不创建解码器也不分配 PCM 缓冲，适合在 Range 恢复等栈紧张场景使用。
+// 返回 true 表示找到有效帧边界，*first_frame_offset 为第一个同步字偏移。
+static bool find_mp3_frame_boundary(const uint8_t *data, int len, int *first_frame_offset)
+{
+    if (data == nullptr || len < 8 || first_frame_offset == nullptr) {
+        return false;
+    }
+
+    // MPEG1 采样率表 (idx: 0=44100,1=48000,2=32000,3=reserved)
+    static constexpr uint16_t k_sample_rates_mpeg1[4] = {44100, 48000, 32000, 0};
+    // MPEG2/2.5 采样率表
+    static constexpr uint16_t k_sample_rates_mpeg2[4] = {22050, 24000, 16000, 0};
+    static constexpr uint16_t k_sample_rates_mpeg25[4] = {11025, 12000, 8000, 0};
+    // 比特率表 (idx: 1..14, 0=free/invalid), MPEG1 Layer3
+    static constexpr uint16_t k_bitrates_mpeg1_l3[16] = {0,   32,  40,  48,  56,  64,  80,  96,
+                                                         112, 128, 160, 192, 224, 256, 320, 0};
+
+    const int scan_limit = (len < 4096) ? len : 4096;
+    for (int off = 0; off < scan_limit - 4; ++off) {
+        // 检查 MPEG 同步字: 0xFFE0 (11个1 + 3bit)
+        if (data[off] != 0xFF || (data[off + 1] & 0xE0) != 0xE0) {
+            continue;
+        }
+
+        const uint8_t b2 = data[off + 1];
+        const uint8_t b3 = data[off + 2];
+        const uint8_t ver = (b2 >> 3) & 0x03; // MPEG version
+        const uint8_t lyr = (b2 >> 1) & 0x03; // Layer
+        const uint8_t brx = (b3 >> 4) & 0x0F; // Bitrate index
+        const uint8_t srx = (b3 >> 2) & 0x03; // Sample rate index
+        const uint8_t pad = (b3 >> 1) & 0x01; // Padding bit
+
+        // 仅处理 Layer 3
+        if (lyr != 1) {
+            continue;
+        }
+        // 无效版本/比特率/采样率
+        if (ver == 1 || brx == 0 || brx == 15 || srx == 3) {
+            continue;
+        }
+
+        uint16_t sample_rate = 0;
+        uint16_t bitrate = k_bitrates_mpeg1_l3[brx];
+        if (bitrate == 0) {
+            continue;
+        }
+
+        if (ver == 3) { // MPEG1
+            sample_rate = k_sample_rates_mpeg1[srx];
+        } else if (ver == 2) { // MPEG2
+            sample_rate = k_sample_rates_mpeg2[srx];
+        } else { // MPEG2.5
+            sample_rate = k_sample_rates_mpeg25[srx];
+        }
+        if (sample_rate == 0) {
+            continue;
+        }
+
+        // 计算帧长: MPEG1 Layer3 = 144*bitrate*1000/samplerate + pad
+        //            MPEG2/2.5 Layer3 = 72*bitrate*1000/samplerate + pad
+        // 注意：bitrate 单位是 kbps，需乘 1000 转换为 bps。
+        int frame_size = (ver == 3) ? (144 * (int)bitrate * 1000 / (int)sample_rate + (int)pad)
+                                    : (72 * (int)bitrate * 1000 / (int)sample_rate + (int)pad);
+        if (frame_size < 16 || frame_size > 2880) {
+            continue;
+        }
+
+        // 验证下一个同步字
+        const int next_off = off + frame_size;
+        if (next_off + 2 > len) {
+            continue; // 数据不足以验证，不算找到
+        }
+        if (data[next_off] == 0xFF && (data[next_off + 1] & 0xE0) == 0xE0) {
+            *first_frame_offset = off;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool probe_mp3_frame_from_buffer(const uint8_t *data, int len, int *first_frame_offset)
 {
     if (data == nullptr || len < 64) {
@@ -981,11 +1062,12 @@ void minimp3::resume_playback()
     if (!is_paused) {
         return;
     }
-    // s_range_start_byte 和 s_has_range 由streaming loop在暂停时已设置
+    // s_range_start_byte 和 s_has_range 由 streaming loop 在暂停时已设置。
+    // 注意：不设置 s_interrupt_stream，因为此时 is_playing=false，
+    // 内层循环已退出；如果设置会导致新连接立即被中断。
     is_paused = false;
     is_playing = true;
     is_url_ready = true;
-    s_interrupt_stream = true;
     minimp3::bump_stream_epoch();
 }
 
@@ -1350,7 +1432,7 @@ void minimp3::stream_mp3_to_iis()
         static constexpr int k_max_decode_loops_per_round = 6;
         static constexpr int k_recv_block_avoid_threshold = 4096;
         static constexpr int k_recv_chunk_bytes = 2048;
-        static constexpr int k_max_sync_skip_bytes = 96;
+        static constexpr int k_max_sync_skip_bytes = 2048;
         static constexpr int k_min_keep_tail_bytes = 4;
         static constexpr int k_queue_soft_high = 30;
         static constexpr int k_queue_hard_high = 34;
@@ -1406,6 +1488,10 @@ void minimp3::stream_mp3_to_iis()
                 }
             }
         }
+
+        // 新连接建立后，清除可能由外部操作（pause/seek/resume）遗留的中断标志，
+        // 避免内层循环在收到任何数据前就被立即打断。
+        s_interrupt_stream = false;
 
         while (is_playing && session_epoch == s_stream_epoch) {
             // seek请求：中断当前内层循环，让外层重新连接
@@ -1567,6 +1653,23 @@ void minimp3::stream_mp3_to_iis()
             }
 
         decode_stage:
+            // Range 恢复时，用轻量级帧头验证快速定位第一个真正的 MPEG 帧边界，
+            // 避免从帧中间开始解码导致长时间"无PCM帧"。
+            // 注意：不能用 stat_decode_frames==0 判断，因为首次解码失败就会递增它；
+            // 改用 connection_consumed_bytes==0 确保在真正消耗任何帧数据前完成同步。
+            if (connection_start_offset > 0 && connection_consumed_bytes == 0 && bytes_in_buf >= 4096) {
+                int first_frame_off = 0;
+                if (find_mp3_frame_boundary(mp3_buffer + buf_start, bytes_in_buf, &first_frame_off)) {
+                    if (first_frame_off > 0) {
+                        buf_start += first_frame_off;
+                        bytes_in_buf -= first_frame_off;
+                        connection_consumed_bytes += static_cast<uint64_t>(first_frame_off);
+                        s_bytes_streamed = connection_start_offset + connection_consumed_bytes;
+                        osal_printk("Range恢复同步: 跳过 %d 字节前导数据，定位到首帧边界\n", first_frame_off);
+                    }
+                }
+            }
+
             int queue_level = -1;
             int decode_loops_budget = k_max_decode_loops_per_round;
             if (playback_queue_level_getter_func != nullptr) {
@@ -1772,11 +1875,20 @@ void minimp3::stream_mp3_to_iis()
                         if (header_valid) {
                             if (samples == 0) {
                                 // seek/range 恢复点常落在 reservoir 依赖区间内。
-                                // 这时即使 frame_bytes/hz/layer 合法，也不能按整帧硬推进，
-                                // 否则会连续吞掉真实起播边界并长期无声。
+                                // 这时即使 frame_bytes/hz/layer 合法，解码器因缺少前帧
+                                // reservoir 数据而无法产出 PCM。
                                 if (bytes_in_buf < static_cast<int>(mp3_buffer_size - 128) ||
                                     valid_header_no_pcm_streak < 3) {
                                     need_more_bytes = true;
+                                } else if (connection_start_offset > 0 && info.frame_bytes > 0 &&
+                                           info.frame_bytes <= bytes_in_buf) {
+                                    // Range 恢复：连续多个合法帧头均无 PCM 输出，
+                                    // 直接按帧头指示的 frame_bytes 跳到下一帧预期位置，
+                                    // 比同步字搜索更快更准，快速穿过 reservoir 依赖帧。
+                                    consume = info.frame_bytes;
+                                    stat_sync_realigns++;
+                                    osal_printk("Range恢复: 跳过完整无PCM帧 frame_bytes=%d\n", info.frame_bytes);
+                                    valid_header_no_pcm_streak = 0;
                                 } else {
                                     int sync_off = find_mp3_sync_offset(mp3_buffer + buf_start + 1, bytes_in_buf - 1);
                                     if (sync_off >= 0 && sync_off < k_max_sync_skip_bytes) {

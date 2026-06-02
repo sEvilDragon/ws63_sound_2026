@@ -1,4 +1,5 @@
 #include "dlan.hpp"
+#include "minimp3.hpp"
 dlan::dlan() {}
 
 // 初始化静态成员变量
@@ -1025,6 +1026,7 @@ void dlan::http_process()
             "    <action><name>GetTransportSettings</name></action>\r\n"
             "    <action><name>GetCurrentTransportActions</name></action>\r\n"
             "    <action><name>GetPositionInfo</name></action>\r\n"
+            "    <action><name>Seek</name></action>\r\n"
             "  </actionList>\r\n"
             "</scpd>";
 
@@ -1286,6 +1288,10 @@ void dlan::http_process()
                     xml_escape_basic(g_current_uri.data(), escaped_uri.data(), escaped_uri.size());
 
                     const bool has_uri = g_current_uri[0] != '\0';
+                    uint32_t dur_sec = has_uri ? minimp3::get_duration_seconds() : 0U;
+                    static std::array<char, 16> dur_hms = {0};
+                    format_hms(dur_sec, dur_hms.data(), dur_hms.size());
+
                     static std::array<char, 1536> media_info_body = {0};
                     snprintf(media_info_body.data(), media_info_body.size(),
                              "<?xml version=\"1.0\"?>"
@@ -1293,7 +1299,7 @@ void dlan::http_process()
                              "<s:Body>"
                              "<u:GetMediaInfoResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\">"
                              "<NrTracks>%u</NrTracks>"
-                             "<MediaDuration>00:00:00</MediaDuration>"
+                             "<MediaDuration>%s</MediaDuration>"
                              "<CurrentURI>%s</CurrentURI>"
                              "<CurrentURIMetaData></CurrentURIMetaData>"
                              "<NextURI></NextURI>"
@@ -1304,7 +1310,7 @@ void dlan::http_process()
                              "</u:GetMediaInfoResponse>"
                              "</s:Body>"
                              "</s:Envelope>",
-                             has_uri ? 1U : 0U, has_uri ? escaped_uri.data() : "");
+                             has_uri ? 1U : 0U, dur_hms.data(), has_uri ? escaped_uri.data() : "");
                     send_http_soap_response(client_sock, media_info_body.data());
                     lwip_close(client_sock);
                     return;
@@ -1365,9 +1371,9 @@ void dlan::http_process()
                     const char *actions = "";
                     if (ascii_iequals(dlan::g_transport_state.data(), "PLAYING") ||
                         ascii_iequals(dlan::g_transport_state.data(), "TRANSITIONING")) {
-                        actions = "Pause,Stop";
+                        actions = "Pause,Seek,Stop";
                     } else if (ascii_iequals(dlan::g_transport_state.data(), "PAUSED_PLAYBACK")) {
-                        actions = "Play,Stop";
+                        actions = "Play,Seek,Stop";
                     } else if (has_uri) {
                         actions = "Play,Stop";
                     }
@@ -1395,8 +1401,11 @@ void dlan::http_process()
 
                     const bool has_uri = g_current_uri[0] != '\0';
                     uint32_t elapsed_sec = has_uri ? get_playback_elapsed_seconds() : 0U;
+                    uint32_t dur_sec = has_uri ? minimp3::get_duration_seconds() : 0U;
                     static std::array<char, 16> elapsed_hms = {0};
+                    static std::array<char, 16> dur_hms = {0};
                     format_hms(elapsed_sec, elapsed_hms.data(), elapsed_hms.size());
+                    format_hms(dur_sec, dur_hms.data(), dur_hms.size());
 
                     static std::array<char, 1280> position_info_body = {0};
                     snprintf(position_info_body.data(), position_info_body.size(),
@@ -1415,7 +1424,7 @@ void dlan::http_process()
                              "</u:GetPositionInfoResponse>"
                              "</s:Body>"
                              "</s:Envelope>",
-                             has_uri ? 1U : 0U, "00:00:00", has_uri ? escaped_uri.data() : "", elapsed_hms.data(),
+                             has_uri ? 1U : 0U, dur_hms.data(), has_uri ? escaped_uri.data() : "", elapsed_hms.data(),
                              elapsed_hms.data());
                     send_http_soap_response(client_sock, position_info_body.data());
                     lwip_close(client_sock);
