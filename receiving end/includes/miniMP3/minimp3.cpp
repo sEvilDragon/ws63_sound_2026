@@ -35,6 +35,13 @@ static constexpr uint32_t k_tls_initial_read_timeout_ms = 10;
 static constexpr uint32_t k_tls_handshake_timeout_ms = 4000;
 static constexpr uint32_t k_http_header_timeout_ms = 5000;
 static constexpr size_t k_tls_entropy_min_hardclock = 4;
+static constexpr uint64_t k_range_preroll_bytes = 64ULL * 1024ULL;
+static constexpr uint32_t k_range_recovery_read_timeout_ms = 400;
+
+uint64_t compute_range_request_offset(uint64_t target_byte)
+{
+    return (target_byte > k_range_preroll_bytes) ? (target_byte - k_range_preroll_bytes) : 0ULL;
+}
 
 uint64_t stream_now_ms()
 {
@@ -807,6 +814,16 @@ struct chunked_decoder {
 std::array<char, 512> minimp3::current_url = {0};
 bool minimp3::is_playing = false;
 bool minimp3::is_url_ready = false;
+bool minimp3::is_paused = false;
+bool minimp3::s_has_range = false;
+bool minimp3::s_interrupt_stream = false;
+volatile uint32_t minimp3::s_stream_epoch = 1;
+uint64_t minimp3::s_range_start_byte = 0;
+uint64_t minimp3::s_resume_target_byte = 0;
+uint64_t minimp3::s_content_length = 0;
+uint32_t minimp3::s_duration_seconds = 0;
+uint64_t minimp3::s_bytes_streamed = 0;
+uint32_t minimp3::s_avg_bitrate_bps = 0;
 minimp3::iis_set_rate minimp3::iis_set_rate_func = nullptr;
 minimp3::mp3_get_into_iis minimp3::mp3_get_into_iis_func = nullptr;
 minimp3::playback_queue_level_getter minimp3::playback_queue_level_getter_func = nullptr;
@@ -824,6 +841,17 @@ void minimp3::mp3_get_into_iis_set(mp3_get_into_iis get_into_iis_func)
 void minimp3::playback_queue_level_getter_set(playback_queue_level_getter getter_func)
 {
     playback_queue_level_getter_func = getter_func;
+}
+
+void minimp3::bump_stream_epoch()
+{
+    uint32_t irq = osal_irq_lock();
+    if (s_stream_epoch == UINT32_MAX) {
+        s_stream_epoch = 1;
+    } else {
+        s_stream_epoch++;
+    }
+    osal_irq_restore(irq);
 }
 
 void minimp3::prepare_url(const char *url)
@@ -865,13 +893,32 @@ void minimp3::http_set_url(const char *url, bool start_playback)
     if (!is_same_url) {
         copy_string_safe(current_url.data(), current_url.size(), url);
         is_url_ready = true;
+        // 新URL时重置所有位置追踪状态
+        is_paused = false;
+        s_has_range = false;
+        s_range_start_byte = 0;
+        s_resume_target_byte = 0;
+        s_interrupt_stream = false;
+        s_content_length = 0;
+        s_duration_seconds = 0;
+        s_bytes_streamed = 0;
+        s_avg_bitrate_bps = 0;
+        if (is_playing) {
+            s_interrupt_stream = true;
+            minimp3::bump_stream_epoch();
+        }
     } else if (!is_playing && !is_url_ready) {
         // 同URL从暂停/停止恢复时，确保能重启拉流。
         is_url_ready = true;
     }
 
     if (start_playback) {
+        const bool should_restart_stream = (!is_playing) || is_paused || !is_same_url;
         is_playing = true;
+        if (should_restart_stream) {
+            s_interrupt_stream = true;
+            minimp3::bump_stream_epoch();
+        }
     }
 }
 
@@ -885,6 +932,12 @@ void minimp3::http_stop()
     // 更新状态
     is_playing = false;
     is_url_ready = false;
+    is_paused = false;
+    s_has_range = false;
+    s_range_start_byte = 0;
+    s_resume_target_byte = 0;
+    s_interrupt_stream = false;
+    minimp3::bump_stream_epoch();
 }
 
 void minimp3::http_clear_url()
@@ -894,11 +947,87 @@ void minimp3::http_clear_url()
     // 更新状态
     is_playing = false;
     is_url_ready = false;
+    is_paused = false;
+    s_has_range = false;
+    s_range_start_byte = 0;
+    s_resume_target_byte = 0;
+    s_interrupt_stream = false;
+    s_content_length = 0;
+    s_duration_seconds = 0;
+    s_bytes_streamed = 0;
+    s_avg_bitrate_bps = 0;
+    minimp3::bump_stream_epoch();
+}
+
+void minimp3::pause_playback()
+{
+    if (!is_playing) {
+        return;
+    }
+    // 记录已消费位置作为逻辑恢复点，再向前预卷一小段帮助MP3重建reservoir。
+    s_resume_target_byte = s_bytes_streamed;
+    s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
+    s_has_range = true;
+    is_paused = true;
+    is_playing = false;
+    s_interrupt_stream = true;
+    osal_printk("pause_playback: target_byte=%llu request_byte=%llu\n", (unsigned long long)s_resume_target_byte,
+                (unsigned long long)s_range_start_byte);
+    minimp3::bump_stream_epoch();
+}
+
+void minimp3::resume_playback()
+{
+    if (!is_paused) {
+        return;
+    }
+    // s_range_start_byte 和 s_has_range 由streaming loop在暂停时已设置
+    is_paused = false;
+    is_playing = true;
+    is_url_ready = true;
+    s_interrupt_stream = true;
+    minimp3::bump_stream_epoch();
+}
+
+bool minimp3::get_is_paused()
+{
+    return is_paused;
+}
+
+void minimp3::seek_to_seconds(uint32_t seconds)
+{
+    // 计算目标字节偏移
+    uint64_t byte_offset = 0;
+    if (s_content_length > 0 && s_duration_seconds > 0) {
+        if (seconds >= s_duration_seconds) {
+            byte_offset = (s_content_length > 16U) ? (s_content_length - 16U) : 0U;
+        } else {
+            byte_offset = (uint64_t)seconds * s_content_length / (uint64_t)s_duration_seconds;
+        }
+    } else if (s_avg_bitrate_bps > 0) {
+        byte_offset = (uint64_t)seconds * (s_avg_bitrate_bps / 8U);
+    }
+
+    s_resume_target_byte = byte_offset;
+    s_range_start_byte = compute_range_request_offset(byte_offset);
+    s_has_range = true;
+    s_interrupt_stream = true; // 中断当前内层循环，强制重连
+    is_paused = false;
+    is_url_ready = true;
+    is_playing = true;
+    minimp3::bump_stream_epoch();
+    osal_printk("seek_to_seconds: %us -> target_byte=%llu request_byte=%llu (cl=%llu dur=%us bps=%u)\n",
+                (unsigned)seconds, (unsigned long long)byte_offset, (unsigned long long)s_range_start_byte,
+                (unsigned long long)s_content_length, (unsigned)s_duration_seconds, (unsigned)s_avg_bitrate_bps);
+}
+
+uint32_t minimp3::get_duration_seconds()
+{
+    return s_duration_seconds;
 }
 
 void minimp3::stream_mp3_to_iis()
 {
-    // 网络播放任务
     mp3dec_t mp3d;
     mp3dec_frame_info_t info;
 
@@ -948,6 +1077,17 @@ void minimp3::stream_mp3_to_iis()
             copy_string_safe(working_url.data(), working_url.size(), current_url.data());
         }
 
+        // 捕获本次连接的 Range 起始偏移（暂停恢复或 seek）
+        // 重定向时沿用上次的 connection_start_offset，不重复消费 s_has_range
+        const uint64_t connection_start_offset = (s_has_range && !has_redirect) ? s_range_start_byte : 0ULL;
+        if (!has_redirect) {
+            s_has_range = false; // 消费标志
+        }
+        uint64_t connection_recv_bytes = 0;
+        uint64_t connection_consumed_bytes = 0;
+        const uint64_t resume_target_byte = s_resume_target_byte;
+        const uint32_t session_epoch = s_stream_epoch;
+
         if (working_url[0] == '\0') {
             osal_msleep(100);
             continue;
@@ -957,6 +1097,7 @@ void minimp3::stream_mp3_to_iis()
         int hz_candidate = 0;
         int hz_candidate_count = 0;
         int rate_mismatch_streak = 0;
+        int valid_header_no_pcm_streak = 0;
         int buf_start = 0;
         int bytes_in_buf = 0;
         mp3dec_init(&mp3d);
@@ -974,14 +1115,27 @@ void minimp3::stream_mp3_to_iis()
         }
 
         std::array<char, 640> request = {0};
-        snprintf(request.data(), request.size(),
-                 "GET %s HTTP/1.1\r\n"
-                 "Host: %s\r\n"
-                 "Accept: audio/mpeg, audio/mp3, audio/x-mpeg, application/octet-stream\r\n"
-                 "Accept-Encoding: identity\r\n"
-                 "Connection: close\r\n"
-                 "Icy-MetaData: 0\r\n\r\n",
-                 parsed_url.path.data(), parsed_url.host.data());
+        if (connection_start_offset > 0) {
+            snprintf(request.data(), request.size(),
+                     "GET %s HTTP/1.1\r\n"
+                     "Host: %s\r\n"
+                     "Range: bytes=%llu-\r\n"
+                     "Accept: audio/mpeg, audio/mp3, audio/x-mpeg, application/octet-stream\r\n"
+                     "Accept-Encoding: identity\r\n"
+                     "Connection: close\r\n"
+                     "Icy-MetaData: 0\r\n\r\n",
+                     parsed_url.path.data(), parsed_url.host.data(), (unsigned long long)connection_start_offset);
+            osal_printk("发送Range请求: bytes=%llu-\n", (unsigned long long)connection_start_offset);
+        } else {
+            snprintf(request.data(), request.size(),
+                     "GET %s HTTP/1.1\r\n"
+                     "Host: %s\r\n"
+                     "Accept: audio/mpeg, audio/mp3, audio/x-mpeg, application/octet-stream\r\n"
+                     "Accept-Encoding: identity\r\n"
+                     "Connection: close\r\n"
+                     "Icy-MetaData: 0\r\n\r\n",
+                     parsed_url.path.data(), parsed_url.host.data());
+        }
 
         if (stream_send_all(transport, reinterpret_cast<const uint8_t *>(request.data()),
                             static_cast<int>(strlen(request.data()))) <= 0) {
@@ -997,7 +1151,8 @@ void minimp3::stream_mp3_to_iis()
         bool header_ended = false;
         const uint64_t header_start_ms = stream_now_ms();
 
-        while (is_playing && !header_ended && header_len < (resp_header.size() - 1)) {
+        while (is_playing && session_epoch == s_stream_epoch && !header_ended &&
+               header_len < (resp_header.size() - 1)) {
             int32_t want = static_cast<int32_t>(resp_header.size() - 1 - header_len);
             if (want > 64) {
                 want = 64;
@@ -1046,7 +1201,7 @@ void minimp3::stream_mp3_to_iis()
             }
         }
         int http_status_code = parse_http_status_code_from_header(resp_header.data());
-        if (http_status_code != 200) {
+        if (http_status_code != 200 && http_status_code != 206) {
             std::array<char, 512> redirect_location = {0};
             const bool has_location = extract_http_header_value(resp_header.data(), "Location",
                                                                 redirect_location.data(), redirect_location.size());
@@ -1079,9 +1234,49 @@ void minimp3::stream_mp3_to_iis()
             osal_msleep(500);
             continue;
         }
-        // 成功拿到 200，重置重定向状态
+        // 成功拿到 200/206，重置重定向状态
         s_redirect_hops = 0;
         s_redirect_url[0] = '\0';
+        std::array<char, 128> content_range = {0};
+        std::array<char, 32> accept_ranges = {0};
+        const bool has_content_range =
+            extract_http_header_value(resp_header.data(), "Content-Range", content_range.data(), content_range.size());
+        const bool has_accept_ranges =
+            extract_http_header_value(resp_header.data(), "Accept-Ranges", accept_ranges.data(), accept_ranges.size());
+        if (has_content_range) {
+            trim_ascii_whitespace(content_range.data());
+        }
+        if (has_accept_ranges) {
+            trim_ascii_whitespace(accept_ranges.data());
+        }
+        const bool range_request_ignored =
+            (connection_start_offset > 0 && http_status_code == 200 && !has_content_range);
+        if (connection_start_offset > 0) {
+            if (has_content_range) {
+                osal_printk("HTTP Content-Range: %s\n", content_range.data());
+            }
+            if (has_accept_ranges) {
+                osal_printk("HTTP Accept-Ranges: %s\n", accept_ranges.data());
+            }
+            if (range_request_ignored) {
+                osal_printk("警告: Range请求被源站忽略，返回200且无Content-Range，当前URL可能不支持断点续播/Seek\n");
+            }
+        }
+        // 解析 Content-Length，用于时长估算和 seek
+        {
+            std::array<char, 32> cl_text = {0};
+            if (s_content_length == 0 &&
+                extract_http_header_value(resp_header.data(), "Content-Length", cl_text.data(), cl_text.size())) {
+                trim_ascii_whitespace(cl_text.data());
+                unsigned long long cl = strtoull(cl_text.data(), nullptr, 10);
+                if (cl > 0) {
+                    // 206 时 Content-Length 是部分大小，加上起始偏移才是文件总大小
+                    s_content_length =
+                        (http_status_code == 206 && connection_start_offset > 0) ? cl + connection_start_offset : cl;
+                    osal_printk("Content-Length=%llu (total)\n", (unsigned long long)s_content_length);
+                }
+            }
+        }
         std::array<char, 128> content_type = {0};
         std::array<char, 64> content_encoding = {0};
         std::array<char, 64> transfer_encoding = {0};
@@ -1142,8 +1337,9 @@ void minimp3::stream_mp3_to_iis()
             osal_printk("检测到 chunked 传输，已启用分块解码器\n");
         }
 
-        // 平衡超时与阻塞：避免timeout风暴，同时不过度拉长可闻空白。
-        set_stream_transport_read_timeout(transport, 180);
+        // 恢复/跳转后的拉流先给更宽的读超时，减少206后立即重连。
+        set_stream_transport_read_timeout(transport,
+                                          connection_start_offset > 0 ? k_range_recovery_read_timeout_ms : 180);
 
         int no_progress_count = 0;
         int recv_fail_count = 0;
@@ -1203,13 +1399,20 @@ void minimp3::stream_mp3_to_iis()
                     }
                     memcpy(mp3_buffer, body_start, body_len);
                     bytes_in_buf = body_len;
+                    connection_recv_bytes += static_cast<uint64_t>(body_len);
+                    s_bytes_streamed = connection_start_offset + connection_recv_bytes;
 
                     osal_printk("首包已接收: bytes=%d\n", body_len);
                 }
             }
         }
 
-        while (is_playing) {
+        while (is_playing && session_epoch == s_stream_epoch) {
+            // seek请求：中断当前内层循环，让外层重新连接
+            if (s_interrupt_stream) {
+                s_interrupt_stream = false;
+                break;
+            }
             // 使用滑动窗口，避免每帧都对整段数据 memmove。
             // 当缓冲区内的字节不足最小解码帧长（这里假设为最少需要2000字节触发优先解码）时，强制接收
             if (bytes_in_buf < static_cast<int>(mp3_buffer_size)) {
@@ -1352,6 +1555,7 @@ void minimp3::stream_mp3_to_iis()
 
                     bytes_in_buf += appended;
                     stat_recv_bytes += ret;
+                    connection_recv_bytes += static_cast<uint64_t>(appended);
                     recv_fail_count = 0;
                     recv_timeout_count = 0;
 
@@ -1384,12 +1588,14 @@ void minimp3::stream_mp3_to_iis()
             }
 
             int decode_loops = 0;
-            while (is_playing && bytes_in_buf > 0 && decode_loops < decode_loops_budget) {
+            while (is_playing && session_epoch == s_stream_epoch && bytes_in_buf > 0 &&
+                   decode_loops < decode_loops_budget) {
                 memset(&info, 0, sizeof(info));
                 // 解码MP3数据并送入IIS
                 int samples = mp3dec_decode_frame(&mp3d, mp3_buffer + buf_start, bytes_in_buf, pcm_buffer, &info);
 
                 if (samples > 0) {
+                    valid_header_no_pcm_streak = 0;
                     // 如果采样率变化了，调用iis_set_rate_func设置新的采样率
                     // 仅接受常见采样率并做防抖，避免伪帧导致播放速率被错误切换。
                     const bool hz_allowed = (info.hz == 48000 || info.hz == 44100 || info.hz == 32000 ||
@@ -1456,13 +1662,46 @@ void minimp3::stream_mp3_to_iis()
                         output_samples = static_cast<uint32_t>(samples * 2);
                     }
 
+                    const int frame_bytes_for_pos =
+                        (info.frame_bytes > 0 && info.frame_bytes <= bytes_in_buf) ? info.frame_bytes : bytes_in_buf;
+                    const uint64_t frame_end_byte = connection_start_offset + static_cast<uint64_t>(buf_start) +
+                                                    static_cast<uint64_t>(frame_bytes_for_pos);
+                    bool drop_pcm_for_resume = false;
+                    if (resume_target_byte > connection_start_offset && resume_target_byte > 0) {
+                        if (frame_end_byte <= resume_target_byte) {
+                            drop_pcm_for_resume = true;
+                        } else if (s_resume_target_byte != 0) {
+                            osal_printk(
+                                "Range预卷完成: target=%llu play_from=%llu\n", (unsigned long long)resume_target_byte,
+                                (unsigned long long)(connection_start_offset + static_cast<uint64_t>(buf_start)));
+                            s_resume_target_byte = 0;
+                        }
+                    }
+
                     // 将解码得到的PCM数据送入IIS
-                    if (mp3_get_into_iis_func) {
+                    if (session_epoch != s_stream_epoch) {
+                        break;
+                    }
+                    if (!drop_pcm_for_resume && mp3_get_into_iis_func) {
                         mp3_get_into_iis_func(pcm_buffer, output_samples);
                     }
-                    stat_pcm_frames++;
-                    stat_pcm_samples += static_cast<int>(output_samples);
+                    if (!drop_pcm_for_resume) {
+                        stat_pcm_frames++;
+                        stat_pcm_samples += static_cast<int>(output_samples);
+                    }
                     invalid_header_streak = 0;
+                    // 更新平均比特率并估算歌曲时长
+                    if (info.bitrate_kbps > 0) {
+                        s_avg_bitrate_bps = (uint32_t)info.bitrate_kbps * 1000U;
+                        if (s_content_length > 0 && s_avg_bitrate_bps > 0 && s_duration_seconds == 0) {
+                            uint64_t est = s_content_length * 8ULL / (uint64_t)s_avg_bitrate_bps;
+                            if (est > 0 && est < 86400ULL) {
+                                s_duration_seconds = (uint32_t)est;
+                                osal_printk("歌曲时长估算: %us (cl=%llu bps=%u)\n", (unsigned)s_duration_seconds,
+                                            (unsigned long long)s_content_length, (unsigned)s_avg_bitrate_bps);
+                            }
+                        }
+                    }
                 }
 
                 // 网络半帧数据尾巴保护算法 (滑动窗口前移)
@@ -1472,6 +1711,8 @@ void minimp3::stream_mp3_to_iis()
                     int consume = (info.frame_bytes <= bytes_in_buf) ? info.frame_bytes : bytes_in_buf;
                     buf_start += consume;
                     bytes_in_buf -= consume;
+                    connection_consumed_bytes += static_cast<uint64_t>(consume);
+                    s_bytes_streamed = connection_start_offset + connection_consumed_bytes;
                     frame_consumed = true;
                     stat_decode_frames++;
                     no_progress_count = 0;
@@ -1488,8 +1729,10 @@ void minimp3::stream_mp3_to_iis()
                     const bool header_valid = (info.layer > 0 && info.hz > 0 && info.channels > 0);
                     if (!header_valid) {
                         invalid_header_streak++;
+                        valid_header_no_pcm_streak = 0;
                     } else {
                         invalid_header_streak = 0;
+                        valid_header_no_pcm_streak++;
                     }
 
                     // 当frame_bytes == in_buf且层/采样率信息无效时，通常是“窗口内全是非MP3块”。
@@ -1528,11 +1771,22 @@ void minimp3::stream_mp3_to_iis()
                     if (consume == 0 && !need_more_bytes) {
                         if (header_valid) {
                             if (samples == 0) {
-                                // 关键收敛：有合法头但未产PCM时优先扩窗，避免误吞一整帧导致时间轴压缩。
-                                if (bytes_in_buf < static_cast<int>(mp3_buffer_size - 128)) {
+                                // seek/range 恢复点常落在 reservoir 依赖区间内。
+                                // 这时即使 frame_bytes/hz/layer 合法，也不能按整帧硬推进，
+                                // 否则会连续吞掉真实起播边界并长期无声。
+                                if (bytes_in_buf < static_cast<int>(mp3_buffer_size - 128) ||
+                                    valid_header_no_pcm_streak < 3) {
                                     need_more_bytes = true;
                                 } else {
-                                    consume = 1;
+                                    int sync_off = find_mp3_sync_offset(mp3_buffer + buf_start + 1, bytes_in_buf - 1);
+                                    if (sync_off >= 0 && sync_off < k_max_sync_skip_bytes) {
+                                        consume = sync_off + 1;
+                                        stat_sync_realigns++;
+                                        osal_printk("合法头无PCM，执行保守重同步: skip=%d\n", consume);
+                                    } else {
+                                        consume = 1;
+                                    }
+                                    valid_header_no_pcm_streak = 0;
                                 }
                             } else {
                                 if (info.frame_bytes < bytes_in_buf) {
@@ -1570,6 +1824,8 @@ void minimp3::stream_mp3_to_iis()
                     if (consume > 0) {
                         buf_start += consume;
                         bytes_in_buf -= consume;
+                        connection_consumed_bytes += static_cast<uint64_t>(consume);
+                        s_bytes_streamed = connection_start_offset + connection_consumed_bytes;
                         frame_consumed = true;
                         stat_decode_frames++;
                         if (stat_no_pcm_parsed_frames <= 6) {
@@ -1578,7 +1834,7 @@ void minimp3::stream_mp3_to_iis()
                         }
                     }
 
-                    if (stat_no_pcm_parsed_frames <= 3) {
+                    if (stat_no_pcm_parsed_frames <= 6) {
                         osal_printk("无PCM帧: layer=%d hz=%d ch=%d kbps=%d frame_bytes=%d\n", info.layer, info.hz,
                                     info.channels, info.bitrate_kbps, info.frame_bytes);
                     }
@@ -1692,13 +1948,39 @@ void minimp3::stream_mp3_to_iis()
 
         free_stream_transport(transport);
 
+        if (session_epoch != s_stream_epoch) {
+            continue;
+        }
+
         if (!is_playing) {
+            if (is_paused) {
+                // 记录已消费位置，并为下一次恢复预留预卷空间。
+                s_resume_target_byte = s_bytes_streamed;
+                s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
+                s_has_range = true;
+                osal_printk("已暂停: target_byte=%llu request_byte=%llu\n", (unsigned long long)s_resume_target_byte,
+                            (unsigned long long)s_range_start_byte);
+            }
             continue;
         }
 
         // 若URL发生变化或收到新URL，立即进入下一轮连接。
         if (is_url_ready || strcmp(working_url.data(), current_url.data()) != 0) {
             continue;
+        }
+
+        if (!range_request_ignored && (connection_start_offset > 0 || connection_consumed_bytes > 0)) {
+            uint64_t reconnect_offset = (connection_consumed_bytes > 0)
+                                            ? (connection_start_offset + connection_consumed_bytes)
+                                            : connection_start_offset;
+            if (connection_start_offset > 0 && connection_recv_bytes <= 4096ULL) {
+                reconnect_offset = connection_start_offset;
+            }
+            s_range_start_byte = reconnect_offset;
+            s_has_range = true;
+            osal_printk("流中断，准备断点重连: next_offset=%llu recv=%llu status=%d\n",
+                        (unsigned long long)reconnect_offset, (unsigned long long)connection_recv_bytes,
+                        http_status_code);
         }
 
         // 适度退避，避免在弱网环境下形成连续重连风暴。

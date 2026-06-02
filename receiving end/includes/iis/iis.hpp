@@ -44,7 +44,7 @@ public:
     static std::array<void *, 100> raw_buffers;    // 用于 kfree
     static std::array<int16_t *, 100> dma_buffers; // 用于实际读写
     static constexpr uint32_t buffer_size = 960;   // 传输数据大小
-    static constexpr uint32_t buffer_num = 50;     // 传输缓冲区数量
+    static constexpr uint32_t buffer_num = 60;     // 传输缓冲区数量
     static constexpr uint16_t cache_size = 32;     // Cache Line大小
 
     // 定义缓冲区
@@ -55,9 +55,10 @@ public:
     static constexpr uint8_t if_reduce_num = buffer_num * 0.85; // 删除帧预设值
 
     // 定义互斥锁相关的一些变量
-    static volatile int write_idx;      // 当前写入缓冲区索引
-    static volatile int read_idx;       // 当前读取缓冲区索引
-    static volatile int pending_frames; // 待处理的音频帧数
+    static volatile int write_idx;         // 当前写入缓冲区索引
+    static volatile int read_idx;          // 当前读取缓冲区索引
+    static volatile int pending_frames;    // 待处理的音频帧数
+    static volatile uint32_t write_offset; // 当前写槽内偏移，flush后必须同步复位
 
     static bool is_ready; // 标志位，表示PCM5102是否准备发送数据
 private:

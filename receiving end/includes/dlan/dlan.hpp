@@ -21,11 +21,13 @@ public:
     using media_play_handler = bool (*)(const char *uri);
     using media_pause_handler = void (*)();
     using media_stop_handler = void (*)();
+    using media_seek_handler = void (*)(uint32_t seconds_target);
 
     static void register_media_set_uri_handler(media_set_uri_handler handler);
     static void register_media_play_handler(media_play_handler handler);
     static void register_media_pause_handler(media_pause_handler handler);
     static void register_media_stop_handler(media_stop_handler handler);
+    static void register_media_seek_handler(media_seek_handler handler);
 
     static void ssdp_and_http_scan();
     static void dlan_stop();
@@ -54,6 +56,7 @@ private:
     static media_play_handler media_play_handler_func;
     static media_pause_handler media_pause_handler_func;
     static media_stop_handler media_stop_handler_func;
+    static media_seek_handler media_seek_handler_func;
 
     // 定义sock
     static bool is_ready;

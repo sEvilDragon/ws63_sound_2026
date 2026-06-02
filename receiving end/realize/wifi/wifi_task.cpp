@@ -209,14 +209,28 @@ void dlna(sed_ws63::sta &sta_)
     // 注册dlan的回调函数
     dlan_.register_media_set_uri_handler(minimp3::prepare_url);
     dlan_.register_media_play_handler([](const char *uri) -> bool {
+        if (minimp3::get_is_paused()) {
+            minimp3::resume_playback();
+            return true;
+        }
         if (uri == nullptr || uri[0] == '\0') {
             return false;
         }
         minimp3::play_url(uri);
         return true;
     });
-    dlan_.register_media_pause_handler(minimp3::stop_playback);
-    dlan_.register_media_stop_handler(minimp3::stop_playback);
+    dlan_.register_media_pause_handler([]() {
+        minimp3::pause_playback();
+        iis::data_clear();
+    });
+    dlan_.register_media_stop_handler([]() {
+        minimp3::stop_playback();
+        iis::data_clear();
+    });
+    dlan_.register_media_seek_handler([](uint32_t seconds) {
+        iis::data_clear();
+        minimp3::seek_to_seconds(seconds);
+    });
 
     osal_printk("wifi任务启动，等待网络就绪后启动dlan\n");
     while (true) {

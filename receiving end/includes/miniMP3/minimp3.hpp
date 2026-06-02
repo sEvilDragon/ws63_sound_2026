@@ -29,7 +29,15 @@ public:
     static void clear_playback_url();
     static void stream_mp3_to_iis();
 
+    // 暂停/恢复/跳转接口（供DLNA层调用）
+    static void pause_playback();                  // 真暂停，记录字节偏移以便恢复
+    static void resume_playback();                 // 从暂停位置恢复播放
+    static bool get_is_paused();                   // 查询当前是否处于暂停状态
+    static void seek_to_seconds(uint32_t seconds); // 跳转到指定时间位置
+    static uint32_t get_duration_seconds();        // 获取估算的歌曲总时长（秒）
+
 private:
+    static void bump_stream_epoch();
     static void http_set_url(const char *url, bool start_playback);
     static void http_get_url(const char *url);
     static void http_stop();
@@ -46,6 +54,16 @@ private:
     // 记录状态
     static bool is_playing;
     static bool is_url_ready;
+    static bool is_paused;                   // 是否处于暂停状态
+    static bool s_has_range;                 // 下次连接是否携带 Range 头
+    static bool s_interrupt_stream;          // 请求中断当前内层流循环（用于seek打断）
+    static volatile uint32_t s_stream_epoch; // 控制代际，避免旧流在pause/seek后继续喂PCM
+    static uint64_t s_range_start_byte;      // Range 起始字节偏移
+    static uint64_t s_resume_target_byte;    // 逻辑恢复点，Range 可从更早位置预卷启动
+    static uint64_t s_content_length;        // HTTP Content-Length（字节，0=未知）
+    static uint32_t s_duration_seconds;      // 估算歌曲时长（秒，0=未知）
+    static uint64_t s_bytes_streamed;        // 当前播放位置（文件绝对字节偏移）
+    static uint32_t s_avg_bitrate_bps;       // 平均比特率（bps，由解码帧统计）
 
     // 定义解码相关的成员变量
     // 固定20KB输入窗口，使用普通数组，避免动态分配带来的内存碎片和抖动。

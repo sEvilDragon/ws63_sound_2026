@@ -10,6 +10,7 @@ dlan::media_set_uri_handler dlan::media_set_uri_handler_func = nullptr;
 dlan::media_play_handler dlan::media_play_handler_func = nullptr;
 dlan::media_pause_handler dlan::media_pause_handler_func = nullptr;
 dlan::media_stop_handler dlan::media_stop_handler_func = nullptr;
+dlan::media_seek_handler dlan::media_seek_handler_func = nullptr;
 
 void dlan::register_media_set_uri_handler(media_set_uri_handler handler)
 {
@@ -29,6 +30,11 @@ void dlan::register_media_pause_handler(media_pause_handler handler)
 void dlan::register_media_stop_handler(media_stop_handler handler)
 {
     media_stop_handler_func = handler;
+}
+
+void dlan::register_media_seek_handler(media_seek_handler handler)
+{
+    media_seek_handler_func = handler;
 }
 
 namespace {
@@ -274,6 +280,54 @@ bool notify_renderingcontrol_state(uint8_t volume, bool mute)
     osal_printk("RenderingControl NOTIFY(volume=%u,mute=%u): %s\n", static_cast<unsigned int>(volume), mute ? 1U : 0U,
                 ok ? "成功" : "失败");
     return ok;
+}
+
+void sanitize_http_body_preview(const char *src, char *dst, size_t dst_size)
+{
+    if (dst == nullptr || dst_size == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (src == nullptr) {
+        return;
+    }
+
+    size_t di = 0;
+    for (size_t si = 0; src[si] != '\0' && di + 1 < dst_size; ++si) {
+        char ch = src[si];
+        if (ch == '\r' || ch == '\n' || ch == '\t') {
+            if (di > 0 && dst[di - 1] != ' ') {
+                dst[di++] = ' ';
+            }
+            continue;
+        }
+        dst[di++] = ch;
+    }
+    dst[di] = '\0';
+}
+
+void log_avtransport_soap_payload(const char *action_name, const char *body_start)
+{
+    if (action_name == nullptr || body_start == nullptr || body_start[0] == '\0') {
+        return;
+    }
+
+    std::array<char, 32> instance_id = {0};
+    std::array<char, 32> unit = {0};
+    std::array<char, 32> target = {0};
+    std::array<char, 32> speed = {0};
+    std::array<char, 192> preview = {0};
+
+    extract_xml_tag_value(body_start, "InstanceID", instance_id.data(), instance_id.size());
+    extract_xml_tag_value(body_start, "Unit", unit.data(), unit.size());
+    extract_xml_tag_value(body_start, "Target", target.data(), target.size());
+    extract_xml_tag_value(body_start, "Speed", speed.data(), speed.size());
+    sanitize_http_body_preview(body_start, preview.data(), preview.size());
+
+    osal_printk("AVTransport SOAP[%s]: InstanceID=%s Unit=%s Target=%s Speed=%s\n", action_name,
+                instance_id[0] != '\0' ? instance_id.data() : "-", unit[0] != '\0' ? unit.data() : "-",
+                target[0] != '\0' ? target.data() : "-", speed[0] != '\0' ? speed.data() : "-");
+    osal_printk("AVTransport SOAP预览[%s]: %s\n", action_name, preview.data());
 }
 
 void xml_escape_basic(const char *src, char *dst, size_t dst_size)
@@ -792,6 +846,12 @@ void dlan::http_process()
     }
     buffer[ret] = '\0';
 
+    const char *body_start = "";
+    char *body_separator = strstr(buffer.data(), "\r\n\r\n");
+    if (body_separator != nullptr) {
+        body_start = body_separator + 4;
+    }
+
     // AI
     // SED : 串口输出，打印HTTP请求首行（直到\r\n），方便调试验证手机APP的请求格式是否正确。
     char *line_end = strstr(buffer.data(), "\r\n");
@@ -1067,6 +1127,7 @@ void dlan::http_process()
                 memmove(soap_action_value.data(), soap_action_value.data() + 1, action_len - 2);
                 soap_action_value[action_len - 2] = '\0';
             }
+            osal_printk("SOAPACTION: %s\n", soap_action_value.data());
 
             // ========== AVTransport 服务的 SOAP 动作处理 ==========
             if (is_avtransport) {
@@ -1126,6 +1187,7 @@ void dlan::http_process()
                 } else if (soap_action_has(soap_action_value.data(), "Play")) {
                     // SED : 串口输出
                     osal_printk("http收到play相关命令\n");
+                    log_avtransport_soap_payload("Play", body_start);
                     // 回复一个固定的成功响应
                     static const char *play_response_body =
                         "<?xml version=\"1.0\"?>"
@@ -1156,6 +1218,7 @@ void dlan::http_process()
                 } else if (soap_action_has(soap_action_value.data(), "Pause")) {
                     // SED : 串口输出
                     osal_printk("http收到pause相关命令\n");
+                    log_avtransport_soap_payload("Pause", body_start);
                     static const char *pause_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1185,6 +1248,36 @@ void dlan::http_process()
                         media_stop_handler_func();
                     }
                     update_transport_state("STOPPED", true);
+                    lwip_close(client_sock);
+                    return;
+                } else if (soap_action_has(soap_action_value.data(), "Seek")) {
+                    osal_printk("http收到 Seek 命令\n");
+                    log_avtransport_soap_payload("Seek", body_start);
+                    // 解析 <Target>HH:MM:SS</Target>
+                    std::array<char, 32> seek_target = {0};
+                    extract_xml_tag_value(body_start, "Target", seek_target.data(), seek_target.size());
+                    uint32_t seek_seconds = 0;
+                    {
+                        unsigned int hh = 0, mm = 0, ss = 0;
+                        if (sscanf(seek_target.data(), "%u:%u:%u", &hh, &mm, &ss) == 3) {
+                            seek_seconds = hh * 3600U + mm * 60U + ss;
+                        }
+                    }
+                    osal_printk("Seek 目标: %s = %u 秒\n", seek_target.data(), (unsigned)seek_seconds);
+                    // 更新进度跟踪基准
+                    g_playback_elapsed_base_sec = seek_seconds;
+                    g_playback_started_jiffies = osal_get_jiffies();
+                    static const char *seek_response_body =
+                        "<?xml version=\"1.0\"?>"
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                        "<s:Body>"
+                        "<u:SeekResponse xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\" />"
+                        "</s:Body>"
+                        "</s:Envelope>";
+                    send_http_soap_response(client_sock, seek_response_body);
+                    if (media_seek_handler_func != nullptr) {
+                        media_seek_handler_func(seek_seconds);
+                    }
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetMediaInfo")) {

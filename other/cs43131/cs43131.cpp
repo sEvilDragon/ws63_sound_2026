@@ -4,16 +4,60 @@ namespace sed_ws63 {
 cs43131::cs43131()
 {
     osal_msleep(200); // 等待电源稳定
+
+    // reset实现
+    // 设置10号引脚为输出，拉低至少10ms，再拉高至少10ms。
+    uapi_pin_set_mode(GPIO_10, HAL_PIO_FUNC_GPIO);
+    uapi_gpio_set_dir(GPIO_10, GPIO_DIRECTION_OUTPUT);
+    // 默认使用高电平
+    uapi_gpio_set_val(GPIO_10, GPIO_LEVEL_HIGH);
+
+    osal_printk("GPIO_10 before reset: %d\r\n", uapi_gpio_get_val(GPIO_10));
     cs43131_init();
     osal_msleep(200); // 等待 CS43131 内部稳定
-    // 拉高通讯引脚，通知iis可以启动
-    //     uapi_pin_set_mode(GPIO_14, PIN_MODE_0);
-    //     uapi_gpio_set_dir(GPIO_14, GPIO_DIRECTION_OUTPUT);
-    //     uapi_gpio_set_val(GPIO_14, GPIO_LEVEL_HIGH);
 }
 
 void cs43131::cs43131_init()
 {
+    // 重启
+    uapi_gpio_set_val(GPIO_10, GPIO_LEVEL_LOW);
+    osal_msleep(10); // 拉长复位时间到10ms，确保芯片完全复位
+    uapi_gpio_set_val(GPIO_10, GPIO_LEVEL_HIGH);
+    osal_printk("GPIO_10 after reset release: %d (expect 1)\r\n", uapi_gpio_get_val(GPIO_10));
+    osal_msleep(50); // CS43131 复位释放后需要 >10ms 才能响应 I2C，这里留足余量
+
+    // ====== 诊断：扫描 CS43131 地址 0x30~0x33（read + write 双模式）======
+    osal_printk("CS43131 address scan after reset:\r\n");
+    for (uint16_t probe_addr = 0x30; probe_addr <= 0x33; ++probe_addr) {
+        // 方式1: 纯读 ping（发地址+R/W=1，看 ACK）
+        i2c_data_t probe = {0};
+        uint8_t probe_rx = 0xFF;
+        probe.receive_buf = &probe_rx;
+        probe.receive_len = 1;
+        errcode_t ret_r = uapi_i2c_master_read(I2C_BUS_1, probe_addr, &probe);
+
+        // 方式2: 纯写 ping（发地址+R/W=0 + 1字节，看 ACK）
+        i2c_data_t probe_w = {0};
+        uint8_t dummy_w = 0x00;
+        probe_w.send_buf = &dummy_w;
+        probe_w.send_len = 1;
+        errcode_t ret_w = uapi_i2c_master_write(I2C_BUS_1, probe_addr, &probe_w);
+
+        osal_printk("  0x%02X: read=0x%08X %s | write=0x%08X %s\r\n",
+                     probe_addr,
+                     ret_r, (ret_r == ERRCODE_SUCC) ? "ACK" : "NAK",
+                     ret_w, (ret_w == ERRCODE_SUCC) ? "ACK" : "NAK");
+    }
+    // ================================================================
+
+    // ====== 诊断：I2C 设备探测 ======
+    // 先尝试最简单的写操作（只发地址），确认芯片在总线上
+    uint8_t dummy = 0;
+    iic.iic_master_read(const_cast<uint8_t *>(int_status_1_read_cmd), sizeof(int_status_1_read_cmd), &dummy, 1,
+                        iic_addr);
+    // 注意：即使读回来的值是0x00，只要没有 ACK_ERR 就说明芯片在线
+    // ==============================
+
     // 设置晶振偏置
     // iic.iic_master_write(const_cast<uint8_t *>(crystal_cmd), sizeof(crystal_cmd), iic_addr);
     // 读取中断状态1

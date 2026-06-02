@@ -1,6 +1,7 @@
 add_subdirectory_if_exist(led_test)
 add_subdirectory_if_exist(adpcm)
 add_subdirectory_if_exist(sle)
+add_subdirectory_if_exist(ble)
 add_subdirectory_if_exist(iis)
 add_subdirectory_if_exist(wifi)
 add_subdirectory_if_exist(dlan)

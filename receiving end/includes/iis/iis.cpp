@@ -3,6 +3,7 @@
 volatile int iis::write_idx = 0;
 volatile int iis::read_idx = 0;
 volatile int iis::pending_frames = 0;
+volatile uint32_t iis::write_offset = 0;
 std::array<void *, 100> iis::raw_buffers;
 std::array<int16_t *, 100> iis::dma_buffers;
 uint8_t iis::dma_channel = 0;
@@ -216,8 +217,6 @@ void iis::dma_lli_init()
 void iis::data_write(const int16_t *data, uint32_t size)
 {
     // 判断数据大小是否超过缓冲区容量
-    static uint32_t offset = 0; // 当前缓冲区内的偏移量
-
     if (size % 2 != 0) {
         // 不是双声道
         size--; // 丢弃最后一个采样，保持双声道数据对齐
@@ -231,23 +230,23 @@ void iis::data_write(const int16_t *data, uint32_t size)
 
     while (size > 0) {
         // 每次写新槽前检查：若所有槽已满则丢帧，避免越界写入DMA正在读的槽
-        if (offset == 0 && pending_frames >= (int)buffer_num) {
+        if (write_offset == 0 && pending_frames >= (int)buffer_num) {
             return;
         }
 
         // 计算是否溢出
-        uint32_t space = buffer_size - offset;            // 当前缓冲区剩余空间
+        uint32_t space = buffer_size - write_offset;      // 当前缓冲区剩余空间
         uint32_t to_copy = (size < space) ? size : space; // 本次要复制的数据量
-        memcpy(&dma_buffers[write_idx][offset], data, to_copy * sizeof(int16_t));
+        memcpy(&dma_buffers[write_idx][write_offset], data, to_copy * sizeof(int16_t));
         data += to_copy;
         size -= to_copy;
-        offset += to_copy;
+        write_offset += to_copy;
 
-        if (offset >= buffer_size) {
+        if (write_offset >= buffer_size) {
             // flush cache，让DMA看到最新数据
             osal_dcache_region_clean(dma_buffers[write_idx], buffer_size * sizeof(uint16_t));
 
-            offset = 0; // 重置偏移量，准备写入下一个缓冲区
+            write_offset = 0; // 重置偏移量，准备写入下一个缓冲区
 
             // 给cpu上锁
             uint32_t irq = osal_irq_lock();
@@ -265,6 +264,8 @@ void iis::data_write(const int16_t *data, uint32_t size)
 
 void iis::data_clear()
 {
+    hal_sio_set_tx_enable(i2s_num, 0);
+
     for (int i = 0; i < buffer_num; i++) {
         memset(dma_buffers[i], 0, buffer_size * sizeof(uint16_t));
         // DMA 直接读物理内存，必须 writeback 否则 DMA 仍读到旧音频数据
@@ -275,12 +276,14 @@ void iis::data_clear()
     // 每播一槽回调递减 pending_frames，在到达新数据前就触发 TX 关闭 → 永久静音。
     // 正确做法：保留 read_idx 与硬件同步，write_idx 对齐到 read_idx，
     // 新数据从 DMA 当前位置起填入，pending_frames 与实际可用槽一一对应。
+    uint32_t irq = osal_irq_lock();
     write_idx = read_idx;
+    write_offset = 0;
     last_left_sample = 0;
     last_right_sample = 0;
     pending_frames = 0;
     is_ready = false;
-    hal_sio_set_tx_enable(i2s_num, 0);
+    osal_irq_restore(irq);
 }
 
 void iis::data_clear_one(int index)
