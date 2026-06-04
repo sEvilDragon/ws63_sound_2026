@@ -60,6 +60,7 @@ private:
     static volatile uint32_t s_stream_epoch; // 控制代际，避免旧流在pause/seek后继续喂PCM
     static uint64_t s_range_start_byte;      // Range 起始字节偏移
     static uint64_t s_resume_target_byte;    // 逻辑恢复点，Range 可从更早位置预卷启动
+    static uint64_t s_mp3_start_offset;      // HTTP 文件中 MP3 数据起始偏移
     static uint64_t s_content_length;        // HTTP Content-Length（字节，0=未知）
     static uint32_t s_duration_seconds;      // 估算歌曲时长（秒，0=未知）
     static uint64_t s_bytes_streamed;        // 当前播放位置（文件绝对字节偏移）
