@@ -74,7 +74,7 @@ static constexpr uint32_t k_tls_initial_read_timeout_ms = 10;
 static constexpr uint32_t k_tls_handshake_timeout_ms = 4000;
 static constexpr uint32_t k_http_header_timeout_ms = 5000;
 static constexpr size_t k_tls_entropy_min_hardclock = 4;
-static constexpr uint64_t k_range_preroll_bytes = 64ULL * 1024ULL;
+static constexpr uint64_t k_range_preroll_bytes = 8ULL * 1024ULL; // MP3 bit reservoir < 512B, 8KB 足够
 static constexpr uint32_t k_range_recovery_read_timeout_ms = 400;
 // 最大允许 drain 的字节数：超过此阈值则回退到 Range 重连，避免在慢速链路上
 // 长时间丢弃数据。
