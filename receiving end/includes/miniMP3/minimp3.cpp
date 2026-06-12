@@ -942,6 +942,10 @@ struct stream_ex_io_ctx {
     uint64_t content_length = 0;   // HTTP Content-Length（0=未知/chunked）
     uint64_t seek_on_open = 0;     // 非0时：下次 open 的 seek(0) 将用 Range 请求定位到此字节
     bool seek_on_open_active = false;
+    // Range 重定向后，mp3dec_ex_open_cb 会再次 seek(dec->start_offset)。
+    // start_offset 是相对于 Range 起始位置的偏移，seek_base 记录 Range 起始
+    // 绝对字节位置，用于将第二次 seek 的相对偏移转换为绝对位置。
+    uint64_t seek_base = 0;
 };
 
 // 从 HTTP 响应头中提取 Content-Length。返回 0 表示未找到或解析失败。
@@ -1033,9 +1037,10 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
 
     // ── 处理 seek_on_open：当 minimp3_ex_open_cb 调用 seek(0) 时，
     // 如果 seek_on_open_active 为真，则用 Range 请求直接跳到目标位置，
-    // 避免先 GET 再 drain 的浪费。 ──
+    // 避免先 GET 再 drain 的浪费。同时记录 seek_base 用于后续第二次 seek。 ──
     if (ctx->seek_on_open_active && position == 0) {
         ctx->seek_on_open_active = false;
+        ctx->seek_base = ctx->seek_on_open; // 记录 Range 起始绝对位置，供第二次 seek 偏移转换
         position = ctx->seek_on_open;
         ctx->seek_on_open = 0;
         if (position > 0) {
@@ -1043,6 +1048,20 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
                         static_cast<unsigned long long>(position));
             goto do_reconnect;
         }
+    }
+
+    // ── 处理 post-Range 第二次 seek ──
+    // mp3dec_ex_open_cb 在 Range 重定向+扫描后，会用 start_offset 再次 seek。
+    // start_offset 是相对于 Range 起始位置的偏移（通常 0 或 ID3 标签大小），
+    // 必须加上 seek_base 转换为绝对文件偏移，否则会回退到文件头重新 GET。
+    // 使用 position < seek_base 作为判断条件：start_offset 总是远小于 seek_base，
+    // 而 mp3dec_iterate_cb 内部的 ID3 seek 会被正确转换为绝对位置且不消费 seek_base。
+    if (ctx->seek_base > 0 && position < ctx->seek_base) {
+        osal_printk("ex-seek: post-Range seek adjust: %llu + base %llu = %llu\n",
+                    static_cast<unsigned long long>(position), static_cast<unsigned long long>(ctx->seek_base),
+                    static_cast<unsigned long long>(position + ctx->seek_base));
+        position += ctx->seek_base;
+        ctx->seek_base = 0; // 消费，仅对第一次 post-Range seek 生效
     }
 
     // ── 快速路径：已连接且目标位置 >= 当前位置 → 排空字节即可 ──
@@ -1504,6 +1523,7 @@ void minimp3::stream_mp3_to_iis()
             io_ctx.mp3_start_offset = 0;
             io_ctx.seek_on_open = 0;
             io_ctx.seek_on_open_active = false;
+            io_ctx.seek_base = 0;
 
             // 有 pending seek（仅 seek_to_seconds，不含 resume）→
             // 设置 seek_on_open，让 stream_ex_seek_cb 在 seek(0) 时使用 Range 请求。
@@ -1600,7 +1620,23 @@ void minimp3::stream_mp3_to_iis()
         mp3d_sample_t *frame_samples = nullptr;
         size_t n = mp3dec_ex_read_frame(&dec, &frame_samples, &frame_info, k_pcm_batch_samples);
 
+        // ── Update position / bitrate trackers ────────────────────
+        // 必须在 n==0 检查之前：跳帧（to_skip）时 n=0 但 frame_bytes>0，
+        // 仍需更新位置追踪和比特率。
+        if (frame_info.bitrate_kbps > 0) {
+            s_avg_bitrate_bps = static_cast<uint32_t>(frame_info.bitrate_kbps) * 1000U;
+        }
+        if (frame_info.frame_bytes > 0) {
+            s_bytes_streamed += static_cast<uint64_t>(frame_info.frame_bytes);
+        }
+
         if (n == 0) {
+            // 跳帧（解码器正在填充 bit reservoir 或跳过 encoder delay）：
+            // frame_bytes > 0 表示消耗了输入数据但未产出 PCM 采样。
+            // 继续循环而非停止播放。
+            if (dec.last_error == 0 && frame_info.frame_bytes > 0) {
+                continue;
+            }
             if (dec.last_error != 0) {
                 osal_printk("minimp3_ex: decode error %d, stopping\n", dec.last_error);
             } else {
@@ -1658,14 +1694,7 @@ void minimp3::stream_mp3_to_iis()
             }
         }
 
-        // ── Update position / bitrate trackers ────────────────────
-        if (frame_info.bitrate_kbps > 0) {
-            s_avg_bitrate_bps = static_cast<uint32_t>(frame_info.bitrate_kbps) * 1000U;
-        }
-        // 逐帧累加 MP3 数据字节偏移（替代依赖 cur_sample 的方式）
-        if (frame_info.frame_bytes > 0) {
-            s_bytes_streamed += static_cast<uint64_t>(frame_info.frame_bytes);
-        }
+        // ── Duration from VBR tag ─────────────────────────────────
         if (dec.detected_samples > 0 && dec.info.hz > 0 && s_duration_seconds == 0) {
             s_duration_seconds = static_cast<uint32_t>(dec.detected_samples / dec.info.hz);
         }
