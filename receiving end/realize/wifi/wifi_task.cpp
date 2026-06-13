@@ -219,18 +219,9 @@ void dlna(sed_ws63::sta &sta_)
         minimp3::play_url(uri);
         return true;
     });
-    dlan_.register_media_pause_handler([]() {
-        minimp3::pause_playback();
-        iis::data_clear();
-    });
-    dlan_.register_media_stop_handler([]() {
-        minimp3::stop_playback();
-        iis::data_clear();
-    });
-    dlan_.register_media_seek_handler([](uint32_t seconds) {
-        iis::data_clear();
-        minimp3::seek_to_seconds(seconds);
-    });
+    dlan_.register_media_pause_handler([]() { minimp3::pause_playback(); });
+    dlan_.register_media_stop_handler([]() { minimp3::stop_playback(); });
+    dlan_.register_media_seek_handler([](uint32_t seconds) { minimp3::seek_to_seconds(seconds); });
 
     osal_printk("wifi任务启动，等待网络就绪后启动dlan\n");
     while (true) {

@@ -48,6 +48,8 @@ static bool g_mp3_io_buf_in_use = false;
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/ssl.h"
 
+#include "iis.hpp"
+
 namespace {
 enum class stream_url_scheme : uint8_t { http, https };
 
@@ -988,6 +990,64 @@ static uint64_t parse_content_length_from_header(const char *header)
     return 0;
 }
 
+// 从 HTTP 响应头中提取 Content-Range 的完整长度（bytes X-Y/Z 中的 Z）。
+// 返回 0 表示未找到或解析失败。
+static uint64_t parse_content_range_total(const char *header)
+{
+    if (header == nullptr) {
+        return 0;
+    }
+    const char *p = header;
+    while (*p) {
+        while (*p == '\r' || *p == '\n')
+            ++p;
+        if (*p == '\0')
+            break;
+        if (!starts_with_ascii_ignore_case_local(p, "content-range:")) {
+            const char *eol = strchr(p, '\r');
+            if (eol == nullptr)
+                eol = strchr(p, '\n');
+            if (eol == nullptr)
+                break;
+            p = eol;
+            continue;
+        }
+        p += 13; // strlen("content-range")
+        while (*p == ':' || *p == ' ' || *p == '\t')
+            ++p;
+        // 期望格式: bytes X-Y/Z 或 bytes */Z
+        if (!starts_with_ascii_ignore_case_local(p, "bytes"))
+            return 0;
+        p += 5; // strlen("bytes")
+        while (*p == ' ')
+            ++p;
+        // 跳过 X-Y 或 *
+        while (*p >= '0' && *p <= '9')
+            ++p;
+        if (*p == '-') {
+            ++p;
+            while (*p >= '0' && *p <= '9')
+                ++p;
+        } else if (*p == '*') {
+            ++p;
+        }
+        if (*p != '/')
+            return 0;
+        ++p; // 跳过 '/'
+        while (*p == ' ')
+            ++p;
+        if (*p < '0' || *p > '9')
+            return 0;
+        uint64_t val = 0;
+        while (*p >= '0' && *p <= '9') {
+            val = val * 10ULL + (uint64_t)(*p - '0');
+            ++p;
+        }
+        return val;
+    }
+    return 0;
+}
+
 // Blocking / retrying read for minimp3_ex.  Returns 0 only on EOF or
 // unrecoverable error so that mp3dec_ex_read knows to stop.
 static size_t stream_ex_read_cb(void *buf, size_t size, void *user_data)
@@ -1183,12 +1243,21 @@ do_reconnect:
         return -1;
     }
 
-    // 解析 Content-Length（用于 seek 计算和进度追踪）
+    // 解析 Content-Length 和 Content-Range（用于 seek 计算和进度追踪）
     {
-        uint64_t cl = parse_content_length_from_header(header.data());
-        if (cl > 0) {
-            ctx->content_length = cl;
-            osal_printk("ex-seek: Content-Length=%llu\n", static_cast<unsigned long long>(cl));
+        // Content-Range 优先：Range 请求的 206 响应携带完整文件大小(bytes X-Y/Z)
+        uint64_t cr_total = parse_content_range_total(header.data());
+        if (cr_total > 0) {
+            ctx->content_length = cr_total;
+            osal_printk("ex-seek: Content-Range total=%llu\n", static_cast<unsigned long long>(cr_total));
+        } else if (position == 0) {
+            // 仅在非 Range 请求(从头 GET)时使用 Content-Length，
+            // Range 请求的 Content-Length 只是 range 体大小，不能作为文件总长。
+            uint64_t cl = parse_content_length_from_header(header.data());
+            if (cl > 0) {
+                ctx->content_length = cl;
+                osal_printk("ex-seek: Content-Length=%llu\n", static_cast<unsigned long long>(cl));
+            }
         }
     }
 
@@ -1410,7 +1479,15 @@ void minimp3::seek_to_seconds(uint32_t seconds)
             byte_offset = (uint64_t)seconds * s_content_length / (uint64_t)s_duration_seconds;
         }
     } else if (s_avg_bitrate_bps > 0) {
+        // 方法2: 首帧/平均比特率估算 (CBR准确, VBR近似)
         byte_offset = (uint64_t)seconds * (s_avg_bitrate_bps / 8U);
+    } else {
+        // 兜底: 假设 128kbps CBR，避免 s_content_length/s_avg_bitrate 均未就绪时跳到开头
+        static constexpr uint32_t k_fallback_bitrate_bps = 128000U;
+        byte_offset = (uint64_t)seconds * (k_fallback_bitrate_bps / 8U);
+        osal_printk("seek_to_seconds: using fallback 128kbps (cl=%llu dur=%u bps=%u)\n",
+                    static_cast<unsigned long long>(s_content_length), static_cast<unsigned>(s_duration_seconds),
+                    static_cast<unsigned>(s_avg_bitrate_bps));
     }
 
     s_resume_target_byte = byte_offset;
@@ -1419,9 +1496,9 @@ void minimp3::seek_to_seconds(uint32_t seconds)
     is_paused = false;
     is_playing = true;
     minimp3::bump_stream_epoch();
-    osal_printk("seek_to_seconds: %us -> target_byte=%llu (cl=%llu dur=%us bps=%u)\n", (unsigned)seconds,
-                (unsigned long long)byte_offset, (unsigned long long)s_content_length, (unsigned)s_duration_seconds,
-                (unsigned)s_avg_bitrate_bps);
+    osal_printk("seek_to_seconds: %us -> target_byte=%llu range_start=%llu (cl=%llu dur=%us bps=%u)\n",
+                (unsigned)seconds, (unsigned long long)byte_offset, (unsigned long long)s_range_start_byte,
+                (unsigned long long)s_content_length, (unsigned)s_duration_seconds, (unsigned)s_avg_bitrate_bps);
 }
 
 uint32_t minimp3::get_duration_seconds()
@@ -1461,10 +1538,13 @@ void minimp3::stream_mp3_to_iis()
         // ── Wait while paused / stopped ──────────────────────────
         if (!is_playing) {
             if (dec_open && is_paused) {
-                // 暂停：快照位置后关闭解码器和 TCP 连接，释放 LWIP 内存。
+                // 暂停：先清理 IIS 缓冲区（与 data_write 同线程，无竞争），
+                // 再快照位置后关闭解码器和 TCP 连接，释放 LWIP 内存。
                 // 否则服务器持续推送数据会耗尽 LWIP 缓冲区，
                 // 导致 DLNA NOTIFY 的 lwip_send 分配不到内存而失败。
+                iis::data_clear();
                 s_resume_target_byte = s_bytes_streamed;
+                s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
                 s_has_range = true;
                 mp3dec_ex_close(&dec);
                 dec_open = false;
@@ -1472,7 +1552,8 @@ void minimp3::stream_mp3_to_iis()
                 io_ctx.connected = false;
                 io_ctx.stream_pos = 0;
             } else if (dec_open && !is_paused) {
-                // Stopped: free decoder and transport to release memory between songs.
+                // Stopped: 清理 IIS，释放解码器和传输资源以回收跨曲内存。
+                iis::data_clear();
                 mp3dec_ex_close(&dec);
                 dec_open = false;
                 free_stream_transport(io_ctx.transport);
@@ -1561,8 +1642,14 @@ void minimp3::stream_mp3_to_iis()
             is_url_ready = false;
             io_ctx.mp3_start_offset = dec.start_offset; // 记录文件中 MP3 数据起始偏移
 
-            // Sync Content-Length from HTTP response header (parsed in stream_ex_seek_cb)
-            if (io_ctx.content_length > 0 && s_content_length == 0) {
+            // 从 open_cb 已解析的首帧头初始化比特率（不等首帧解码），确保 seek 时 byte_offset 可用
+            if (dec.info.bitrate_kbps > 0 && s_avg_bitrate_bps == 0) {
+                s_avg_bitrate_bps = static_cast<uint32_t>(dec.info.bitrate_kbps) * 1000U;
+            }
+
+            // Sync Content-Length from HTTP response header (parsed in stream_ex_seek_cb).
+            // Content-Range 解析的总大小优先，非 Range 请求的 Content-Length 亦可接受。
+            if (io_ctx.content_length > 0) {
                 s_content_length = io_ctx.content_length;
                 osal_printk("minimp3_ex: Content-Length=%llu\n", static_cast<unsigned long long>(s_content_length));
             }
@@ -1570,7 +1657,9 @@ void minimp3::stream_mp3_to_iis()
             // 有 pending seek（仅 seek_to_seconds 触发）→
             // Range 请求已定位到预卷位置，从 Range 起始字节开始追踪位置，
             // 后续逐帧累加 frame_bytes 自然逼近目标位置。
-            if (s_has_range && s_resume_target_byte > 0) {
+            // 注意：无论 s_resume_target_byte 是否为 0，都必须清除 s_has_range，
+            // 否则下一轮循环会重复进入 mid-playback seek → 死循环卡顿。
+            if (s_has_range) {
                 osal_printk("minimp3_ex: seeked, Range start=%llu target=%llu\n",
                             static_cast<unsigned long long>(s_range_start_byte),
                             static_cast<unsigned long long>(s_resume_target_byte));
@@ -1602,6 +1691,8 @@ void minimp3::stream_mp3_to_iis()
         if (s_has_range && dec_open) {
             osal_printk("minimp3_ex: mid-playback seek to byte %llu\n",
                         static_cast<unsigned long long>(s_resume_target_byte));
+            // 先清理 IIS，避免旧音频残留导致杂音或位置错乱（与 data_write 同线程无竞争）
+            iis::data_clear();
             // 设置 seek_on_open 让 reopen 时使用 Range 请求，避免先 GET 再 drain。
             io_ctx.seek_on_open = s_range_start_byte;
             io_ctx.seek_on_open_active = true;
