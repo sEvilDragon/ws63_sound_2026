@@ -1136,9 +1136,6 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
                         static_cast<unsigned long long>(to_skip), static_cast<unsigned long long>(k_max_drain_bytes));
             goto do_reconnect;
         }
-        osal_printk("ex-seek: drain %llu bytes (pos %llu -> %llu)\n", static_cast<unsigned long long>(to_skip),
-                    static_cast<unsigned long long>(ctx->stream_pos), static_cast<unsigned long long>(position));
-
         // 排空 to_skip 字节（小块读取丢弃）
         uint8_t drain_buf[256];
         const uint64_t drain_start = stream_now_ms();
@@ -1769,19 +1766,6 @@ void minimp3::stream_mp3_to_iis()
                 mp3_get_into_iis_func(pcm_buf, static_cast<uint32_t>(n * 2));
             } else {
                 mp3_get_into_iis_func(frame_samples, static_cast<uint32_t>(n));
-            }
-        }
-
-        // 每 ~1 秒打印一次解码进度（44100 Hz / 1152 samples ≈ 38 frames/sec）
-        {
-            static uint64_t s_last_pcm_log_ms = 0;
-            static uint32_t s_pcm_frame_cnt = 0;
-            s_pcm_frame_cnt++;
-            uint64_t now_ms = stream_now_ms();
-            if (s_last_pcm_log_ms == 0 || (now_ms - s_last_pcm_log_ms) >= 5000) {
-                osal_printk("minimp3_ex: PCM frames=%u br=%d kbps pos=%llu\n", static_cast<unsigned>(s_pcm_frame_cnt),
-                            frame_info.bitrate_kbps, static_cast<unsigned long long>(s_bytes_streamed));
-                s_last_pcm_log_ms = now_ms;
             }
         }
 

@@ -125,8 +125,6 @@ bool send_http_notify_request(const char *callback_url, const char *sid, uint32_
         if (line_end != nullptr) {
             *line_end = '\0';
         }
-        // SED ： 串口输出
-        osal_printk("NOTIFY响应: %s\n", resp.data());
     }
 
     lwip_close(sock);
@@ -510,8 +508,6 @@ bool stream_probe_once(const char *uri)
         return false;
     }
 
-    // SED : 串口输出
-    osal_printk("拉流首包成功，字节数=%d\n", recv_len);
     return true;
 }
 
@@ -570,8 +566,6 @@ bool dlan::ssdp_send_msearch_reply(const sockaddr_in &client_addr,
         return false;
     }
 
-    // SED : 串口输出
-    osal_printk("ssdp已响应M-SEARCH (ST=%s, USN=%s)\n", st, usn.data());
     return true;
 }
 
@@ -636,8 +630,6 @@ void dlan::ssdp_and_http_scan()
             ssdp_process();
         }
         if (FD_ISSET(http_sock, &read_fds)) {
-            // SED : 串口输出
-            osal_printk("select命中http fd\n");
             http_process();
         }
     }
@@ -756,16 +748,12 @@ void dlan::ssdp_process()
         }
 
         if (!has_st || !has_man || !ascii_icontains(man_value.data(), "ssdp:discover")) {
-            osal_printk("ssdp忽略M-SEARCH: MAN/ST不合法, MAN=%s, ST=%s\n", man_value.data(), st_value.data());
             return;
         }
 
         if (has_host && strstr(host_value.data(), "239.255.255.250:1900") == nullptr) {
-            osal_printk("ssdp忽略M-SEARCH: HOST=%s\n", host_value.data());
             return;
         }
-
-        osal_printk("ssdp收到M-SEARCH: ST=%s\n", st_value.data());
 
         const bool is_ssdp_all = ascii_iequals(st_value.data(), "ssdp:all");
         const bool is_root = ascii_iequals(st_value.data(), "upnp:rootdevice");
@@ -780,7 +768,6 @@ void dlan::ssdp_process()
 
         if (!(is_ssdp_all || is_root || is_uuid || is_renderer || is_av_transport || is_rendering_control ||
               is_connection_manager || is_qplay)) {
-            osal_printk("ssdp忽略M-SEARCH: ST=%s\n", st_value.data());
             return;
         }
 
@@ -833,10 +820,7 @@ void dlan::http_process()
         return;
     }
 
-    // SED : 串口输出
     uint32_t peer_ip = lwip_ntohl(client_addr.sin_addr.s_addr);
-    osal_printk("http收到连接: %u.%u.%u.%u:%u\n", (peer_ip >> 24) & 0xFF, (peer_ip >> 16) & 0xFF, (peer_ip >> 8) & 0xFF,
-                peer_ip & 0xFF, lwip_ntohs(client_addr.sin_port));
 
     static std::array<char, 2048> buffer; // HTTP接收缓冲区
     errcode_t ret = lwip_recv(client_sock, buffer.data(), buffer.size() - 1, 0);
@@ -853,21 +837,8 @@ void dlan::http_process()
         body_start = body_separator + 4;
     }
 
-    // AI
-    // SED : 串口输出，打印HTTP请求首行（直到\r\n），方便调试验证手机APP的请求格式是否正确。
-    char *line_end = strstr(buffer.data(), "\r\n");
-    if (line_end != nullptr) {
-        *line_end = '\0';
-    }
-    osal_printk("http请求首行: %s\n", buffer.data());
-    if (line_end != nullptr) {
-        *line_end = '\r';
-    }
-    // AI结束
-
     // 【新增】处理 SUBSCRIBE 事件订阅请求
     if (strstr(buffer.data(), "SUBSCRIBE") != nullptr) {
-        osal_printk("http收到 SUBSCRIBE 请求\n");
         std::array<char, 256> sid_value = {0};
         std::array<char, 256> callback_value = {0};
         const bool has_sid = extract_http_header_value(buffer.data(), "SID", sid_value.data(), sid_value.size());
@@ -921,7 +892,6 @@ void dlan::http_process()
                  sid_to_reply);
 
         lwip_send(client_sock, subscribe_response.data(), strlen(subscribe_response.data()), 0);
-        osal_printk("已回复 SUBSCRIBE: SID=%s\n", sid_to_reply);
         lwip_close(client_sock);
         if (is_avtransport_event) {
             notify_avtransport_state(dlan::g_transport_state.data());
@@ -933,15 +903,12 @@ void dlan::http_process()
 
     // 【新增】处理 UNSUBSCRIBE 取消订阅请求
     if (strstr(buffer.data(), "UNSUBSCRIBE") != nullptr) {
-        osal_printk("http收到 UNSUBSCRIBE 请求\n");
-
         static const char *unsubscribe_response =
             "HTTP/1.1 200 OK\r\n"
             "CONTENT-LENGTH: 0\r\n"
             "Connection: close\r\n\r\n";
 
         lwip_send(client_sock, unsubscribe_response, strlen(unsubscribe_response), 0);
-        osal_printk("已回复 UNSUBSCRIBE\n");
         lwip_close(client_sock);
         return;
     }
@@ -949,8 +916,6 @@ void dlan::http_process()
     // 请求设备描述的XML文件
     if (strstr(buffer.data(), "GET /description.xml") || strstr(buffer.data(), "HEAD /description.xml") ||
         strstr(buffer.data(), "GET / HTTP/1.1") || strstr(buffer.data(), "GET / HTTP/1.0")) {
-        // SED : 串口输出
-        osal_printk("http收到设备描述请求\n");
         static std::array<char, 2048> xml_response;
         static std::array<char, 256> header;
         snprintf(xml_response.data(), xml_response.size(),
@@ -1010,8 +975,6 @@ void dlan::http_process()
     // 回复GET的追加部分
     else if (strstr(buffer.data(), "GET /AVTransport.xml") != nullptr ||
              strstr(buffer.data(), "HEAD /AVTransport.xml") != nullptr) {
-        // SED : 串口输出
-        osal_printk("http收到AVTransport.xml请求\n");
         static constexpr const char *avt_xml =
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
             "<scpd xmlns=\"urn:schemas-upnp-org:service-1-0\">\r\n"
@@ -1047,8 +1010,6 @@ void dlan::http_process()
     // 处理rendering xml
     else if (strstr(buffer.data(), "GET /RenderingControl.xml") != nullptr ||
              strstr(buffer.data(), "HEAD /RenderingControl.xml") != nullptr) {
-        // SED : 串口输出
-        osal_printk("http收到RenderingControl.xml请求\n");
         static constexpr const char *rc_xml =
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
             "<scpd xmlns=\"urn:schemas-upnp-org:service-1-0\">\r\n"
@@ -1077,7 +1038,6 @@ void dlan::http_process()
     // 处理connection manager xml
     else if (strstr(buffer.data(), "GET /ConnectionManager.xml") != nullptr ||
              strstr(buffer.data(), "HEAD /ConnectionManager.xml") != nullptr) {
-        osal_printk("http收到 ConnectionManager.xml 请求\n");
         static constexpr const char *cm_xml =
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
             "<scpd xmlns=\"urn:schemas-upnp-org:service-1-0\">\r\n"
@@ -1115,9 +1075,6 @@ void dlan::http_process()
             lwip_close(client_sock);
             return;
         }
-        // SED : 串口输出
-        osal_printk("http收到控制命令: %s\n",
-                    is_avtransport ? "AVTransport" : (is_renderingcontrol ? "RenderingControl" : "ConnectionManager"));
         // 按照SOAPACTION做动作分发
         std::array<char, 256> soap_action_value = {0};
         const bool has_soap_action =
@@ -1129,13 +1086,9 @@ void dlan::http_process()
                 memmove(soap_action_value.data(), soap_action_value.data() + 1, action_len - 2);
                 soap_action_value[action_len - 2] = '\0';
             }
-            osal_printk("SOAPACTION: %s\n", soap_action_value.data());
-
             // ========== AVTransport 服务的 SOAP 动作处理 ==========
             if (is_avtransport) {
                 if (soap_action_has(soap_action_value.data(), "SetAVTransportURI")) {
-                    // SED : 串口输出
-                    osal_printk("http收到SetAVTransportURI命令\n");
                     static std::array<char, 512> media_url = {
                         0}; // 从SOAP请求中提取出媒体URL，方便后续实现真正的播放功能
                     static std::array<char, 1024> media_metadata = {0};
@@ -1174,7 +1127,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "SetNextAVTransportURI")) {
-                    osal_printk("http收到 SetNextAVTransportURI 命令，按空操作兼容处理\n");
                     static const char *set_next_uri_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1187,9 +1139,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "Play")) {
-                    // SED : 串口输出
-                    osal_printk("http收到play相关命令\n");
-                    log_avtransport_soap_payload("Play", body_start);
                     // 回复一个固定的成功响应
                     static const char *play_response_body =
                         "<?xml version=\"1.0\"?>"
@@ -1218,9 +1167,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "Pause")) {
-                    // SED : 串口输出
-                    osal_printk("http收到pause相关命令\n");
-                    log_avtransport_soap_payload("Pause", body_start);
                     static const char *pause_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1236,8 +1182,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "Stop")) {
-                    // SED : 串口输出
-                    osal_printk("http收到stop相关命令\n");
                     static const char *stop_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1253,8 +1197,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "Seek")) {
-                    osal_printk("http收到 Seek 命令\n");
-                    log_avtransport_soap_payload("Seek", body_start);
                     // 解析 <Target>HH:MM:SS</Target>
                     std::array<char, 32> seek_target = {0};
                     extract_xml_tag_value(body_start, "Target", seek_target.data(), seek_target.size());
@@ -1283,7 +1225,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetMediaInfo")) {
-                    osal_printk("http收到 GetMediaInfo 命令\n");
                     static std::array<char, 1024> escaped_uri = {0};
                     xml_escape_basic(g_current_uri.data(), escaped_uri.data(), escaped_uri.size());
 
@@ -1315,7 +1256,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetDeviceCapabilities")) {
-                    osal_printk("http收到 GetDeviceCapabilities 命令\n");
                     static const char *device_capabilities_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1331,8 +1271,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetTransportInfo")) {
-                    // SED : 串口输出
-                    osal_printk("http收到 GetTransportInfo 命令\n");
                     // 获取传输状态：PLAYING, PAUSED_PLAYBACK, STOPPED, NO_MEDIA_PRESENT
                     static std::array<char, 640> transport_info_body = {0};
                     snprintf(transport_info_body.data(), transport_info_body.size(),
@@ -1351,7 +1289,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetTransportSettings")) {
-                    osal_printk("http收到 GetTransportSettings 命令\n");
                     static const char *transport_settings_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1366,7 +1303,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetCurrentTransportActions")) {
-                    osal_printk("http收到 GetCurrentTransportActions 命令\n");
                     const bool has_uri = g_current_uri[0] != '\0';
                     const char *actions = "";
                     if (ascii_iequals(dlan::g_transport_state.data(), "PLAYING") ||
@@ -1394,8 +1330,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetPositionInfo")) {
-                    // SED : 串口输出
-                    osal_printk("http收到 GetPositionInfo 命令\n");
                     static std::array<char, 1024> escaped_uri = {0};
                     xml_escape_basic(g_current_uri.data(), escaped_uri.data(), escaped_uri.size());
 
@@ -1444,8 +1378,6 @@ void dlan::http_process()
             // ========== RenderingControl 服务的 SOAP 动作处理 ==========
             else if (is_renderingcontrol) {
                 if (strstr(soap_action_value.data(), "#SetVolume") != nullptr) {
-                    //  SED : 串口输出
-                    osal_printk("http收到 SetVolume 命令\n");
                     static const char *set_volume_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1457,8 +1389,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetVolume") != nullptr) {
-                    // SED : 串口输出
-                    osal_printk("http收到 GetVolume 命令\n");
                     static const char *get_volume_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1472,8 +1402,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#SetMute") != nullptr) {
-                    // SED : 串口输出
-                    osal_printk("http收到 SetMute 命令\n");
                     static const char *set_mute_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1485,8 +1413,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetMute") != nullptr) {
-                    // SED : 串口输出
-                    osal_printk("http收到 GetMute 命令\n");
                     static const char *get_mute_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1514,8 +1440,6 @@ void dlan::http_process()
             // ========== ConnectionManager 服务的 SOAP 动作处理 ==========
             else if (is_connectionmanager) {
                 if (strstr(soap_action_value.data(), "#GetProtocolInfo") != nullptr) {
-                    // SED : 串口输出
-                    osal_printk("http收到 GetProtocolInfo 命令\n");
                     static const char *protocol_info_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1535,8 +1459,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetCurrentConnectionIDs") != nullptr) {
-                    // SED : 串口输出
-                    osal_printk("http收到 GetCurrentConnectionIDs 命令\n");
                     static const char *connection_ids_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1551,7 +1473,6 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (strstr(soap_action_value.data(), "#GetCurrentConnectionInfo") != nullptr) {
-                    osal_printk("http收到 GetCurrentConnectionInfo 命令\n");
                     static const char *connection_info_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1618,7 +1539,6 @@ void dlan::ssdp_ip_get()
     uint32_t ip_host_order = lwip_ntohl(netif_p->ip_addr.u_addr.ip4.addr);
     snprintf(local_ip.data(), sizeof(local_ip), "%u.%u.%u.%u", (ip_host_order >> 24) & 0xFF,
              (ip_host_order >> 16) & 0xFF, (ip_host_order >> 8) & 0xFF, ip_host_order & 0xFF);
-    osal_printk("dlan本地IP=%s\n", local_ip.data());
 }
 
 void dlan::dlan_stop()

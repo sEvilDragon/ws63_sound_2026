@@ -1,3 +1,0 @@
-set(SOURCES "${SOURCES}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/ble.cpp"
-    PARENT_SCOPE)
