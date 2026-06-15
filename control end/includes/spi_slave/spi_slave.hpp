@@ -12,12 +12,10 @@ namespace sed_ws63 {
 /**
  * @brief SPI Slave —— 控制端 SPI_BUS_0 作为从机与接收端通讯
  *
- * 通讯参数(双方统一):
- *  - 帧格式: Motorola SPI, Standard 单线, 8-bit
- *  - CPOL=0, CPHA=0 (Mode 0)
- *  - SSTE 使能(帧间 CS 翻转)
- *  - 全双工 TXRX
- *  - 从模式下 freq_mhz 由主机时钟决定
+ * 参照官方 spi_slave_demo.c:
+ *  - 固定传输长度, tx_bytes == rx_bytes
+ *  - sste = 0, wait_cycles = 0x10
+ *  - 先 slave_read 再 slave_write
  */
 class spi_slave {
 public:
@@ -25,43 +23,26 @@ public:
     ~spi_slave() = default;
 
     /**
-     * @brief 向主机发送一帧数据(含帧头 + 长度 + 载荷)
-     * @param data  载荷数据指针
-     * @param len   载荷字节数 (0~255)
+     * @brief 等待主机数据并回复(阻塞式)
+     * @param rx_data 接收缓冲区
+     * @param rx_len  期望接收字节数(应为 TRANSFER_LEN)
+     * @param tx_data 回复数据
+     * @param tx_len  回复字节数(会填充到 TRANSFER_LEN)
      * @return 0 成功, 非0 失败
      */
-    int send(const uint8_t *data, uint8_t len);
+    int transfer(uint8_t *rx_data, uint32_t rx_len, const uint8_t *tx_data, uint32_t tx_len);
 
-    /**
-     * @brief 从主机读取一帧数据(含帧头 + 长度 + 载荷)
-     * @param data  接收缓冲区
-     * @param max_len 缓冲区最大容量
-     * @return 实际接收到的载荷字节数, 负数表示失败
-     */
-    int recv(uint8_t *data, uint8_t max_len);
-
-    /**
-     * @brief 全双工收发: 发送一帧同时接收一帧
-     * @param tx_data 发送载荷
-     * @param tx_len  发送载荷字节数
-     * @param rx_data 接收缓冲区
-     * @param rx_max  接收缓冲区最大容量
-     * @return 实际接收到的载荷字节数, 负数表示失败
-     */
-    int writeread(const uint8_t *tx_data, uint8_t tx_len, uint8_t *rx_data, uint8_t rx_max);
+    static constexpr uint32_t TRANSFER_LEN = 16; // 固定传输长度
 
 private:
     void pin_init();
     void spi_init();
 
     static constexpr spi_bus_t BUS = SPI_BUS_0;
-    static constexpr uint32_t TIMEOUT = 10000;
+    static constexpr uint32_t TIMEOUT = 0xFFFFFFFF;
 
-    // 帧协议常量
-    static constexpr uint8_t FRAME_HEADER = 0xA5;
-    static constexpr uint8_t FRAME_HDR_SIZE = 2;                             // 帧头(1B) + 长度(1B)
-    static constexpr uint8_t MAX_PAYLOAD = 255;                              // 最大载荷
-    static constexpr uint16_t MAX_FRAME_SIZE = FRAME_HDR_SIZE + MAX_PAYLOAD; // 257
+    uint8_t tx_buffer[TRANSFER_LEN];
+    uint8_t rx_buffer[TRANSFER_LEN];
 };
 
 } // namespace sed_ws63

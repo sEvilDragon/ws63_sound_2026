@@ -12,12 +12,10 @@ namespace sed_ws63 {
 /**
  * @brief SPI Master —— 接收端 SPI_BUS_1 作为主机与控制端通讯
  *
- * 通讯参数(双方统一):
- *  - 帧格式: Motorola SPI, Standard 单线, 8-bit
- *  - CPOL=0, CPHA=0 (Mode 0)
- *  - 时钟: 2MHz (bus_clk=32MHz 分频)
- *  - SSTE 使能(帧间 CS 翻转)
- *  - 全双工 TXRX
+ * 参照官方 spi_master_demo.c:
+ *  - 固定传输长度, tx_bytes == rx_bytes
+ *  - sste = 0, wait_cycles = 0x10
+ *  - 先 master_write 再 master_read
  */
 class spi_master {
 public:
@@ -25,30 +23,16 @@ public:
     ~spi_master() = default;
 
     /**
-     * @brief 向从机发送一帧数据(含帧头 + 长度 + 载荷)
-     * @param data  载荷数据指针
-     * @param len   载荷字节数 (0~255)
+     * @brief 发送数据并接收从机回复(阻塞式)
+     * @param tx_data 发送数据
+     * @param tx_len  发送字节数(会填充到 TRANSFER_LEN)
+     * @param rx_data 接收缓冲区
+     * @param rx_len  期望接收字节数(应为 TRANSFER_LEN)
      * @return 0 成功, 非0 失败
      */
-    int send(const uint8_t *data, uint8_t len);
+    int transfer(const uint8_t *tx_data, uint32_t tx_len, uint8_t *rx_data, uint32_t rx_len);
 
-    /**
-     * @brief 从从机读取一帧数据(含帧头 + 长度 + 载荷)
-     * @param data  接收缓冲区
-     * @param max_len 缓冲区最大容量
-     * @return 实际接收到的载荷字节数, 负数表示失败
-     */
-    int recv(uint8_t *data, uint8_t max_len);
-
-    /**
-     * @brief 全双工收发: 发送一帧同时接收一帧
-     * @param tx_data 发送载荷
-     * @param tx_len  发送载荷字节数
-     * @param rx_data 接收缓冲区
-     * @param rx_max  接收缓冲区最大容量
-     * @return 实际接收到的载荷字节数, 负数表示失败
-     */
-    int writeread(const uint8_t *tx_data, uint8_t tx_len, uint8_t *rx_data, uint8_t rx_max);
+    static constexpr uint32_t TRANSFER_LEN = 16; // 固定传输长度
 
 private:
     void pin_init();
@@ -56,13 +40,10 @@ private:
 
     static constexpr spi_bus_t BUS = SPI_BUS_1;
     static constexpr uint32_t FREQ_MHZ = 2;
-    static constexpr uint32_t TIMEOUT = 10000;
+    static constexpr uint32_t TIMEOUT = 0xFFFFFFFF; // 无限等待
 
-    // 帧协议常量
-    static constexpr uint8_t FRAME_HEADER = 0xA5;
-    static constexpr uint8_t FRAME_HDR_SIZE = 2;                             // 帧头(1B) + 长度(1B)
-    static constexpr uint8_t MAX_PAYLOAD = 255;                              // 最大载荷
-    static constexpr uint16_t MAX_FRAME_SIZE = FRAME_HDR_SIZE + MAX_PAYLOAD; // 257
+    uint8_t tx_buffer[TRANSFER_LEN]; // 预分配发送缓冲
+    uint8_t rx_buffer[TRANSFER_LEN]; // 预分配接收缓冲
 };
 
 } // namespace sed_ws63

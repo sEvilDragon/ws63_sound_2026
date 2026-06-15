@@ -7,21 +7,24 @@ static void *spi_slave_task(void *arg)
 {
     (void)arg;
     static sed_ws63::spi_slave g_spi_slave;
-    osal_printk("[SPI_Slave] 任务启动, 等待主机通讯...\r\n");
+    osal_printk("[SPI_Slave] 任务启动\r\n");
 
-    uint8_t rx_buf[255];
+    uint8_t rx_buf[sed_ws63::spi_slave::TRANSFER_LEN];
+    const char *ack = "ok";
+
     while (true) {
-        // 从模式: 等待主机发起传输
-        int rx_len = g_spi_slave.recv(rx_buf, sizeof(rx_buf));
-        if (rx_len > 0) {
-            osal_printk("[SPI_Slave] 收到 %d 字节数据\r\n", rx_len);
-
-            // 回复确认
-            const char *ack = "ok";
-            g_spi_slave.send((const uint8_t *)ack, 2);
+        // 等待主机数据并回复(固定 16 字节, 参照官方 demo)
+        int ret = g_spi_slave.transfer(rx_buf, sizeof(rx_buf), (const uint8_t *)ack, 2);
+        if (ret == 0) {
+            osal_printk("[SPI_Slave] 收到: ");
+            for (uint32_t i = 0; i < sed_ws63::spi_slave::TRANSFER_LEN; i++) {
+                if (rx_buf[i] >= 0x20 && rx_buf[i] < 0x7F) {
+                    osal_printk("%c", rx_buf[i]);
+                }
+            }
+            osal_printk("\r\n");
         }
-
-        osal_msleep(100); // 100ms 轮询间隔(从模式需频繁检查)
+        osal_msleep(500); // 与 Master 同步周期(参照官方 demo)
     }
     return nullptr;
 }

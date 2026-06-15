@@ -9,18 +9,28 @@ static void *spi_master_task(void *arg)
 {
     (void)arg;
     static sed_ws63::spi_master g_spi_master;
-    osal_printk("[SPI_Master] 任务启动, 开始轮询通讯...\r\n");
+    osal_printk("[SPI_Master] 任务启动\r\n");
 
-    uint8_t rx_buf[255];
+    uint8_t rx_buf[sed_ws63::spi_master::TRANSFER_LEN];
+    const char *msg = "hello";
+
     while (true) {
-        // 示例: 发送数据并接收响应
-        const char *msg = "hello";
-        int rx_len = g_spi_master.writeread((const uint8_t *)msg, 5, rx_buf, sizeof(rx_buf));
-        if (rx_len > 0) {
-            osal_printk("[SPI_Master] 收到 %d 字节响应\r\n", rx_len);
+        // 发送并接收(固定 16 字节, 参照官方 demo)
+        int ret = g_spi_master.transfer((const uint8_t *)msg, 5, rx_buf, sizeof(rx_buf));
+        if (ret == 0) {
+            osal_printk("[SPI_Master] 收到回复 hex: ");
+            for (uint32_t i = 0; i < sed_ws63::spi_master::TRANSFER_LEN; i++) {
+                osal_printk("%02X ", rx_buf[i]);
+            }
+            osal_printk(" (");
+            for (uint32_t i = 0; i < sed_ws63::spi_master::TRANSFER_LEN; i++) {
+                if (rx_buf[i] >= 0x20 && rx_buf[i] < 0x7F) {
+                    osal_printk("%c", rx_buf[i]);
+                }
+            }
+            osal_printk(")\r\n");
         }
-
-        osal_msleep(500); // 500ms 轮询间隔
+        osal_msleep(500);
     }
     return nullptr;
 }
