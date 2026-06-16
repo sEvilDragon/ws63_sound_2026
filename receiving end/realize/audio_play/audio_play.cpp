@@ -1,11 +1,12 @@
 #include "audio_play.hpp"
+#include "spi_task.h"
 
 static void sle_data_process(const uint8_t *data, uint16_t len)
 {
     if (data == nullptr || len % 2 == 1) 
         return;
 
-    iis::data_write((const int16_t *)data, len / sizeof(int16_t));
+    iis::data_write((const int16_t *)data, len / sizeof(int16_t), get_spi_settings()->volume);
     iis::fill_buffer_if_needed();
 }
 

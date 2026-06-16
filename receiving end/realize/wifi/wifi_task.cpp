@@ -1,4 +1,5 @@
 #include "wifi_task.hpp"
+#include "spi_task.h"
 
 namespace {
 // 全新闭环：在wifi_task层直接控制解码推进节奏，不再依赖minimp3内部队列背压。
@@ -30,7 +31,7 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
         osal_msleep(1);
     }
 
-    iis::data_write(data, size);
+    iis::data_write(data, size, get_spi_settings()->volume);
 
     // 低水位补偿：接近见底时插入少量保持帧，避免连续欠载造成静音缝隙。
     queue_level = static_cast<int>(iis::pending_frames);

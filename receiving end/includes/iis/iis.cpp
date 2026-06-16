@@ -9,7 +9,22 @@ std::array<int16_t *, 100> iis::dma_buffers;
 uint8_t iis::dma_channel = 0;
 bool iis::is_ready = false;
 int16_t iis::last_left_sample = 0;
-int16_t iis::last_right_sample = 0;
+int16_t iis::last_right_sample = 0;
+
+const uint16_t iis::volume_gain_table[101] = {
+        0,   110,   116,   123,   130,   138,   146,   155,   164,   174,
+      184,   195,   207,   219,   232,   246,   260,   276,   292,   309,
+      328,   347,   368,   389,   413,   437,   463,   490,   519,   550,
+      583,   617,   654,   693,   734,   777,   823,   872,   923,   978,
+     1036,  1098,  1163,  1232,  1304,  1382,  1464,  1550,  1642,  1740,
+     1843,  1952,  2067,  2190,  2320,  2457,  2603,  2757,  2920,  3093,
+     3277,  3471,  3677,  3894,  4125,  4370,  4628,  4903,  5193,  5501,
+     5827,  6172,  6538,  6925,  7336,  7770,  8231,  8718,  9235,  9782,
+    10362, 10976, 11626, 12315, 13045, 13818, 14636, 15504, 16422, 17395,
+    18426, 19518, 20675, 21900, 23197, 24572, 26028, 27570, 29204, 30934,
+    32767
+};
+
 
 iis::iis()
 {
@@ -214,7 +229,7 @@ void iis::dma_lli_init()
     hal_sio_set_tx_enable(i2s_num, 0);
 }
 
-void iis::data_write(const int16_t *data, uint32_t size)
+void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume)
 {
     // 判断数据大小是否超过缓冲区容量
     if (size % 2 != 0) {
@@ -238,6 +253,13 @@ void iis::data_write(const int16_t *data, uint32_t size)
         uint32_t space = buffer_size - write_offset;      // 当前缓冲区剩余空间
         uint32_t to_copy = (size < space) ? size : space; // 本次要复制的数据量
         memcpy(&dma_buffers[write_idx][write_offset], data, to_copy * sizeof(int16_t));
+        if (volume < 100) {
+            uint16_t gain = volume_gain_table[volume > 100 ? 100 : volume];
+            int16_t *dst = &dma_buffers[write_idx][write_offset];
+            for (uint32_t i = 0; i < to_copy; i++) {
+                dst[i] = (int16_t)(((int32_t)dst[i] * gain) >> 15);
+            }
+        }
         data += to_copy;
         size -= to_copy;
         write_offset += to_copy;

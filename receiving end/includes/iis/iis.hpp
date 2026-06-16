@@ -20,7 +20,7 @@ class iis {
 public:
     iis();
     ~iis();
-    static void data_write(const int16_t *data, uint32_t size);
+    static void data_write(const int16_t *data, uint32_t size, uint8_t volume = 50);
     // 定义清理函数
     static void data_clear();
     static void data_clear_one(int index);
@@ -45,7 +45,9 @@ public:
     static std::array<int16_t *, 100> dma_buffers; // 用于实际读写
     static constexpr uint32_t buffer_size = 960;   // 传输数据大小
     static constexpr uint32_t buffer_num = 60;     // 传输缓冲区数量
-    static constexpr uint16_t cache_size = 32;     // Cache Line大小
+    static constexpr uint16_t cache_size = 32;     // Cache Line大小
+
+    static const uint16_t volume_gain_table[101];
 
     // 定义缓冲区
     static constexpr int prebuffer_num = buffer_num * 0.6;      // 低水位恢复门限，避免长时间停播等待
