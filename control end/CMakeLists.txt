@@ -8,6 +8,7 @@ set(PUBLIC_HEADER "${PUBLIC_HEADER}"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/spi_slave"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/led_test"
+    "${CMAKE_CURRENT_SOURCE_DIR}/realize/spi_task"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/cs43131"
     PARENT_SCOPE
 )
