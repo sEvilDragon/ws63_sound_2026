@@ -2,7 +2,7 @@
 #include "spi_slave.hpp"
 
 static spi_settings_t g_settings = {
-    SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 50, 50, 50};
+    SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
 
 const spi_settings_t *get_spi_settings()
 {

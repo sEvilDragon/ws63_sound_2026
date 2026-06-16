@@ -20,7 +20,7 @@ class iis {
 public:
     iis();
     ~iis();
-    static void data_write(const int16_t *data, uint32_t size, uint8_t volume = 50);
+    static void data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t bass);
     // 定义清理函数
     static void data_clear();
     static void data_clear_one(int index);
@@ -98,6 +98,9 @@ private:
     // 记录最后的左右帧
     static int16_t last_left_sample;
     static int16_t last_right_sample;
+
+    static float biquad_bx1_l, biquad_bx2_l, biquad_by1_l, biquad_by2_l;
+    static float biquad_bx1_r, biquad_bx2_r, biquad_by1_r, biquad_by2_r;
 
     // 源地址（I2S数据寄存器地址，需根据实际情况设置）
     static constexpr uint16_t transfer_size = (uint16_t)buffer_size;         // 传输数据大小

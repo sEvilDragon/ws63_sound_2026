@@ -1,4 +1,5 @@
 #include "iis.hpp"
+#include <cmath>
 
 volatile int iis::write_idx = 0;
 volatile int iis::read_idx = 0;
@@ -9,7 +10,15 @@ std::array<int16_t *, 100> iis::dma_buffers;
 uint8_t iis::dma_channel = 0;
 bool iis::is_ready = false;
 int16_t iis::last_left_sample = 0;
-int16_t iis::last_right_sample = 0;
+int16_t iis::last_right_sample = 0;
+float iis::biquad_bx1_l = 0;
+float iis::biquad_bx2_l = 0;
+float iis::biquad_by1_l = 0;
+float iis::biquad_by2_l = 0;
+float iis::biquad_bx1_r = 0;
+float iis::biquad_bx2_r = 0;
+float iis::biquad_by1_r = 0;
+float iis::biquad_by2_r = 0;
 
 const uint16_t iis::volume_gain_table[101] = {
         0,   110,   116,   123,   130,   138,   146,   155,   164,   174,
@@ -229,30 +238,40 @@ void iis::dma_lli_init()
     hal_sio_set_tx_enable(i2s_num, 0);
 }
 
-void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume)
+void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t bass)
 {
-    // 判断数据大小是否超过缓冲区容量
     if (size % 2 != 0) {
-        // 不是双声道
-        size--; // 丢弃最后一个采样，保持双声道数据对齐
+        size--;
         return;
     }
 
     reduce_buffer_if_needed(size);
 
-    last_left_sample = data[size - 2];
-    last_right_sample = data[size - 1];
+    float bass_b0 = 0, bass_b1 = 0, bass_b2 = 0, bass_a1 = 0, bass_a2 = 0;
+    if (bass > 0) {
+        float A = powf(10.0f, (float)bass * 0.12f / 20.0f);
+        float w0 = 2.0f * 3.14159265f * 150.0f / 44100.0f;
+        float cs = cosf(w0);
+        float sn = sinf(w0);
+        float al = sn / 1.41421356f;
+        float sqA = 2.0f * sqrtf(A) * al;
+        float a0 = (A + 1.0f) + (A - 1.0f) * cs + sqA;
+        bass_b0 = (A * ((A + 1.0f) - (A - 1.0f) * cs + sqA)) / a0;
+        bass_b1 = (2.0f * A * ((A - 1.0f) - (A + 1.0f) * cs)) / a0;
+        bass_b2 = (A * ((A + 1.0f) - (A - 1.0f) * cs - sqA)) / a0;
+        bass_a1 = (-2.0f * ((A - 1.0f) + (A + 1.0f) * cs)) / a0;
+        bass_a2 = ((A + 1.0f) + (A - 1.0f) * cs - sqA) / a0;
+    }
 
     while (size > 0) {
-        // 每次写新槽前检查：若所有槽已满则丢帧，避免越界写入DMA正在读的槽
         if (write_offset == 0 && pending_frames >= (int)buffer_num) {
             return;
         }
 
-        // 计算是否溢出
-        uint32_t space = buffer_size - write_offset;      // 当前缓冲区剩余空间
-        uint32_t to_copy = (size < space) ? size : space; // 本次要复制的数据量
+        uint32_t space = buffer_size - write_offset;
+        uint32_t to_copy = (size < space) ? size : space;
         memcpy(&dma_buffers[write_idx][write_offset], data, to_copy * sizeof(int16_t));
+
         if (volume < 100) {
             uint16_t gain = volume_gain_table[volume > 100 ? 100 : volume];
             int16_t *dst = &dma_buffers[write_idx][write_offset];
@@ -260,21 +279,40 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume)
                 dst[i] = (int16_t)(((int32_t)dst[i] * gain) >> 15);
             }
         }
+
+        if (bass > 0) {
+            int16_t *dst = &dma_buffers[write_idx][write_offset];
+            for (uint32_t i = 0; i < to_copy; i += 2) {
+                float x = (float)dst[i];
+                float y = bass_b0 * x + bass_b1 * biquad_bx1_l + bass_b2 * biquad_bx2_l - bass_a1 * biquad_by1_l - bass_a2 * biquad_by2_l;
+                biquad_bx2_l = biquad_bx1_l; biquad_bx1_l = x;
+                biquad_by2_l = biquad_by1_l; biquad_by1_l = y;
+                if (y > 32767.0f) y = 32767.0f; else if (y < -32768.0f) y = -32768.0f;
+                dst[i] = (int16_t)y;
+                if (i + 1 < to_copy) {
+                    x = (float)dst[i + 1];
+                    y = bass_b0 * x + bass_b1 * biquad_bx1_r + bass_b2 * biquad_bx2_r - bass_a1 * biquad_by1_r - bass_a2 * biquad_by2_r;
+                    biquad_bx2_r = biquad_bx1_r; biquad_bx1_r = x;
+                    biquad_by2_r = biquad_by1_r; biquad_by1_r = y;
+                    if (y > 32767.0f) y = 32767.0f; else if (y < -32768.0f) y = -32768.0f;
+                    dst[i + 1] = (int16_t)y;
+                }
+            }
+        }
+
+        last_left_sample = dma_buffers[write_idx][write_offset + to_copy - 2];
+        last_right_sample = dma_buffers[write_idx][write_offset + to_copy - 1];
+
         data += to_copy;
         size -= to_copy;
         write_offset += to_copy;
 
         if (write_offset >= buffer_size) {
-            // flush cache，让DMA看到最新数据
             osal_dcache_region_clean(dma_buffers[write_idx], buffer_size * sizeof(uint16_t));
-
-            write_offset = 0; // 重置偏移量，准备写入下一个缓冲区
-
-            // 给cpu上锁
+            write_offset = 0;
             uint32_t irq = osal_irq_lock();
             pending_frames++;
             write_idx = (write_idx + 1) % buffer_num;
-            // 预缓冲激活：积累到 prebuffer_num 帧后才开启 I2S TX，避免缓冲不足导致的卡顿
             if (!is_ready && pending_frames >= prebuffer_num) {
                 is_ready = true;
                 hal_sio_set_tx_enable(i2s_num, 1);
@@ -303,6 +341,8 @@ void iis::data_clear()
     write_offset = 0;
     last_left_sample = 0;
     last_right_sample = 0;
+    biquad_bx1_l = biquad_bx2_l = biquad_by1_l = biquad_by2_l = 0;
+    biquad_bx1_r = biquad_bx2_r = biquad_by1_r = biquad_by2_r = 0;
     pending_frames = 0;
     is_ready = false;
     osal_irq_restore(irq);
@@ -332,7 +372,7 @@ void iis::fill_buffer_if_needed()
             fill_data[i * 2] = last_left_sample;
             fill_data[i * 2 + 1] = last_right_sample;
         }
-        data_write(fill_data.data(), if_small_num * 2);
+        data_write(fill_data.data(), if_small_num * 2, 100, 0);
     }
 }
 
