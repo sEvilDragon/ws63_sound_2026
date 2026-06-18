@@ -4,8 +4,11 @@
 namespace sed_ws63 {
 
 // 默认激活iic1
-iic_master::iic_master(pin_t scl, pin_t sda) : scl_pin(scl), sda_pin(sda)
+iic_master::iic_master(pin_t scl, pin_t sda, bool init_bus) : scl_pin(scl), sda_pin(sda)
 {
+    if (!init_bus) {
+        return;
+    }
     // 初始化iic
     iic_pin_init();
     errcode_t ret = uapi_i2c_master_init(I2C_BUS_1, 100000, 0); // GPIO_15/16 + PIN_MODE_2 → I2C_BUS_1
@@ -24,7 +27,7 @@ void iic_master::iic_pin_init()
     uapi_pin_set_pull(sda_pin, PIN_PULL_TYPE_UP);
 }
 
-void iic_master::iic_master_write(uint8_t *data, uint8_t len, uint16_t addr)
+bool iic_master::iic_master_write(uint8_t *data, uint8_t len, uint16_t addr)
 {
     // 基本iic写入代码
     i2c_data_t data_{};
@@ -33,10 +36,12 @@ void iic_master::iic_master_write(uint8_t *data, uint8_t len, uint16_t addr)
     errcode_t err = uapi_i2c_master_write(I2C_BUS_1, addr, &data_);
     if (err != 0) {
         osal_printk("I2C 写入错误: %d\n", err);
+        return false;
     }
+    return true;
 }
 
-void iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *data_res, uint8_t len_res, uint16_t addr)
+bool iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *data_res, uint8_t len_res, uint16_t addr)
 {
     // 基本iic读取代码
     i2c_data_t data_{};
@@ -47,7 +52,9 @@ void iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *da
     errcode_t err = uapi_i2c_master_writeread(I2C_BUS_1, addr, &data_);
     if (err != 0) {
         osal_printk("I2C 读取错误: %d\n", err);
+        return false;
     }
+    return true;
 }
 
 } // namespace sed_ws63

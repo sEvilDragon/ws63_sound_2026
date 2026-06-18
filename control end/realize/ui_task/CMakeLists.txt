@@ -1,0 +1,3 @@
+set(SOURCES "${SOURCES}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ui_task.cpp"
+    PARENT_SCOPE)

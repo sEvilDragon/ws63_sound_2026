@@ -16,10 +16,10 @@ private:
     pin_t sda_pin;
 
 public:
-    iic_master(pin_t scl, pin_t sda);
+    iic_master(pin_t scl, pin_t sda, bool init_bus = true);
     ~iic_master() = default;
-    void iic_master_write(uint8_t *data, uint8_t len, uint16_t addr);
-    void iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *data_res, uint8_t len_res, uint16_t addr);
+    bool iic_master_write(uint8_t *data, uint8_t len, uint16_t addr);
+    bool iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *data_res, uint8_t len_res, uint16_t addr);
 
 private:
     // iic相关激活函数
