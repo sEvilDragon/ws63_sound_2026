@@ -166,12 +166,6 @@ static void handle_main_mode(void)
 {
     const ttp_state_t *t = ttp_get_state();
 
-    if (g_press_edge & (1u << TTP_FUNC_IDX_C)) {
-        toggle_hotspot();
-        reset_long_press();
-        return;
-    }
-
     if (t->slider_pos != TTP_SLIDER_NO_POS) {
         // 新触碰: 上一轮未设 anchor 或已释放, 现在重新设定
         if (!g_ui.swipe.anchor_valid) {
@@ -218,21 +212,6 @@ static void handle_main_mode(void)
 static void handle_config_mode(void)
 {
     const ttp_state_t *t = ttp_get_state();
-
-    if (g_press_edge & (1u << TTP_FUNC_IDX_B)) {
-        g_ui.target = (ui_config_target_t)(((int)g_ui.target + 1) % UI_TARGET_COUNT);
-        osal_printk("[UI] config target -> %s\r\n", target_name(g_ui.target));
-        reset_long_press();
-        reset_slider();
-        reset_swipe();
-        return;
-    }
-
-    if (g_press_edge & (1u << TTP_FUNC_IDX_C)) {
-        toggle_hotspot();
-        reset_long_press();
-        return;
-    }
 
     if (t->slider_pos != TTP_SLIDER_NO_POS) {
         // 首次触碰: 记录锚点, 不产生增量
@@ -300,9 +279,26 @@ static void ui_tick(void)
     g_press_edge = ttp_consume_press_latch();
     g_release_edge = ttp_consume_release_latch();
 
-    const ttp_state_t *t = ttp_get_state();
+    bool key_a = (g_press_edge & (1u << TTP_FUNC_IDX_A)) != 0;
+    bool key_b = (g_press_edge & (1u << TTP_FUNC_IDX_B)) != 0;
+    bool key_c = (g_press_edge & (1u << TTP_FUNC_IDX_C)) != 0;
 
-    if (g_press_edge & (1u << TTP_FUNC_IDX_A)) {
+    // 功能键优先级: B(target切换) > A(模式切换) > C(热点)
+    // A 容易误触, 降到 B 之后; 同时按 A+B 时仅 B 生效
+    // C 只有 A/B 都没按下时才生效
+    if (key_b) {
+        // B 在 MAIN 模式无功能, 仅在 CONFIG 下切 target
+        if (g_ui.mode == UI_CONFIG) {
+            g_ui.target = (ui_config_target_t)(((int)g_ui.target + 1) % UI_TARGET_COUNT);
+            osal_printk("[UI] config target -> %s\r\n", target_name(g_ui.target));
+            reset_long_press();
+            reset_slider();
+            reset_swipe();
+        }
+        return;
+    }
+
+    if (key_a) {
         if (g_ui.mode == UI_MAIN) {
             g_ui.mode = UI_CONFIG;
             g_ui.target = UI_TARGET_MODE;
@@ -317,6 +313,14 @@ static void ui_tick(void)
         return;
     }
 
+    if (key_c) {
+        // C 优先级最低: 仅 A/B 都未按下时才触发
+        toggle_hotspot();
+        reset_long_press();
+        return;
+    }
+
+    // 无功能键按下 → 处理滑条
     if (g_ui.mode == UI_MAIN)
         handle_main_mode();
     else

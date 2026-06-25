@@ -166,22 +166,74 @@ bool ttp229::is_pad_touched(uint16_t raw, int pad_number)
     return (raw & (1u << (pad_number - 1))) != 0;
 }
 
-int ttp229::compute_slider_position(uint16_t raw) const
+int ttp229::compute_slider_position(uint16_t raw)
 {
-    // 加权质心算法: 对所有被按下的滑块 pad 按其逻辑索引 (0..7) 做加权平均,
-    // 结果放大 TTP_SLIDER_SCALE 倍 (×100), 范围 0..700.
-    // 相邻 pad 同时激活时得到的是平滑插值, 不会像 rightmost-peak 那样回跳.
-    int sum_index = 0;
-    int count = 0;
+    // 最大连续段算法: 找到 PAD_SLIDER 索引中连续被按下的最长一段,
+    // 取其质心。非连续位置的孤立触发（如手指在右边但左边 pad 也被意外桥接）
+    // 会被自动忽略, 不会把质心拖偏。
+    //
+    // 平局规则: 优先选离上次位置 (m_last_pos) 最近的段;
+    // 若无上次位置, 选最右段 (手指更可能在右边)。
+    bool active[TTP_SLIDER_PADS_COUNT];
     for (int i = 0; i < TTP_SLIDER_PADS_COUNT; i++) {
-        if (is_pad_touched(raw, PAD_SLIDER[i])) {
-            sum_index += i;
-            count++;
+        active[i] = is_pad_touched(raw, PAD_SLIDER[i]);
+    }
+
+    int best_start = -1;
+    int best_len = 0;
+    int run_start = -1;
+    int run_len = 0;
+
+    auto pick_best = [&](int start, int len) {
+        if (len > best_len) {
+            best_start = start;
+            best_len = len;
+        } else if (len == best_len && len > 0) {
+            // 平局: 优先选离上次位置更近的段
+            int prev_idx = (m_last_pos >= 0) ? m_last_pos / TTP_SLIDER_SCALE : -1;
+            if (prev_idx >= 0) {
+                int dist_new = (start + len / 2) - prev_idx;
+                int dist_best = (best_start + best_len / 2) - prev_idx;
+                if (dist_new < 0)
+                    dist_new = -dist_new;
+                if (dist_best < 0)
+                    dist_best = -dist_best;
+                if (dist_new < dist_best) {
+                    best_start = start;
+                    best_len = len;
+                }
+            } else {
+                // 无历史位置, 选最右 (手指更可能在右边)
+                if (start > best_start) {
+                    best_start = start;
+                    best_len = len;
+                }
+            }
+        }
+    };
+
+    for (int i = 0; i < TTP_SLIDER_PADS_COUNT; i++) {
+        if (active[i]) {
+            if (run_start < 0)
+                run_start = i;
+            run_len++;
+        } else {
+            pick_best(run_start, run_len);
+            run_start = -1;
+            run_len = 0;
         }
     }
-    if (count == 0)
+    pick_best(run_start, run_len); // 末尾段
+
+    if (best_len == 0)
         return TTP_SLIDER_NO_POS;
-    return (sum_index * TTP_SLIDER_SCALE) / count;
+
+    // 最大连续段质心
+    int sum_index = 0;
+    for (int i = best_start; i < best_start + best_len; i++) {
+        sum_index += i;
+    }
+    return (sum_index * TTP_SLIDER_SCALE) / best_len;
 }
 
 void ttp229::process_slider(uint16_t raw)
@@ -200,6 +252,7 @@ void ttp229::process_slider(uint16_t raw)
         m_history_idx = 0;
         m_ticks_since_change = 0;
         m_was_active = false;
+        m_last_pos = TTP_SLIDER_NO_POS; // 抬手清零, 避免下次段选择被旧位置误导
         m_state.slider_direction = TTP_SWIPE_NONE;
         m_state.slider_speed = 0;
         return;

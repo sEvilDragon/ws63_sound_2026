@@ -55,8 +55,8 @@ private:
     static constexpr int SLIDER_HISTORY_SIZE = 8;
     static constexpr uint32_t SPEED_DECAY_TICKS = 500;
     static constexpr int FUNC_DEBOUNCE_TICKS = 2;
-    // 状态翻转后保持该帧数不接受反向变化, 防止 brief touch 被误释放
-    static constexpr int FUNC_HOLD_TICKS = 20;
+    // 状态翻转后短暂忽略反向抖动 (~100ms @33ms 扫描周期)
+    static constexpr int FUNC_HOLD_TICKS = 3;
 
     bool m_healthy;
     ttp_state_t m_state;
@@ -79,7 +79,7 @@ private:
 
     void process_slider(uint16_t raw);
     void process_function_keys(uint16_t raw);
-    int compute_slider_position(uint16_t raw) const;
+    int compute_slider_position(uint16_t raw);
     static bool is_pad_touched(uint16_t raw, int pad_number);
 };
 
