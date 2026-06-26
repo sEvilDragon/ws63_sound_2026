@@ -54,6 +54,7 @@ static void cycle_mode(int dir)
     idx = (idx + dir + 3) % 3;
     s->mode = MODE_LIST[idx];
     osal_printk("[UI] mode -> %s (%u)\r\n", mode_name(s->mode), (unsigned)s->mode);
+    nv_mark_dirty();
 }
 
 static void set_value_with_log(ui_config_target_t target, int new_val)
@@ -83,6 +84,7 @@ static void set_value_with_log(ui_config_target_t target, int new_val)
     if ((int)*p != new_val) {
         *p = (uint8_t)new_val;
         osal_printk("[UI] %s -> %d\r\n", name, new_val);
+        nv_mark_dirty();
     }
 }
 
@@ -109,6 +111,7 @@ static void toggle_hotspot(void)
     uint8_t new_hs = (hs == SPI_HOTSPOT_ON) ? SPI_HOTSPOT_OFF : SPI_HOTSPOT_ON;
     s->hotspot_network = spi_make_hotspot_network(new_hs, nw);
     osal_printk("[UI] hotspot -> %s\r\n", new_hs == SPI_HOTSPOT_ON ? "ON" : "OFF");
+    nv_mark_dirty();
 }
 
 static int detect_side(int pos)
@@ -233,6 +236,7 @@ static void handle_config_mode(void)
                     s->mode = new_mode;
                     osal_printk("[UI] mode -> %s (%u) (slider pos %d.%02d)\r\n", mode_name(s->mode), (unsigned)s->mode,
                                 t->slider_pos / TTP_SLIDER_SCALE, t->slider_pos % TTP_SLIDER_SCALE);
+                    nv_mark_dirty();
                 }
             } else {
                 // ★ 鼠标滚轮式相对滑动 ★
@@ -339,6 +343,7 @@ void *ui_task(void *arg)
 
     while (true) {
         sed_ws63::ui_tick();
+        nv_flush_if_idle();
         osal_msleep(5);
     }
     return nullptr;
