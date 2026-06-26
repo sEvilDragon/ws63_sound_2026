@@ -2,7 +2,7 @@
 #include "minimp3.hpp"
 dlan::dlan() {}
 
-// ³õÊ¼»¯¾²Ì¬³ÉÔ±±äÁ¿
+// ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½Ì¬ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ï¿½
 std::array<char, 16> dlan::local_ip = {0};
 bool dlan::is_ready = false;
 int32_t dlan::ssdp_sock = -1;
@@ -12,6 +12,7 @@ dlan::media_play_handler dlan::media_play_handler_func = nullptr;
 dlan::media_pause_handler dlan::media_pause_handler_func = nullptr;
 dlan::media_stop_handler dlan::media_stop_handler_func = nullptr;
 dlan::media_seek_handler dlan::media_seek_handler_func = nullptr;
+volatile bool dlan::s_stop_requested = false;
 
 void dlan::register_media_set_uri_handler(media_set_uri_handler handler)
 {
@@ -50,7 +51,7 @@ uint32_t g_playback_elapsed_base_sec = 0;
 unsigned long long g_playback_started_jiffies = 0;
 } // namespace
 
-// ¶¨ÒåÈ«¾Ö´«Êä×´Ì¬¾²Ì¬³ÉÔ±
+// ï¿½ï¿½ï¿½ï¿½È«ï¿½Ö´ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½Ì¬ï¿½ï¿½Ô±
 std::array<char, 32> dlan::g_transport_state = {"STOPPED"};
 
 namespace {
@@ -62,13 +63,13 @@ bool send_http_notify_request(const char *callback_url, const char *sid, uint32_
 
     simple_http_url url;
     if (!parse_http_url(callback_url, url)) {
-        osal_printk("NOTIFY URL½âÎöÊ§°Ü: %s\n", callback_url);
+        osal_printk("NOTIFY URLï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: %s\n", callback_url);
         return false;
     }
 
     int32_t sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        osal_printk("NOTIFY socket´´½¨Ê§°Ü\n");
+        osal_printk("NOTIFY socketï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         return false;
     }
 
@@ -80,13 +81,13 @@ bool send_http_notify_request(const char *callback_url, const char *sid, uint32_
     addr.sin_family = AF_INET;
     addr.sin_port = lwip_htons(url.port);
     if (!resolve_ipv4_addr(url.host.data(), &addr.sin_addr)) {
-        osal_printk("NOTIFYÖ÷»ú½âÎöÊ§°Ü: %s\n", url.host.data());
+        osal_printk("NOTIFYï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: %s\n", url.host.data());
         lwip_close(sock);
         return false;
     }
 
     if (connect(sock, (sockaddr *)&addr, sizeof(addr)) != 0) {
-        osal_printk("NOTIFYÁ¬½ÓÊ§°Ü: %s:%u\n", url.host.data(), url.port);
+        osal_printk("NOTIFYï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: %s:%u\n", url.host.data(), url.port);
         lwip_close(sock);
         return false;
     }
@@ -112,7 +113,7 @@ bool send_http_notify_request(const char *callback_url, const char *sid, uint32_
 
     int ret = lwip_send(sock, request.data(), request_len, 0);
     if (ret <= 0) {
-        osal_printk("NOTIFY·¢ËÍÊ§°Ü\n");
+        osal_printk("NOTIFYï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         lwip_close(sock);
         return false;
     }
@@ -223,7 +224,7 @@ bool is_mp3_candidate_from_uri_or_metadata(const char *uri, const char *metadata
         return true;
     }
 
-    // ÎÞÔªÊý¾ÝÇÒURLÒ²²»´øÀ©Õ¹Ê±·ÅÐÐ£¬±ÜÃâÎóÉ±Ç©ÃûÖ±Á´¡£
+    // ï¿½ï¿½Ôªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½URLÒ²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¹Ê±ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É±Ç©ï¿½ï¿½Ö±ï¿½ï¿½ï¿½ï¿½
     return true;
 }
 
@@ -249,7 +250,7 @@ bool notify_avtransport_state(const char *state)
              state);
 
     bool ok = send_http_notify_request(g_avt_callback.data(), g_avt_sid.data(), g_avt_seq++, body.data());
-    osal_printk("AVTransport NOTIFY(%s): %s\n", state, ok ? "³É¹¦" : "Ê§°Ü");
+    osal_printk("AVTransport NOTIFY(%s): %s\n", state, ok ? "ï¿½É¹ï¿½" : "Ê§ï¿½ï¿½");
     return ok;
 }
 
@@ -277,7 +278,7 @@ bool notify_renderingcontrol_state(uint8_t volume, bool mute)
 
     bool ok = send_http_notify_request(g_rc_callback.data(), g_rc_sid.data(), g_rc_seq++, body.data());
     osal_printk("RenderingControl NOTIFY(volume=%u,mute=%u): %s\n", static_cast<unsigned int>(volume), mute ? 1U : 0U,
-                ok ? "³É¹¦" : "Ê§°Ü");
+                ok ? "ï¿½É¹ï¿½" : "Ê§ï¿½ï¿½");
     return ok;
 }
 
@@ -326,7 +327,7 @@ void log_avtransport_soap_payload(const char *action_name, const char *body_star
     osal_printk("AVTransport SOAP[%s]: InstanceID=%s Unit=%s Target=%s Speed=%s\n", action_name,
                 instance_id[0] != '\0' ? instance_id.data() : "-", unit[0] != '\0' ? unit.data() : "-",
                 target[0] != '\0' ? target.data() : "-", speed[0] != '\0' ? speed.data() : "-");
-    osal_printk("AVTransport SOAPÔ¤ÀÀ[%s]: %s\n", action_name, preview.data());
+    osal_printk("AVTransport SOAPÔ¤ï¿½ï¿½[%s]: %s\n", action_name, preview.data());
 }
 
 void xml_escape_basic(const char *src, char *dst, size_t dst_size)
@@ -452,13 +453,13 @@ bool stream_probe_once(const char *uri)
 
     simple_http_url url;
     if (!parse_http_url(uri, url)) {
-        osal_printk("À­Á÷URL½âÎöÊ§°Ü: %s\n", uri);
+        osal_printk("ï¿½ï¿½ï¿½ï¿½URLï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: %s\n", uri);
         return false;
     }
 
     int32_t sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        osal_printk("À­Á÷socket´´½¨Ê§°Ü\n");
+        osal_printk("ï¿½ï¿½ï¿½ï¿½socketï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         return false;
     }
 
@@ -470,13 +471,13 @@ bool stream_probe_once(const char *uri)
     addr.sin_family = AF_INET;
     addr.sin_port = lwip_htons(url.port);
     if (!resolve_ipv4_addr(url.host.data(), &addr.sin_addr)) {
-        osal_printk("À­Á÷Ö÷»ú½âÎöÊ§°Ü: %s\n", url.host.data());
+        osal_printk("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: %s\n", url.host.data());
         lwip_close(sock);
         return false;
     }
 
     if (connect(sock, (sockaddr *)&addr, sizeof(addr)) != 0) {
-        osal_printk("À­Á÷Á¬½ÓÊ§°Ü: %s:%u\n", url.host.data(), url.port);
+        osal_printk("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: %s:%u\n", url.host.data(), url.port);
         lwip_close(sock);
         return false;
     }
@@ -494,7 +495,7 @@ bool stream_probe_once(const char *uri)
     }
 
     if (lwip_send(sock, request.data(), request_len, 0) <= 0) {
-        osal_printk("À­Á÷GET·¢ËÍÊ§°Ü\n");
+        osal_printk("ï¿½ï¿½ï¿½ï¿½GETï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         lwip_close(sock);
         return false;
     }
@@ -504,7 +505,7 @@ bool stream_probe_once(const char *uri)
     lwip_close(sock);
 
     if (recv_len <= 0) {
-        osal_printk("À­Á÷Ê×°ü½ÓÊÕÊ§°Ü\n");
+        osal_printk("ï¿½ï¿½ï¿½ï¿½ï¿½×°ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         return false;
     }
 
@@ -562,7 +563,7 @@ bool dlan::ssdp_send_msearch_reply(const sockaddr_in &client_addr,
     int32_t send_ret =
         sendto(ssdp_sock, response.data(), strlen(response.data()), 0, (const sockaddr *)&client_addr, client_addr_len);
     if (send_ret < 0) {
-        osal_printk("ssdpÏìÓ¦·¢ËÍÊ§°Ü(ST=%s)\n", st);
+        osal_printk("ssdpï¿½ï¿½Ó¦ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½(ST=%s)\n", st);
         return false;
     }
 
@@ -571,23 +572,23 @@ bool dlan::ssdp_send_msearch_reply(const sockaddr_in &client_addr,
 
 void dlan::ssdp_and_http_scan()
 {
-    while (!is_ready) {
-        // µÈ´ýÍøÂç×¼±¸¾ÍÐ÷£¬»ñÈ¡±¾µØIPµØÖ·µÈÐÅÏ¢
+    while (!is_ready && !s_stop_requested) {
+        // ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½IPï¿½ï¿½Ö·ï¿½ï¿½ï¿½ï¿½Ï¢
         osal_msleep(100);
     }
-    // WiFiÁ¬½Ó³É¹¦²¢²»´ú±íDHCPÒÑÍê³É£¬µÈ´ýÄÃµ½ÓÐÐ§IPÔÙÆô¶¯DLNA¡£
+    // WiFiï¿½ï¿½ï¿½Ó³É¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½DHCPï¿½ï¿½ï¿½ï¿½É£ï¿½ï¿½È´ï¿½ï¿½Ãµï¿½ï¿½ï¿½Ð§IPï¿½ï¿½ï¿½ï¿½ï¿½ï¿½DLNAï¿½ï¿½
     while (true) {
         ssdp_ip_get();
         if (strcmp(local_ip.data(), "0.0.0.0") != 0) {
             break;
         }
-        osal_printk("dlanµÈ´ýÓÐÐ§IPÖÐ...\n");
+        osal_printk("dlanï¿½È´ï¿½ï¿½ï¿½Ð§IPï¿½ï¿½...\n");
         osal_msleep(500);
     }
-    // ½¨Á¢SSDP£¨UDP£©Ì×½Ó×Ö
+    // ï¿½ï¿½ï¿½ï¿½SSDPï¿½ï¿½UDPï¿½ï¿½ï¿½×½ï¿½ï¿½ï¿½
     ssdp_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (ssdp_sock < 0) {
-        osal_printk("ssdp½ø³ÌÆô¶¯Ê§°Ü\n");
+        osal_printk("ssdpï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         return;
     }
     if (!ssdp_set()) {
@@ -595,10 +596,10 @@ void dlan::ssdp_and_http_scan()
         return;
     }
 
-    // ½¨Á¢HTTP£¨TCP£©Ì×½Ó×Ö
+    // ï¿½ï¿½ï¿½ï¿½HTTPï¿½ï¿½TCPï¿½ï¿½ï¿½×½ï¿½ï¿½ï¿½
     http_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (http_sock < 0) {
-        osal_printk("http½ø³ÌÆô¶¯Ê§°Ü\n");
+        osal_printk("httpï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         dlan_stop();
         return;
     }
@@ -607,22 +608,24 @@ void dlan::ssdp_and_http_scan()
         return;
     }
 
-    // SED : ´®¿ÚÊä³ö
-    osal_printk("dlanÆô¶¯³É¹¦£¬local_ip=%s, ssdp=%d, http=%d\n", local_ip.data(), ssdp_sock, http_sock);
+    // SED : ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    osal_printk("dlanï¿½ï¿½ï¿½ï¿½ï¿½É¹ï¿½ï¿½ï¿½local_ip=%s, ssdp=%d, http=%d\n", local_ip.data(), ssdp_sock, http_sock);
 
     fd_set read_fds;
     memset(&read_fds, 0, sizeof(read_fds));
     int max_fd = (ssdp_sock > http_sock) ? ssdp_sock : http_sock;
 
-    while (true) {
+    while (!s_stop_requested) {
         memset(&read_fds, 0, sizeof(read_fds));
-        FD_SET(ssdp_sock, &read_fds); // °Ñ UDP ¼à¿Ø¼Ó½øÈ¥
-        FD_SET(http_sock, &read_fds); // °Ñ TCP ¼à¿Ø¼Ó½øÈ¥
+        FD_SET(ssdp_sock, &read_fds); // ï¿½ï¿½ UDP ï¿½ï¿½Ø¼Ó½ï¿½È¥
+        FD_SET(http_sock, &read_fds); // ï¿½ï¿½ TCP ï¿½ï¿½Ø¼Ó½ï¿½È¥
 
-        int ret = lwip_select(max_fd + 1, &read_fds, nullptr, nullptr, nullptr);
+        timeval tv = {1, 0};
+        int ret = lwip_select(max_fd + 1, &read_fds, nullptr, nullptr, &tv);
 
+        if (s_stop_requested) break;
         if (ret < 0) {
-            osal_printk("select³ö´í\n");
+            osal_printk("selectï¿½ï¿½ï¿½ï¿½\n");
             continue;
         }
 
@@ -633,6 +636,9 @@ void dlan::ssdp_and_http_scan()
             http_process();
         }
     }
+
+    dlan_stop();
+    osal_printk("[DLNA] exited\r\n");
 }
 
 bool dlan::ssdp_set()
@@ -641,10 +647,10 @@ bool dlan::ssdp_set()
     int32_t reuse = 1;
 
     if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-        osal_printk("ssdpÌ×½Ó×ÖÉèÖÃSO_REUSEADDRÊ§°Ü\n");
+        osal_printk("ssdpï¿½×½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½SO_REUSEADDRÊ§ï¿½ï¿½\n");
     }
 
-    // ÅäÖÃSSDPÌ×½Ó×Ö
+    // ï¿½ï¿½ï¿½ï¿½SSDPï¿½×½ï¿½ï¿½ï¿½
     sockaddr_in ssdp_addr = {0};
     ssdp_addr.sin_family = AF_INET;
     ssdp_addr.sin_addr.s_addr = INADDR_ANY;
@@ -652,18 +658,18 @@ bool dlan::ssdp_set()
 
     errcode_t ret = bind(sock, (sockaddr *)&ssdp_addr, sizeof(ssdp_addr));
     if (ret != 0) {
-        osal_printk("ssdpÌ×½Ó×Ö°ó¶¨Ê§°Ü\n");
+        osal_printk("ssdpï¿½×½ï¿½ï¿½Ö°ï¿½Ê§ï¿½ï¿½\n");
         lwip_close(sock);
         ssdp_sock = -1;
         return false;
     }
 
-    // ¼ÓÈë¶à²¥×é
+    // ï¿½ï¿½ï¿½ï¿½à²¥ï¿½ï¿½
     ip_mreq mreq = {0};
     mreq.imr_multiaddr.s_addr = inet_addr(mcast_ip.data());
     mreq.imr_interface.s_addr = INADDR_ANY;
     if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-        osal_printk("ssdpÌ×½Ó×Ö¼ÓÈë¶à²¥×éÊ§°Ü\n");
+        osal_printk("ssdpï¿½×½ï¿½ï¿½Ö¼ï¿½ï¿½ï¿½à²¥ï¿½ï¿½Ê§ï¿½ï¿½\n");
         lwip_close(sock);
         ssdp_sock = -1;
         return false;
@@ -678,33 +684,33 @@ bool dlan::http_set()
     int32_t reuse = 1;
 
     if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-        osal_printk("httpÌ×½Ó×ÖÉèÖÃSO_REUSEADDRÊ§°Ü\n");
+        osal_printk("httpï¿½×½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½SO_REUSEADDRÊ§ï¿½ï¿½\n");
     }
 
-    // ÅäÖÃHTTPÌ×½Ó×Ö
+    // ï¿½ï¿½ï¿½ï¿½HTTPï¿½×½ï¿½ï¿½ï¿½
     sockaddr_in http_addr = {0};
     http_addr.sin_family = AF_INET;
     http_addr.sin_addr.s_addr = INADDR_ANY;
     http_addr.sin_port = lwip_htons(http_port);
     errcode_t ret = bind(sock, (sockaddr *)&http_addr, sizeof(http_addr));
     if (ret != 0) {
-        osal_printk("httpÌ×½Ó×Ö°ó¶¨Ê§°Ü\n");
+        osal_printk("httpï¿½×½ï¿½ï¿½Ö°ï¿½Ê§ï¿½ï¿½\n");
         lwip_close(sock);
         http_sock = -1;
         return false;
     }
 
-    // µ÷ÓÃlistenº¯Êý¼àÌýHTTPÌ×½Ó×Ö£¬ÉèÖÃ×î´óÁ¬½ÓÊýÎª2
+    // ï¿½ï¿½ï¿½ï¿½listenï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½HTTPï¿½×½ï¿½ï¿½Ö£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îª2
     ret = listen(sock, 2);
     if (ret != 0) {
-        osal_printk("httpÌ×½Ó×Ö¼àÌýÊ§°Ü\n");
+        osal_printk("httpï¿½×½ï¿½ï¿½Ö¼ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         lwip_close(sock);
         http_sock = -1;
         return false;
     }
 
-    // SED : ´®¿ÚÊä³ö
-    osal_printk("http¼àÌýÒÑÆô¶¯£¬¶Ë¿Ú=%u\n", http_port);
+    // SED : ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    osal_printk("httpï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ë¿ï¿½=%u\n", http_port);
 
     return true;
 }
@@ -712,22 +718,22 @@ bool dlan::http_set()
 void dlan::ssdp_process()
 {
     int32_t sock = ssdp_sock;
-    static std::array<char, 1024> buffer; // SSDP½ÓÊÕ»º³åÇø
-    sockaddr_in client_addr = {0};        // ¼ÇÂ¼SSDPÏûÏ¢À´Ô´
+    static std::array<char, 1024> buffer; // SSDPï¿½ï¿½ï¿½Õ»ï¿½ï¿½ï¿½ï¿½ï¿½
+    sockaddr_in client_addr = {0};        // ï¿½ï¿½Â¼SSDPï¿½ï¿½Ï¢ï¿½ï¿½Ô´
     socklen_t client_addr_len = sizeof(client_addr);
 
     int ret = recvfrom(sock, buffer.data(), buffer.size() - 1, 0, (sockaddr *)&client_addr, &client_addr_len);
 
     if (ret < 0) {
-        osal_printk("ssdpÊý¾Ý½ÓÊÕÊ§°Ü\n");
+        osal_printk("ssdpï¿½ï¿½ï¿½Ý½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         return;
     }
 
     buffer[ret] = '\0';
 
-    // ´¦Àí M-SEARCH ËÑË÷±¨ÎÄ
+    // ï¿½ï¿½ï¿½ï¿½ M-SEARCH ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     bool is_msearch = strstr(buffer.data(), "M-SEARCH") != nullptr;
-    // ´¦Àí NOTIFY ¹ã²¥Í¨Öª£¨ÎÒÃÇÖ»ÐèÒªºöÂÔËü£¬²»µ±×÷´íÎó£©
+    // ï¿½ï¿½ï¿½ï¿½ NOTIFY ï¿½ã²¥Í¨Öªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö»ï¿½ï¿½Òªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     bool is_notify = strstr(buffer.data(), "NOTIFY") != nullptr;
 
     if (is_msearch) {
@@ -800,9 +806,9 @@ void dlan::ssdp_process()
             ssdp_send_msearch_reply(client_addr, client_addr_len, st_value.data(), st_value.data());
         }
     } else if (is_notify) {
-        // ÕâÊÇ±ðÈË·¢³öµÄ¹ã²¥£¨ÈçÂ·ÓÉÆ÷µÄ alive Ðû¸æ£©£¬Ö±½ÓºöÂÔ²»´òÓ¡
+        // ï¿½ï¿½ï¿½Ç±ï¿½ï¿½Ë·ï¿½ï¿½ï¿½ï¿½Ä¹ã²¥ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ alive ï¿½ï¿½ï¿½æ£©ï¿½ï¿½Ö±ï¿½Óºï¿½ï¿½Ô²ï¿½ï¿½ï¿½Ó¡
     } else {
-        osal_printk("ssdpÊÕµ½Î´ÖªÏûÏ¢Ô­ÎÄ:\n%s\n", buffer.data());
+        osal_printk("ssdpï¿½Õµï¿½Î´Öªï¿½ï¿½Ï¢Ô­ï¿½ï¿½:\n%s\n", buffer.data());
     }
 }
 
@@ -816,16 +822,16 @@ void dlan::http_process()
 
     int32_t client_sock = lwip_accept(sock, (sockaddr *)&client_addr, &client_addr_len);
     if (client_sock < 0) {
-        osal_printk("http½ÓÊÜÁ¬½ÓÊ§°Ü\n");
+        osal_printk("httpï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         return;
     }
 
     uint32_t peer_ip = lwip_ntohl(client_addr.sin_addr.s_addr);
 
-    static std::array<char, 2048> buffer; // HTTP½ÓÊÕ»º³åÇø
+    static std::array<char, 2048> buffer; // HTTPï¿½ï¿½ï¿½Õ»ï¿½ï¿½ï¿½ï¿½ï¿½
     errcode_t ret = lwip_recv(client_sock, buffer.data(), buffer.size() - 1, 0);
     if (ret <= 0) {
-        osal_printk("httpÊý¾Ý½ÓÊÕÊ§°Ü\n");
+        osal_printk("httpï¿½ï¿½ï¿½Ý½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½\n");
         lwip_close(client_sock);
         return;
     }
@@ -837,7 +843,7 @@ void dlan::http_process()
         body_start = body_separator + 4;
     }
 
-    // ¡¾ÐÂÔö¡¿´¦Àí SUBSCRIBE ÊÂ¼þ¶©ÔÄÇëÇó
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ SUBSCRIBE ï¿½Â¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     if (strstr(buffer.data(), "SUBSCRIBE") != nullptr) {
         std::array<char, 256> sid_value = {0};
         std::array<char, 256> callback_value = {0};
@@ -862,7 +868,7 @@ void dlan::http_process()
                 copy_string_safe(g_avt_callback.data(), g_avt_callback.size(), callback_value.data());
             }
             g_avt_seq = 0;
-            osal_printk("AVTransport¶©ÔÄ: SID=%s CALLBACK=%s\n", g_avt_sid.data(), g_avt_callback.data());
+            osal_printk("AVTransportï¿½ï¿½ï¿½ï¿½: SID=%s CALLBACK=%s\n", g_avt_sid.data(), g_avt_callback.data());
         } else if (is_rendering_event) {
             if (has_sid && sid_value[0] != '\0') {
                 copy_string_safe(g_rc_sid.data(), g_rc_sid.size(), sid_value.data());
@@ -871,7 +877,7 @@ void dlan::http_process()
                 copy_string_safe(g_rc_callback.data(), g_rc_callback.size(), callback_value.data());
             }
             g_rc_seq = 0;
-            osal_printk("RenderingControl¶©ÔÄ: SID=%s CALLBACK=%s\n", g_rc_sid.data(), g_rc_callback.data());
+            osal_printk("RenderingControlï¿½ï¿½ï¿½ï¿½: SID=%s CALLBACK=%s\n", g_rc_sid.data(), g_rc_callback.data());
         }
 
         const char *sid_to_reply = ssdp_uuid.data();
@@ -881,7 +887,7 @@ void dlan::http_process()
             sid_to_reply = g_rc_sid.data();
         }
 
-        // »Ø¸´ 200 OK + SID + TIMEOUT
+        // ï¿½Ø¸ï¿½ 200 OK + SID + TIMEOUT
         std::array<char, 256> subscribe_response;
         snprintf(subscribe_response.data(), subscribe_response.size(),
                  "HTTP/1.1 200 OK\r\n"
@@ -901,7 +907,7 @@ void dlan::http_process()
         return;
     }
 
-    // ¡¾ÐÂÔö¡¿´¦Àí UNSUBSCRIBE È¡Ïû¶©ÔÄÇëÇó
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ UNSUBSCRIBE È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     if (strstr(buffer.data(), "UNSUBSCRIBE") != nullptr) {
         static const char *unsubscribe_response =
             "HTTP/1.1 200 OK\r\n"
@@ -913,7 +919,7 @@ void dlan::http_process()
         return;
     }
 
-    // ÇëÇóÉè±¸ÃèÊöµÄXMLÎÄ¼þ
+    // ï¿½ï¿½ï¿½ï¿½ï¿½è±¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½XMLï¿½Ä¼ï¿½
     if (strstr(buffer.data(), "GET /description.xml") || strstr(buffer.data(), "HEAD /description.xml") ||
         strstr(buffer.data(), "GET / HTTP/1.1") || strstr(buffer.data(), "GET / HTTP/1.0")) {
         static std::array<char, 2048> xml_response;
@@ -972,7 +978,7 @@ void dlan::http_process()
         lwip_close(client_sock);
         return;
     }
-    // »Ø¸´GETµÄ×·¼Ó²¿·Ö
+    // ï¿½Ø¸ï¿½GETï¿½ï¿½×·ï¿½Ó²ï¿½ï¿½ï¿½
     else if (strstr(buffer.data(), "GET /AVTransport.xml") != nullptr ||
              strstr(buffer.data(), "HEAD /AVTransport.xml") != nullptr) {
         static constexpr const char *avt_xml =
@@ -1007,7 +1013,7 @@ void dlan::http_process()
         lwip_close(client_sock);
         return;
     }
-    // ´¦Àírendering xml
+    // ï¿½ï¿½ï¿½ï¿½rendering xml
     else if (strstr(buffer.data(), "GET /RenderingControl.xml") != nullptr ||
              strstr(buffer.data(), "HEAD /RenderingControl.xml") != nullptr) {
         static constexpr const char *rc_xml =
@@ -1035,7 +1041,7 @@ void dlan::http_process()
         lwip_close(client_sock);
         return;
     }
-    // ´¦Àíconnection manager xml
+    // ï¿½ï¿½ï¿½ï¿½connection manager xml
     else if (strstr(buffer.data(), "GET /ConnectionManager.xml") != nullptr ||
              strstr(buffer.data(), "HEAD /ConnectionManager.xml") != nullptr) {
         static constexpr const char *cm_xml =
@@ -1062,9 +1068,9 @@ void dlan::http_process()
         lwip_close(client_sock);
         return;
     }
-    // ´¦ÀíSetAVTransportURIµÈ¿ØÖÆÃüÁî
+    // ï¿½ï¿½ï¿½ï¿½SetAVTransportURIï¿½È¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     else if (strstr(buffer.data(), "POST") != nullptr) {
-        // ÅÐ¶ÏÊÇ·ñÊÇAVTransport¡¢RenderingControl»òConnectionManagerµÄ¿ØÖÆÃüÁî
+        // ï¿½Ð¶ï¿½ï¿½Ç·ï¿½ï¿½ï¿½AVTransportï¿½ï¿½RenderingControlï¿½ï¿½ConnectionManagerï¿½Ä¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         const bool is_avtransport = strstr(buffer.data(), "POST /AVTransport/control") != nullptr;
         const bool is_renderingcontrol = strstr(buffer.data(), "POST /RenderingControl/control") != nullptr;
         const bool is_connectionmanager = strstr(buffer.data(), "POST /ConnectionManager/control") != nullptr;
@@ -1075,7 +1081,7 @@ void dlan::http_process()
             lwip_close(client_sock);
             return;
         }
-        // °´ÕÕSOAPACTION×ö¶¯×÷·Ö·¢
+        // ï¿½ï¿½ï¿½ï¿½SOAPACTIONï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½
         std::array<char, 256> soap_action_value = {0};
         const bool has_soap_action =
             extract_http_header_value(buffer.data(), "SOAPACTION", soap_action_value.data(), soap_action_value.size());
@@ -1086,11 +1092,11 @@ void dlan::http_process()
                 memmove(soap_action_value.data(), soap_action_value.data() + 1, action_len - 2);
                 soap_action_value[action_len - 2] = '\0';
             }
-            // ========== AVTransport ·þÎñµÄ SOAP ¶¯×÷´¦Àí ==========
+            // ========== AVTransport ï¿½ï¿½ï¿½ï¿½ï¿½ SOAP ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ==========
             if (is_avtransport) {
                 if (soap_action_has(soap_action_value.data(), "SetAVTransportURI")) {
                     static std::array<char, 512> media_url = {
-                        0}; // ´ÓSOAPÇëÇóÖÐÌáÈ¡³öÃ½ÌåURL£¬·½±ãºóÐøÊµÏÖÕæÕýµÄ²¥·Å¹¦ÄÜ
+                        0}; // ï¿½ï¿½SOAPï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½Ã½ï¿½ï¿½URLï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä²ï¿½ï¿½Å¹ï¿½ï¿½ï¿½
                     static std::array<char, 1024> media_metadata = {0};
                     extract_xml_tag_value(buffer.data(), "CurrentURI", media_url.data(), media_url.size());
                     extract_xml_tag_value(buffer.data(), "CurrentURIMetaData", media_metadata.data(),
@@ -1099,7 +1105,7 @@ void dlan::http_process()
                     html_entity_decode_amp(media_metadata.data());
 
                     if (!is_mp3_candidate_from_uri_or_metadata(media_url.data(), media_metadata.data())) {
-                        osal_printk("SetAVTransportURI¾Ü¾ø: ·ÇMP3Ã½Ìå URI=%s\n", media_url.data());
+                        osal_printk("SetAVTransportURIï¿½Ü¾ï¿½: ï¿½ï¿½MP3Ã½ï¿½ï¿½ URI=%s\n", media_url.data());
                         send_http_soap_fault_response(client_sock, 714, "Illegal MIME-Type");
                         lwip_close(client_sock);
                         return;
@@ -1119,10 +1125,10 @@ void dlan::http_process()
                         "</s:Envelope>";
                     send_http_soap_response(client_sock, set_uri_response_body);
 
-                    // ´¦ÀíÃ½ÌåURL£¬ÕæÕýÊµÏÖDLNA²¥·Å¹¦ÄÜµÄºËÐÄ¾ÍÔÚÕâÀïÁË£¬µ±Ç°ÏÈ´òÓ¡³öÀ´ÑéÖ¤ÊÖ»úAPPµÄÇëÇó¸ñÊ½ÊÇ·ñÕýÈ·¡£
-                    osal_printk("SetAVTransportURIµÄÃ½ÌåURL: %s\n", media_url.data());
+                    // ï¿½ï¿½ï¿½ï¿½Ã½ï¿½ï¿½URLï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½DLNAï¿½ï¿½ï¿½Å¹ï¿½ï¿½ÜµÄºï¿½ï¿½Ä¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ë£ï¿½ï¿½ï¿½Ç°ï¿½È´ï¿½Ó¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¤ï¿½Ö»ï¿½APPï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½Ç·ï¿½ï¿½ï¿½È·ï¿½ï¿½
+                    osal_printk("SetAVTransportURIï¿½ï¿½Ã½ï¿½ï¿½URL: %s\n", media_url.data());
 
-                    // ÏÈÉÏ±¨STOPPED£¬ÈÃ¿ØÖÆ¶ËÈ·ÈÏURIÉèÖÃÒÑÉúÐ§¡£
+                    // ï¿½ï¿½ï¿½Ï±ï¿½STOPPEDï¿½ï¿½ï¿½Ã¿ï¿½ï¿½Æ¶ï¿½È·ï¿½ï¿½URIï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð§ï¿½ï¿½
                     update_transport_state("STOPPED", true);
                     lwip_close(client_sock);
                     return;
@@ -1139,7 +1145,7 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "Play")) {
-                    // »Ø¸´Ò»¸ö¹Ì¶¨µÄ³É¹¦ÏìÓ¦
+                    // ï¿½Ø¸ï¿½Ò»ï¿½ï¿½ï¿½Ì¶ï¿½ï¿½Ä³É¹ï¿½ï¿½ï¿½Ó¦
                     static const char *play_response_body =
                         "<?xml version=\"1.0\"?>"
                         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\">"
@@ -1149,8 +1155,8 @@ void dlan::http_process()
                         "</s:Envelope>";
                     send_http_soap_response(client_sock, play_response_body);
 
-                    // ½øÈë²¥·ÅÇ°ÉÏ±¨TRANSITIONING¡£
-                    // ²»ÔÚ¿ØÖÆÍ¨µÀÀï×öÍ¬²½À­Á÷Ì½²â£¬±ÜÃâ¶îÍâÁ¬½ÓÓ°ÏìÕæÊµ²¥·ÅÁ´Â·ÎÈ¶¨ÐÔ¡£
+                    // ï¿½ï¿½ï¿½ë²¥ï¿½ï¿½Ç°ï¿½Ï±ï¿½TRANSITIONINGï¿½ï¿½
+                    // ï¿½ï¿½ï¿½Ú¿ï¿½ï¿½ï¿½Í¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ì½ï¿½â£¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó°ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½È¶ï¿½ï¿½Ô¡ï¿½
                     update_transport_state("TRANSITIONING", true);
                     bool play_ok = false;
                     if (media_play_handler_func != nullptr) {
@@ -1197,7 +1203,7 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "Seek")) {
-                    // ½âÎö <Target>HH:MM:SS</Target>
+                    // ï¿½ï¿½ï¿½ï¿½ <Target>HH:MM:SS</Target>
                     std::array<char, 32> seek_target = {0};
                     extract_xml_tag_value(body_start, "Target", seek_target.data(), seek_target.size());
                     uint32_t seek_seconds = 0;
@@ -1207,8 +1213,8 @@ void dlan::http_process()
                             seek_seconds = hh * 3600U + mm * 60U + ss;
                         }
                     }
-                    osal_printk("Seek Ä¿±ê: %s = %u Ãë\n", seek_target.data(), (unsigned)seek_seconds);
-                    // ¸üÐÂ½ø¶È¸ú×Ù»ù×¼
+                    osal_printk("Seek Ä¿ï¿½ï¿½: %s = %u ï¿½ï¿½\n", seek_target.data(), (unsigned)seek_seconds);
+                    // ï¿½ï¿½ï¿½Â½ï¿½ï¿½È¸ï¿½ï¿½Ù»ï¿½×¼
                     g_playback_elapsed_base_sec = seek_seconds;
                     g_playback_started_jiffies = osal_get_jiffies();
                     static const char *seek_response_body =
@@ -1271,7 +1277,7 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else if (soap_action_has(soap_action_value.data(), "GetTransportInfo")) {
-                    // »ñÈ¡´«Êä×´Ì¬£ºPLAYING, PAUSED_PLAYBACK, STOPPED, NO_MEDIA_PRESENT
+                    // ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½PLAYING, PAUSED_PLAYBACK, STOPPED, NO_MEDIA_PRESENT
                     static std::array<char, 640> transport_info_body = {0};
                     snprintf(transport_info_body.data(), transport_info_body.size(),
                              "<?xml version=\"1.0\"?>"
@@ -1364,8 +1370,8 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else {
-                    // AVTransport ÖÐÎ´Æ¥ÅäµÄ¶¯×÷£¬·µ»Ø 501
-                    osal_printk("httpÊÕµ½AVTransportÎ´Öª¶¯×÷: %s\n", soap_action_value.data());
+                    // AVTransport ï¿½ï¿½Î´Æ¥ï¿½ï¿½Ä¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 501
+                    osal_printk("httpï¿½Õµï¿½AVTransportÎ´Öªï¿½ï¿½ï¿½ï¿½: %s\n", soap_action_value.data());
                     static const char *k501 =
                         "HTTP/1.1 501 Not Implemented\r\n"
                         "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
@@ -1375,7 +1381,7 @@ void dlan::http_process()
                     return;
                 }
             }
-            // ========== RenderingControl ·þÎñµÄ SOAP ¶¯×÷´¦Àí ==========
+            // ========== RenderingControl ï¿½ï¿½ï¿½ï¿½ï¿½ SOAP ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ==========
             else if (is_renderingcontrol) {
                 if (strstr(soap_action_value.data(), "#SetVolume") != nullptr) {
                     static const char *set_volume_response_body =
@@ -1426,8 +1432,8 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else {
-                    // SED : ´®¿ÚÊä³ö
-                    osal_printk("httpÊÕµ½RenderingControlÎ´Öª¶¯×÷\n");
+                    // SED : ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+                    osal_printk("httpï¿½Õµï¿½RenderingControlÎ´Öªï¿½ï¿½ï¿½ï¿½\n");
                     static const char *k501 =
                         "HTTP/1.1 501 Not Implemented\r\n"
                         "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
@@ -1437,7 +1443,7 @@ void dlan::http_process()
                     return;
                 }
             }
-            // ========== ConnectionManager ·þÎñµÄ SOAP ¶¯×÷´¦Àí ==========
+            // ========== ConnectionManager ï¿½ï¿½ï¿½ï¿½ï¿½ SOAP ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ==========
             else if (is_connectionmanager) {
                 if (strstr(soap_action_value.data(), "#GetProtocolInfo") != nullptr) {
                     static const char *protocol_info_response_body =
@@ -1493,8 +1499,8 @@ void dlan::http_process()
                     lwip_close(client_sock);
                     return;
                 } else {
-                    // SED : ´®¿ÚÊä³ö
-                    osal_printk("httpÊÕµ½ConnectionManagerÎ´Öª¶¯×÷\n");
+                    // SED : ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+                    osal_printk("httpï¿½Õµï¿½ConnectionManagerÎ´Öªï¿½ï¿½ï¿½ï¿½\n");
                     static const char *k501 =
                         "HTTP/1.1 501 Not Implemented\r\n"
                         "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
@@ -1504,8 +1510,8 @@ void dlan::http_process()
                     return;
                 }
             } else {
-                // SOAPACTION Í·²»´æÔÚ£¬·µ»Ø 501
-                osal_printk("httpÊÕµ½POSTµ«ÎÞSOAPACTIONÍ·\n");
+                // SOAPACTION Í·ï¿½ï¿½ï¿½ï¿½ï¿½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ 501
+                osal_printk("httpï¿½Õµï¿½POSTï¿½ï¿½ï¿½ï¿½SOAPACTIONÍ·\n");
                 static const char *k501 =
                     "HTTP/1.1 501 Not Implemented\r\n"
                     "CONTENT-TYPE: text/xml; charset=\"utf-8\"\r\n"
@@ -1515,7 +1521,7 @@ void dlan::http_process()
                 return;
             }
         } else {
-            // ·Ç GET ÃèÊö¡¢·Ç POST ¿ØÖÆ£¬ÇÒ²»ÔÚÒÑÖ§³ÖÐ­Òé·¶Î§ÄÚ£º·µ»Ø 400¡£
+            // ï¿½ï¿½ GET ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ POST ï¿½ï¿½ï¿½Æ£ï¿½ï¿½Ò²ï¿½ï¿½ï¿½ï¿½ï¿½Ö§ï¿½ï¿½Ð­ï¿½é·¶Î§ï¿½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ 400ï¿½ï¿½
             static const char k400[] = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
             lwip_send(client_sock, (const uint8_t *)k400, sizeof(k400) - 1, 0);
             lwip_close(client_sock);
@@ -1527,12 +1533,12 @@ void dlan::ssdp_ip_get()
 {
     netif *netif_p = netif_default;
     if (netif_p == nullptr || !netif_is_up(netif_p)) {
-        // STA³¡¾°ÓÅÏÈ³¢ÊÔwlan0£¬±ÜÃânetif_defaultÉÐÎ´ÇÐ»»Íê³É¡£
+        // STAï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È³ï¿½ï¿½ï¿½wlan0ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½netif_defaultï¿½ï¿½Î´ï¿½Ð»ï¿½ï¿½ï¿½É¡ï¿½
         netif_p = netif_find("wlan0");
     }
     if (netif_p == nullptr || !netif_is_up(netif_p)) {
         snprintf(local_ip.data(), sizeof(local_ip), "0.0.0.0");
-        osal_printk("»ñÈ¡Ä¬ÈÏÍøÂç½Ó¿ÚÊ§°Ü\n");
+        osal_printk("ï¿½ï¿½È¡Ä¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó¿ï¿½Ê§ï¿½ï¿½\n");
         return;
     }
 
@@ -1543,7 +1549,7 @@ void dlan::ssdp_ip_get()
 
 void dlan::dlan_stop()
 {
-    // ½áÊøDLANÏà¹ØµÄÌ×½Ó×ÖºÍ×ÊÔ´
+    // ï¿½ï¿½ï¿½ï¿½DLANï¿½ï¿½Øµï¿½ï¿½×½ï¿½ï¿½Öºï¿½ï¿½ï¿½Ô´
     if (ssdp_sock >= 0) {
         lwip_close(ssdp_sock);
         ssdp_sock = -1;
@@ -1552,4 +1558,14 @@ void dlan::dlan_stop()
         lwip_close(http_sock);
         http_sock = -1;
     }
+}
+
+void dlan::request_stop()
+{
+    s_stop_requested = true;
+}
+
+void dlan::reset_stop()
+{
+    s_stop_requested = false;
 }

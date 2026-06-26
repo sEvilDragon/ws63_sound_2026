@@ -28,6 +28,9 @@ public:
     static void stop_playback();
     static void clear_playback_url();
     static void stream_mp3_to_iis();
+    static void request_exit();
+    static void reset_exit();
+    static volatile bool s_exit_requested;
 
     // 暂停/恢复/跳转接口（供DLNA层调用）
     static void pause_playback();                  // 真暂停，记录字节偏移以便恢复

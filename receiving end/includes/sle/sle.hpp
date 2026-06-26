@@ -15,37 +15,41 @@ extern "C" {
 class sle {
 public:
     sle();
-    // Ìá¹©Ò»¸ö½Ó¿ÚÓÃÓÚÍâ²¿ÉèÖÃÊý¾Ý´¦Àí»Øµ÷
+    // ï¿½á¹©Ò»ï¿½ï¿½ï¿½Ó¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â²¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý´ï¿½ï¿½ï¿½ï¿½Øµï¿½
     using data_process_t = void (*)(const uint8_t *data, uint16_t length);
     using data_clear_t = void (*)();
     static void set_data_process_fuction(data_process_t callback);
     static void set_data_clear_fuction(data_clear_t callback);
 
+    static void teardown();
+    static void reset_state();
+    static volatile bool s_active;
+
 private:
-    // ÉèÖÃµØÖ·
+    // ï¿½ï¿½ï¿½Ãµï¿½Ö·
     static void set_local_address();
-    // ×¢²ássapºÍ·þÎñ
+    // ×¢ï¿½ï¿½ssapï¿½Í·ï¿½ï¿½ï¿½
     static void set_mtu();
     static void set_ssap();
     static void set_service();
     static void set_property();
     static void service_start();
-    // ¹ã²¥
+    // ï¿½ã²¥
     static void advertising_init();
     static void advertising_start();
 
-    // ¸÷ÖÖ»Øµ÷
-    // Ê¹ÄÜ»Øµ÷
+    // ï¿½ï¿½ï¿½Ö»Øµï¿½
+    // Ê¹ï¿½Ü»Øµï¿½
     static void sle_enable_callback(errcode_t status);
-    // Á¬½Ó×´Ì¬¸Ä±äµÄ»Øµ÷
+    // ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½Ä±ï¿½Ä»Øµï¿½
     static void connect_changed_callback(uint16_t conn_id,
                                          const sle_addr_t *addr,
                                          sle_acb_state_t conn_state,
                                          sle_pair_state_t pair_state,
                                          sle_disc_reason_t disc_reason);
-    // MTUÐ­ÉÌÍê³ÉºóµÄ»Øµ÷º¯Êý£¬»ñµÃÊµ¼ÊÐ­ÉÌµÄMTUÖµ
+    // MTUÐ­ï¿½ï¿½ï¿½ï¿½Éºï¿½Ä»Øµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½Ð­ï¿½Ìµï¿½MTUÖµ
     static void ssap_mtu_callback(uint8_t client_id, uint16_t conn_id, ssap_exchange_info_t *param, errcode_t status);
-    // »ñµÃÊý¾ÝµÄ»Øµ÷º¯Êý
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÝµÄ»Øµï¿½ï¿½ï¿½ï¿½ï¿½
     static void get_data_callback(uint8_t server_id,
                                   uint16_t conn_id,
                                   ssaps_req_write_cb_t *req_param,
@@ -55,24 +59,24 @@ public:
     static uint16_t true_mtu;
 
 private:
-    // ¶¨ÒåÒ»¸öº¯ÊýÖ¸ÕëÀàÐÍ£¬ÓÃÓÚ½ÓÊÕÊý¾ÝµÄ»Øµ÷
+    // ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½Ú½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÝµÄ»Øµï¿½
     static data_process_t data_process;
     static data_clear_t data_clear;
 
-    // ¶¨Òå±¾»úµØÖ·
+    // ï¿½ï¿½ï¿½å±¾ï¿½ï¿½ï¿½ï¿½Ö·
     static constexpr uint8_t addr_type = 0;
     static constexpr std::array<uint8_t, 6> local_address = {0x20, 0x26, 0x03, 0x00, 0x11, 0xA1};
     static constexpr std::array<uint8_t, 6> peer_address = {0x20, 0x26, 0x03, 0x00, 0x11, 0x00};
 
-    // ×î´óÐ­ÉÌÖµ
+    // ï¿½ï¿½ï¿½Ð­ï¿½ï¿½Öµ
     static constexpr uint16_t max_mtu = 800;
 
-    // Ìí¼Ó¶ÔÓ¦±êÊ¶
-    static uint8_t id; // ÏµÍ³×Ô¶¯·ÖÅäµÄÉí·ÝÂë
+    // ï¿½ï¿½ï¿½Ó¶ï¿½Ó¦ï¿½ï¿½Ê¶
+    static uint8_t id; // ÏµÍ³ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     static uint8_t conn_id;
-    static uint16_t service_handle;  // ·þÎñ¾ä±ú
-    static uint16_t property_handle; // ÊôÐÔ¾ä±ú
-    // Õâ¸öuuid½öÔÚ±¾µØÔËÐÐ
+    static uint16_t service_handle;  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    static uint16_t property_handle; // ï¿½ï¿½ï¿½Ô¾ï¿½ï¿½
+    // ï¿½ï¿½ï¿½uuidï¿½ï¿½ï¿½Ú±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     static constexpr uint8_t uuid_user_1 = 0x20;
     static constexpr uint8_t uuid_user_2 = 0x25;
     static constexpr uint16_t uuid_service = 0x060B;
@@ -82,53 +86,53 @@ private:
     static constexpr uint8_t uuid_property_audio_1 = 0x0C;
     static constexpr uint8_t uuid_property_audio_2 = 0x06;
 
-    // ÔÙ¶¨ÒåÒ»Ð©ÌØÕ÷µÄÈ¨ÏÞ
-    static constexpr uint8_t property_permissions = SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE; // ¶ÁÐ´È¨ÏÞ
+    // ï¿½Ù¶ï¿½ï¿½ï¿½Ò»Ð©ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È¨ï¿½ï¿½
+    static constexpr uint8_t property_permissions = SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE; // ï¿½ï¿½Ð´È¨ï¿½ï¿½
     static constexpr uint32_t operate_indication =
         SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_WRITE | SSAP_OPERATE_INDICATION_BIT_WRITE_NO_RSP;
-    ;                                                   // ¶ÁÐ´È¨ÏÞ£¬Ð´ÎÞÏìÓ¦È¨ÏÞ
-    static constexpr uint16_t property_value_len = 0;   // ÊôÐÔ³õÊ¼Öµ³¤¶È£¨ÓëCÔ­Ê¼´úÂëÒ»ÖÂ£©
-    static constexpr uint8_t *property_value = nullptr; // ÊôÐÔ³õÊ¼Öµ
+    ;                                                   // ï¿½ï¿½Ð´È¨ï¿½Þ£ï¿½Ð´ï¿½ï¿½ï¿½ï¿½Ó¦È¨ï¿½ï¿½
+    static constexpr uint16_t property_value_len = 0;   // ï¿½ï¿½ï¿½Ô³ï¿½Ê¼Öµï¿½ï¿½ï¿½È£ï¿½ï¿½ï¿½CÔ­Ê¼ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Â£ï¿½
+    static constexpr uint8_t *property_value = nullptr; // ï¿½ï¿½ï¿½Ô³ï¿½Ê¼Öµ
 
-    // ¶¨ÒåÒôÆµ·þÎñµÄ¹ã²¥
-    static constexpr uint8_t audio_announce_handle = 01; // ¹ã²¥¾ä±ú£¬ÓÃÓÚÈ·ÈÏÊÇÄÄ¸ö·þÎñÕýÔÚ¹ã²¥
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½ï¿½ï¿½ï¿½Ä¹ã²¥
+    static constexpr uint8_t audio_announce_handle = 01; // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È·ï¿½ï¿½ï¿½ï¿½ï¿½Ä¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú¹ã²¥
     static constexpr uint16_t audio_announce_mode =
-        SLE_ANNOUNCE_MODE_CONNECTABLE_SCANABLE;                                      // ¹ã²¥Êý¾Ý°üÀàÐÍ£¬²»¶¨Ïò¹ã²¥
-    static constexpr uint16_t audio_announce_gt_role = SLE_ANNOUNCE_ROLE_T_CAN_NEGO; // ¹ã²¥½ÇÉ«£¬Ä¿±ê¿ÉÐ­ÉÌ
-    static constexpr uint16_t audio_announce_level = SLE_ANNOUNCE_LEVEL_NORMAL;      // ¹ã²¥¼¶±ð£¬ÆÕÍ¨
-    static constexpr uint16_t audio_announce_channel_map = 0x7;                      // ¹ã²¥ÆµµÀÓ³Éä£¬ËùÓÐÆµµÀ
-    static constexpr uint16_t audio_announce_interval_min = 0xC8;                    // ¹ã²¥¼ä¸ô£¬µ¥Î»ÎªºÁÃë
-    static constexpr uint16_t audio_announce_interval_max = 0xC8;                    // ¹ã²¥¼ä¸ô£¬µ¥Î»ÎªºÁÃë
+        SLE_ANNOUNCE_MODE_CONNECTABLE_SCANABLE;                                      // ï¿½ã²¥ï¿½ï¿½ï¿½Ý°ï¿½ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ã²¥
+    static constexpr uint16_t audio_announce_gt_role = SLE_ANNOUNCE_ROLE_T_CAN_NEGO; // ï¿½ã²¥ï¿½ï¿½É«ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½Ð­ï¿½ï¿½
+    static constexpr uint16_t audio_announce_level = SLE_ANNOUNCE_LEVEL_NORMAL;      // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¨
+    static constexpr uint16_t audio_announce_channel_map = 0x7;                      // ï¿½ã²¥Æµï¿½ï¿½Ó³ï¿½ä£¬ï¿½ï¿½ï¿½ï¿½Æµï¿½ï¿½
+    static constexpr uint16_t audio_announce_interval_min = 0xC8;                    // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»Îªï¿½ï¿½ï¿½ï¿½
+    static constexpr uint16_t audio_announce_interval_max = 0xC8;                    // ï¿½ã²¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»Îªï¿½ï¿½ï¿½ï¿½
     static constexpr uint16_t audio_announce_tx_power = 20;
-    // ¹ã²¥Á¬½Óºó×Ô¶¯¸üÐÂ¼ä¸ô
-    static constexpr uint16_t high_speed_interva_min = 0x14; // ´«Êä¼ä¸ô×îÐ¡Öµ£¨SLEÐ­Òé×îÐ¡ºÏ·¨Öµ750?s£©
-    static constexpr uint16_t high_speed_interva_max = 0x14; // ´«Êä¼ä¸ô×î´óÖµ£¨SLEÐ­Òé×îÐ¡ºÏ·¨Öµ750?s£©
-    static constexpr uint16_t high_speed_latency = 0x00;     // ÎÞÑÓÊ±
-    static constexpr uint16_t high_speed_timeout = 0x1F4;    // ³¬Ê±5000ms
+    // ï¿½ã²¥ï¿½ï¿½ï¿½Óºï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½Â¼ï¿½ï¿½
+    static constexpr uint16_t high_speed_interva_min = 0x14; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¡Öµï¿½ï¿½SLEÐ­ï¿½ï¿½ï¿½ï¿½Ð¡ï¿½Ï·ï¿½Öµ750?sï¿½ï¿½
+    static constexpr uint16_t high_speed_interva_max = 0x14; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½SLEÐ­ï¿½ï¿½ï¿½ï¿½Ð¡ï¿½Ï·ï¿½Öµ750?sï¿½ï¿½
+    static constexpr uint16_t high_speed_latency = 0x00;     // ï¿½ï¿½ï¿½ï¿½Ê±
+    static constexpr uint16_t high_speed_timeout = 0x1F4;    // ï¿½ï¿½Ê±5000ms
 
-    // ÏòÍâ·¢ËÍµÄ¹ã²¥Êý¾Ý°ü
+    // ï¿½ï¿½ï¿½â·¢ï¿½ÍµÄ¹ã²¥ï¿½ï¿½ï¿½Ý°ï¿½
     static constexpr std::array<uint8_t, 7> advertising_data = {
         0x01,
         0x01,
-        0x01, // ¹ã²¥¼¶±ð£¬ºóÃæÓÐÒ»¸ö×Ö½Ú£¬³£¹æ¿É·¢ÏÖ
+        0x01, // ï¿½ã²¥ï¿½ï¿½ï¿½ð£¬ºï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½Ö½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½É·ï¿½ï¿½ï¿½
         0x05,
-        0x02, // ÍêÕû16Î»·þÎñUUIDÁÐ±í£¬ºóÃæÓÐ2¸ö×Ö½Ú
+        0x02, // ï¿½ï¿½ï¿½ï¿½16Î»ï¿½ï¿½ï¿½ï¿½UUIDï¿½Ð±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½2ï¿½ï¿½ï¿½Ö½ï¿½
         uuid_service_audio_1,
-        uuid_service_audio_2, // ·þÎñµÄuuid
+        uuid_service_audio_2, // ï¿½ï¿½ï¿½ï¿½ï¿½uuid
     };
 
-    // ÏòÍâ·¢ËÍµÄÉ¨ÃèÏìÓ¦Êý¾Ý°ü
+    // ï¿½ï¿½ï¿½â·¢ï¿½Íµï¿½É¨ï¿½ï¿½ï¿½ï¿½Ó¦ï¿½ï¿½ï¿½Ý°ï¿½
     static constexpr std::array<uint8_t, 11> scan_response_data = {
         0x0B,
-        0x09, // ÍêÕû±¾µØÃû³Æ£¬ºóÃæÓÐ9¸ö×Ö½Ú
+        0x09, // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½9ï¿½ï¿½ï¿½Ö½ï¿½
         'S',  'E', 'D', '_', 'S', 'O', 'U', 'N',
-        'D', // ±¾µØÃû³ÆÎª"SED_SOUND"
+        'D', // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îª"SED_SOUND"
     };
 
-    // ÅäÖÃPHYÏà¹Ø
+    // ï¿½ï¿½ï¿½ï¿½PHYï¿½ï¿½ï¿½
     static constexpr uint8_t phy_format = SLE_RADIO_FRAME_2;
     static constexpr uint8_t phy_phy = SLE_PHY_4M;
-    static constexpr uint8_t phy_pilot_density = SLE_PHY_PILOT_DENSITY_16_TO_1; // µ¼Æµ¼ä¸ô16
+    static constexpr uint8_t phy_pilot_density = SLE_PHY_PILOT_DENSITY_16_TO_1; // ï¿½ï¿½Æµï¿½ï¿½ï¿½16
     static constexpr uint8_t phy_feedback = 0;
 };
 

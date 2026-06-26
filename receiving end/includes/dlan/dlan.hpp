@@ -31,6 +31,9 @@ public:
 
     static void ssdp_and_http_scan();
     static void dlan_stop();
+    static void request_stop();
+    static void reset_stop();
+    static volatile bool s_stop_requested;
     static void is_ready_set(bool ready)
     {
         is_ready = ready;

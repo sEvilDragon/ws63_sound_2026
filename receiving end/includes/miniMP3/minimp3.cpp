@@ -1,15 +1,15 @@
-// WS63 LiteOS: ÎÞ mmap/munmap/stdio£¬Ö»ÓÃ»Øµ÷ API
+// WS63 LiteOS: ï¿½ï¿½ mmap/munmap/stdioï¿½ï¿½Ö»ï¿½Ã»Øµï¿½ API
 #define MINIMP3_NO_STDIO
-// ¼õÐ¡ IO »º³åÇø£¬±ÜÃâ malloc(128KB) ÔÚÇ¶ÈëÊ½¶ÑÉÏÊ§°Ü
-// ÏµÍ³¿ÉÓÃ¶ÑÔ¼ 340KB£¬ÐèÎª TLS/Ì×½Ó×Ö/HTTP Í·Áô×ã¿Õ¼ä
+// ï¿½ï¿½Ð¡ IO ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ malloc(128KB) ï¿½ï¿½Ç¶ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½
+// ÏµÍ³ï¿½ï¿½ï¿½Ã¶ï¿½Ô¼ 340KBï¿½ï¿½ï¿½ï¿½Îª TLS/ï¿½×½ï¿½ï¿½ï¿½/HTTP Í·ï¿½ï¿½ï¿½ï¿½Õ¼ï¿½
 #define MINIMP3_IO_SIZE (18 * 1024)
 #define MINIMP3_IMPLEMENTATION
 
-// ¶µµ×£ºÈç¹ûÔ¤´¦ÀíÎ´ÕýÈ·ÅÅ³ý mmap/munmap Â·¾¶£¬Ìá¹©¿Õ×®Âú×ãÁ´½ÓÆ÷¡£
-// RISCV musl ±àÒëÆ÷¿ÉÄÜÔ¤¶¨Òå __linux__£¬µ¼ÖÂ minimp3_ex.h ÖÐµÄ
-// #if defined(__linux__) ·ÖÖ§±»±àÒë¡ª¡ª¼´Ê¹Íâ²ã MINIMP3_NO_STDIO ÒÑ¶¨Òå¡£
-// ¿Õ×®º¯Êý²»»á±»Êµ¼Êµ÷ÓÃ£¨ÒòÎª»Øµ÷ IO Â·¾¶²»¾­¹ýÎÄ¼þÓ³Éä´úÂë£©£¬
-// ½öÓÃÓÚÏû³ýÁ´½Ó½×¶ÎµÄ undefined reference¡£
+// ï¿½ï¿½ï¿½×£ï¿½ï¿½ï¿½ï¿½Ô¤ï¿½ï¿½ï¿½ï¿½Î´ï¿½ï¿½È·ï¿½Å³ï¿½ mmap/munmap Â·ï¿½ï¿½ï¿½ï¿½ï¿½á¹©ï¿½ï¿½×®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+// RISCV musl ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¤ï¿½ï¿½ï¿½ï¿½ __linux__ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ minimp3_ex.h ï¿½Ðµï¿½
+// #if defined(__linux__) ï¿½ï¿½Ö§ï¿½ï¿½ï¿½ï¿½ï¿½ë¡ªï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½ï¿½ MINIMP3_NO_STDIO ï¿½Ñ¶ï¿½ï¿½å¡£
+// ï¿½ï¿½×®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½á±»Êµï¿½Êµï¿½ï¿½Ã£ï¿½ï¿½ï¿½Îªï¿½Øµï¿½ IO Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½Ó³ï¿½ï¿½ï¿½ï¿½ë£©ï¿½ï¿½
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó½×¶Îµï¿½ undefined referenceï¿½ï¿½
 extern "C" {
 int munmap(void *addr, unsigned long length)
 {
@@ -21,11 +21,11 @@ int munmap(void *addr, unsigned long length)
 
 #include "minimp3.hpp"
 
-// ©¤©¤ ¾²Ì¬Ô¤·ÖÅä IO »º³åÇø ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-// mp3dec_ex_open_cb ÄÚ²¿»á malloc(MINIMP3_IO_SIZE)£¬ÔÚËéÆ¬»¯¶ÑÉÏ
-// ÈÝÒ×Ê§°Ü£¨340KB ¶Ñ²¥·Åºó½öÊ£ 3~10KB ¿ÕÏÐ£©¡£
-// Í¨¹ý¶¨Òå MINIMP3_ALLOC_IO / MINIMP3_FREE_IO ºê£¬½«¶¯Ì¬·ÖÅäÌæ»»Îª
-// Æô¶¯Ê±¼´·ÖÅäºÃµÄ¾²Ì¬»º³åÇø£¬³¹µ×Ïû³ý´Ë¹ÊÕÏµã¡£
+// ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Ì¬Ô¤ï¿½ï¿½ï¿½ï¿½ IO ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+// mp3dec_ex_open_cb ï¿½Ú²ï¿½ï¿½ï¿½ malloc(MINIMP3_IO_SIZE)ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+// ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½340KB ï¿½Ñ²ï¿½ï¿½Åºï¿½ï¿½Ê£ 3~10KB ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½
+// Í¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ MINIMP3_ALLOC_IO / MINIMP3_FREE_IO ï¿½ê£¬ï¿½ï¿½ï¿½ï¿½Ì¬ï¿½ï¿½ï¿½ï¿½ï¿½æ»»Îª
+// ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÃµÄ¾ï¿½Ì¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ë¹ï¿½ï¿½Ïµã¡£
 static uint8_t g_mp3_io_buf[MINIMP3_IO_SIZE];
 static bool g_mp3_io_buf_in_use = false;
 
@@ -76,10 +76,10 @@ static constexpr uint32_t k_tls_initial_read_timeout_ms = 10;
 static constexpr uint32_t k_tls_handshake_timeout_ms = 4000;
 static constexpr uint32_t k_http_header_timeout_ms = 5000;
 static constexpr size_t k_tls_entropy_min_hardclock = 4;
-static constexpr uint64_t k_range_preroll_bytes = 8ULL * 1024ULL; // MP3 bit reservoir < 512B, 8KB ×ã¹»
+static constexpr uint64_t k_range_preroll_bytes = 8ULL * 1024ULL; // MP3 bit reservoir < 512B, 8KB ï¿½ã¹»
 static constexpr uint32_t k_range_recovery_read_timeout_ms = 400;
-// ×î´óÔÊÐí drain µÄ×Ö½ÚÊý£º³¬¹ý´ËãÐÖµÔò»ØÍËµ½ Range ÖØÁ¬£¬±ÜÃâÔÚÂýËÙÁ´Â·ÉÏ
-// ³¤Ê±¼ä¶ªÆúÊý¾Ý¡£
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ drain ï¿½ï¿½ï¿½Ö½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½ï¿½ï¿½Ëµï¿½ Range ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½
+// ï¿½ï¿½Ê±ï¿½ä¶ªï¿½ï¿½ï¿½ï¿½ï¿½Ý¡ï¿½
 static constexpr uint64_t k_max_drain_bytes = 64ULL * 1024ULL;
 
 uint64_t compute_range_request_offset(uint64_t target_byte)
@@ -123,7 +123,7 @@ bool seed_tls_random(stream_transport &transport)
     int ret = mbedtls_entropy_add_source(&transport.tls_entropy, tls_entropy_source_callback, nullptr,
                                          k_tls_entropy_min_hardclock, MBEDTLS_ENTROPY_SOURCE_STRONG);
     if (ret != 0) {
-        osal_printk("HTTPSìØÔ´×¢²áÊ§°Ü: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPSï¿½ï¿½Ô´×¢ï¿½ï¿½Ê§ï¿½ï¿½: ret=-0x%04X\n", -ret);
         return false;
     }
 
@@ -132,7 +132,7 @@ bool seed_tls_random(stream_transport &transport)
                                 reinterpret_cast<const unsigned char *>(k_tls_personalization),
                                 strlen(k_tls_personalization));
     if (ret != 0) {
-        osal_printk("HTTPSËæ»úÊý³õÊ¼»¯Ê§°Ü: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPSï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½Ê§ï¿½ï¿½: ret=-0x%04X\n", -ret);
         return false;
     }
 
@@ -275,7 +275,7 @@ bool open_plain_stream_transport(stream_transport &transport, const stream_url_d
     transport.use_tls = false;
     transport.plain_sock = lwip_socket(AF_INET, SOCK_STREAM, 0);
     if (transport.plain_sock < 0) {
-        osal_printk("´´½¨socketÊ§°Ü\n");
+        osal_printk("ï¿½ï¿½ï¿½ï¿½socketÊ§ï¿½ï¿½\n");
         return false;
     }
 
@@ -287,12 +287,12 @@ bool open_plain_stream_transport(stream_transport &transport, const stream_url_d
     addr.sin_family = AF_INET;
     addr.sin_port = lwip_htons(url.port);
     if (!resolve_ipv4_addr(url.host.data(), &addr.sin_addr)) {
-        osal_printk("ÎÞ·¨½âÎöÖ÷»úµØÖ·: %s\n", url.host.data());
+        osal_printk("ï¿½Þ·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·: %s\n", url.host.data());
         return false;
     }
 
     if (lwip_connect(transport.plain_sock, (sockaddr *)&addr, sizeof(addr)) < 0) {
-        osal_printk("Á¬½Ó·þÎñÆ÷Ê§°Ü: %s\n", url.host.data());
+        osal_printk("ï¿½ï¿½ï¿½Ó·ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: %s\n", url.host.data());
         return false;
     }
 
@@ -316,7 +316,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
     int ret = mbedtls_ssl_config_defaults(&transport.tls_conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
                                           MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret != 0) {
-        osal_printk("HTTPSÅäÖÃÊ§°Ü: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPSï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: ret=-0x%04X\n", -ret);
         return false;
     }
 
@@ -328,13 +328,13 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
 
     ret = mbedtls_ssl_setup(&transport.tls_ssl, &transport.tls_conf);
     if (ret != 0) {
-        osal_printk("HTTPS SSL setupÊ§°Ü: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPS SSL setupÊ§ï¿½ï¿½: ret=-0x%04X\n", -ret);
         return false;
     }
 
     ret = mbedtls_ssl_set_hostname(&transport.tls_ssl, url.host.data());
     if (ret != 0) {
-        osal_printk("HTTPSÉèÖÃSNIÊ§°Ü: host=%s ret=-0x%04X\n", url.host.data(), -ret);
+        osal_printk("HTTPSï¿½ï¿½ï¿½ï¿½SNIÊ§ï¿½ï¿½: host=%s ret=-0x%04X\n", url.host.data(), -ret);
         return false;
     }
 
@@ -342,7 +342,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
     snprintf(port_text.data(), port_text.size(), "%u", static_cast<unsigned int>(url.port));
     ret = mbedtls_net_connect(&transport.tls_net, url.host.data(), port_text.data(), MBEDTLS_NET_PROTO_TCP);
     if (ret != 0) {
-        osal_printk("HTTPSÁ¬½Ó·þÎñÆ÷Ê§°Ü: host=%s ret=-0x%04X\n", url.host.data(), -ret);
+        osal_printk("HTTPSï¿½ï¿½ï¿½Ó·ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: host=%s ret=-0x%04X\n", url.host.data(), -ret);
         return false;
     }
 
@@ -354,7 +354,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
     do {
         ret = mbedtls_ssl_handshake(&transport.tls_ssl);
         if (ret == 0) {
-            osal_printk("HTTPSÎÕÊÖ³É¹¦: host=%s\n", url.host.data());
+            osal_printk("HTTPSï¿½ï¿½ï¿½Ö³É¹ï¿½: host=%s\n", url.host.data());
             return true;
         }
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret != MBEDTLS_ERR_SSL_TIMEOUT) {
@@ -362,7 +362,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
         }
     } while (stream_elapsed_ms(handshake_start_ms) < k_tls_handshake_timeout_ms);
 
-    osal_printk("HTTPSÎÕÊÖÊ§°Ü: host=%s ret=-0x%04X elapsed=%llu ms\n", url.host.data(), -ret,
+    osal_printk("HTTPSï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: host=%s ret=-0x%04X elapsed=%llu ms\n", url.host.data(), -ret,
                 static_cast<unsigned long long>(stream_elapsed_ms(handshake_start_ms)));
     return false;
 }
@@ -418,7 +418,7 @@ int stream_send_all(stream_transport &transport, const uint8_t *data, int len)
             osal_msleep(1);
             continue;
         }
-        osal_printk("HTTPS·¢ËÍÊ§°Ü: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPSï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: ret=-0x%04X\n", -ret);
         return -1;
     }
 
@@ -457,7 +457,7 @@ int stream_recv_some(stream_transport &transport, uint8_t *data, int len, bool *
         return -1;
     }
 
-    osal_printk("HTTPS½ÓÊÕÊ§°Ü: ret=-0x%04X\n", -ret);
+    osal_printk("HTTPSï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½: ret=-0x%04X\n", -ret);
     return -1;
 }
 
@@ -480,13 +480,13 @@ bool has_known_non_mp3_signature(const uint8_t *data, int len)
         return true;
     }
 
-    // M3U/HLS ÎÄ±¾Çåµ¥Ò²»á±»Îóµ±³ÉÒôÆµÌå£¬ÕâÀï¿ìËÙÊ¶±ð¡£
+    // M3U/HLS ï¿½Ä±ï¿½ï¿½åµ¥Ò²ï¿½á±»ï¿½óµ±³ï¿½ï¿½ï¿½Æµï¿½å£¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½
     if (len >= 7 && data[0] == '#' && data[1] == 'E' && data[2] == 'X' && data[3] == 'T' && data[4] == 'M' &&
         data[5] == '3' && data[6] == 'U') {
         return true;
     }
 
-    // ADTS AAC Í¬²½×Ö£¬minimp3 ÎÞ·¨½âÂë¡£
+    // ADTS AAC Í¬ï¿½ï¿½ï¿½Ö£ï¿½minimp3 ï¿½Þ·ï¿½ï¿½ï¿½ï¿½ë¡£
     if (len >= 2 && data[0] == 0xFF && (data[1] & 0xF6) == 0xF0) {
         return true;
     }
@@ -494,27 +494,27 @@ bool has_known_non_mp3_signature(const uint8_t *data, int len)
     return false;
 }
 
-// ÇáÁ¿¼¶ MPEG Ö¡±ß½ç¶¨Î»£º½öÍ¨¹ýÖ¡Í·½âÎö¼ÆËãÖ¡³¤£¬ÑéÖ¤Á¬ÐøÁ½¸öÍ¬²½×Ö¡£
-// ²»´´½¨½âÂëÆ÷Ò²²»·ÖÅä PCM »º³å£¬ÊÊºÏÔÚ Range »Ö¸´µÈÕ»½ôÕÅ³¡¾°Ê¹ÓÃ¡£
-// ·µ»Ø true ±íÊ¾ÕÒµ½ÓÐÐ§Ö¡±ß½ç£¬*first_frame_offset ÎªµÚÒ»¸öÍ¬²½×ÖÆ«ÒÆ¡£
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ MPEG Ö¡ï¿½ß½ç¶¨Î»ï¿½ï¿½ï¿½ï¿½Í¨ï¿½ï¿½Ö¡Í·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¬ï¿½ï¿½ï¿½Ö¡ï¿½
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ PCM ï¿½ï¿½ï¿½å£¬ï¿½Êºï¿½ï¿½ï¿½ Range ï¿½Ö¸ï¿½ï¿½ï¿½Õ»ï¿½ï¿½ï¿½Å³ï¿½ï¿½ï¿½Ê¹ï¿½Ã¡ï¿½
+// ï¿½ï¿½ï¿½ï¿½ true ï¿½ï¿½Ê¾ï¿½Òµï¿½ï¿½ï¿½Ð§Ö¡ï¿½ß½ç£¬*first_frame_offset Îªï¿½ï¿½Ò»ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½Æ«ï¿½Æ¡ï¿½
 static bool find_mp3_frame_boundary(const uint8_t *data, int len, int *first_frame_offset)
 {
     if (data == nullptr || len < 8 || first_frame_offset == nullptr) {
         return false;
     }
 
-    // MPEG1 ²ÉÑùÂÊ±í (idx: 0=44100,1=48000,2=32000,3=reserved)
+    // MPEG1 ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ (idx: 0=44100,1=48000,2=32000,3=reserved)
     static constexpr uint16_t k_sample_rates_mpeg1[4] = {44100, 48000, 32000, 0};
-    // MPEG2/2.5 ²ÉÑùÂÊ±í
+    // MPEG2/2.5 ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½
     static constexpr uint16_t k_sample_rates_mpeg2[4] = {22050, 24000, 16000, 0};
     static constexpr uint16_t k_sample_rates_mpeg25[4] = {11025, 12000, 8000, 0};
-    // ±ÈÌØÂÊ±í (idx: 1..14, 0=free/invalid), MPEG1 Layer3
+    // ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ (idx: 1..14, 0=free/invalid), MPEG1 Layer3
     static constexpr uint16_t k_bitrates_mpeg1_l3[16] = {0,   32,  40,  48,  56,  64,  80,  96,
                                                          112, 128, 160, 192, 224, 256, 320, 0};
 
     const int scan_limit = (len < 4096) ? len : 4096;
     for (int off = 0; off < scan_limit - 4; ++off) {
-        // ¼ì²é MPEG Í¬²½×Ö: 0xFFE0 (11¸ö1 + 3bit)
+        // ï¿½ï¿½ï¿½ MPEG Í¬ï¿½ï¿½ï¿½ï¿½: 0xFFE0 (11ï¿½ï¿½1 + 3bit)
         if (data[off] != 0xFF || (data[off + 1] & 0xE0) != 0xE0) {
             continue;
         }
@@ -527,11 +527,11 @@ static bool find_mp3_frame_boundary(const uint8_t *data, int len, int *first_fra
         const uint8_t srx = (b3 >> 2) & 0x03; // Sample rate index
         const uint8_t pad = (b3 >> 1) & 0x01; // Padding bit
 
-        // ½ö´¦Àí Layer 3
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Layer 3
         if (lyr != 1) {
             continue;
         }
-        // ÎÞÐ§°æ±¾/±ÈÌØÂÊ/²ÉÑùÂÊ
+        // ï¿½ï¿½Ð§ï¿½æ±¾/ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½/ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (ver == 1 || brx == 0 || brx == 15 || srx == 3) {
             continue;
         }
@@ -553,19 +553,19 @@ static bool find_mp3_frame_boundary(const uint8_t *data, int len, int *first_fra
             continue;
         }
 
-        // ¼ÆËãÖ¡³¤: MPEG1 Layer3 = 144*bitrate*1000/samplerate + pad
+        // ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½: MPEG1 Layer3 = 144*bitrate*1000/samplerate + pad
         //            MPEG2/2.5 Layer3 = 72*bitrate*1000/samplerate + pad
-        // ×¢Òâ£ºbitrate µ¥Î»ÊÇ kbps£¬Ðè³Ë 1000 ×ª»»Îª bps¡£
+        // ×¢ï¿½â£ºbitrate ï¿½ï¿½Î»ï¿½ï¿½ kbpsï¿½ï¿½ï¿½ï¿½ï¿½ 1000 ×ªï¿½ï¿½Îª bpsï¿½ï¿½
         int frame_size = (ver == 3) ? (144 * (int)bitrate * 1000 / (int)sample_rate + (int)pad)
                                     : (72 * (int)bitrate * 1000 / (int)sample_rate + (int)pad);
         if (frame_size < 16 || frame_size > 2880) {
             continue;
         }
 
-        // ÑéÖ¤ÏÂÒ»¸öÍ¬²½×Ö
+        // ï¿½ï¿½Ö¤ï¿½ï¿½Ò»ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½
         const int next_off = off + frame_size;
         if (next_off + 2 > len) {
-            continue; // Êý¾Ý²»×ãÒÔÑéÖ¤£¬²»ËãÕÒµ½
+            continue; // ï¿½ï¿½ï¿½Ý²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¤ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òµï¿½
         }
         if (data[next_off] == 0xFF && (data[next_off + 1] & 0xE0) == 0xE0) {
             *first_frame_offset = off;
@@ -632,7 +632,7 @@ int parse_id3v2_tag_total_size_if_present(const uint8_t *data, int len)
     if (!(data[0] == 'I' && data[1] == 'D' && data[2] == '3')) {
         return 0;
     }
-    // ½ö½ÓÊÜ³£¼ûID3v2°æ±¾£¬½µµÍÎóÅÐ¸ÅÂÊ¡£
+    // ï¿½ï¿½ï¿½ï¿½ï¿½Ü³ï¿½ï¿½ï¿½ID3v2ï¿½æ±¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¸ï¿½ï¿½Ê¡ï¿½
     if (!((data[3] == 2) || (data[3] == 3) || (data[3] == 4))) {
         return 0;
     }
@@ -658,7 +658,7 @@ int parse_http_status_code_from_header(const char *header)
         return -1;
     }
 
-    // ÆÚÍûÊ×ÐÐÎª: HTTP/1.1 200 OK
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îª: HTTP/1.1 200 OK
     const char *p = strchr(header, ' ');
     if (p == nullptr) {
         return -1;
@@ -749,7 +749,7 @@ int find_mp3_sync_offset(const uint8_t *data, int len)
         if (data[i] != 0xFF || (data[i + 1] & 0xE0) != 0xE0) {
             continue;
         }
-        // ¹ýÂË±£ÁôÖµ£¬½µµÍÎóÅÐ£ºlayer²»ÄÜÎª00£¬bitrate/samplerateË÷Òý²»ÄÜÊÇ±£ÁôÖµ
+        // ï¿½ï¿½ï¿½Ë±ï¿½ï¿½ï¿½Öµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½layerï¿½ï¿½ï¿½ï¿½Îª00ï¿½ï¿½bitrate/samplerateï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç±ï¿½ï¿½ï¿½Öµ
         int layer_bits = (data[i + 1] >> 1) & 0x3;
         int bitrate_idx = (data[i + 2] >> 4) & 0xF;
         int sample_idx = (data[i + 2] >> 2) & 0x3;
@@ -762,29 +762,29 @@ int find_mp3_sync_offset(const uint8_t *data, int len)
 }
 
 // ============================================================
-// HTTP Chunked ´«Êä½âÂëÆ÷
-// ×´Ì¬»ú´¦Àí "size\r\n data\r\n ... 0\r\n\r\n" ¸ñÊ½
-// ²Î¿¼ RFC 7230 ¡ì4.1£»½ö½âÎöÁ÷Ê½³¡¾°ËùÐèµÄ×Ó¼¯¡£
+// HTTP Chunked ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+// ×´Ì¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ "size\r\n data\r\n ... 0\r\n\r\n" ï¿½ï¿½Ê½
+// ï¿½Î¿ï¿½ RFC 7230 ï¿½ï¿½4.1ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó¼ï¿½ï¿½ï¿½
 // ============================================================
 struct chunked_decoder {
-    // ½âÂë×´Ì¬
+    // ï¿½ï¿½ï¿½ï¿½×´Ì¬
     enum class st : uint8_t {
-        rd_size,  // ¶ÁÈ¡ chunk ´óÐ¡µÄÊ®Áù½øÖÆ×Ö·û´®
-        skip_ext, // Ìø¹ý chunk-extension£¨·ÖºÅºóÖ±µ½\r£©
-        rd_lf,    // µÈ´ý \n£¨size ÐÐµÄ CRLF µÄµÚ¶þ×Ö½Ú£©
-        rd_data,  // ¶ÁÈ¡ chunk ÌåÊý¾Ý
-        data_cr,  // µÈ´ý chunk Êý¾ÝºóµÄ \r
-        data_lf,  // µÈ´ý chunk Êý¾ÝºóµÄ \n
-        trailer,  // ¶ÁÈ¡ trailing headers£¨0-chunk ºó£©
-        done,     // ×îÖÕ 0-chunk + CRLF ÒÑÏû·Ñ
-        err       // ½âÎö´íÎó
+        rd_size,  // ï¿½ï¿½È¡ chunk ï¿½ï¿½Ð¡ï¿½ï¿½Ê®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½ï¿½ï¿½
+        skip_ext, // ï¿½ï¿½ï¿½ï¿½ chunk-extensionï¿½ï¿½ï¿½ÖºÅºï¿½Ö±ï¿½ï¿½\rï¿½ï¿½
+        rd_lf,    // ï¿½È´ï¿½ \nï¿½ï¿½size ï¿½Ðµï¿½ CRLF ï¿½ÄµÚ¶ï¿½ï¿½Ö½Ú£ï¿½
+        rd_data,  // ï¿½ï¿½È¡ chunk ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        data_cr,  // ï¿½È´ï¿½ chunk ï¿½ï¿½ï¿½Ýºï¿½ï¿½ \r
+        data_lf,  // ï¿½È´ï¿½ chunk ï¿½ï¿½ï¿½Ýºï¿½ï¿½ \n
+        trailer,  // ï¿½ï¿½È¡ trailing headersï¿½ï¿½0-chunk ï¿½ï¿½
+        done,     // ï¿½ï¿½ï¿½ï¿½ 0-chunk + CRLF ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        err       // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     };
 
     st state = st::rd_size;
     int32_t chunk_remaining = 0;
     std::array<char, 20> hex_buf = {0};
     int hex_len = 0;
-    // trailer ×´Ì¬ÏÂÐèÒªÌø¹ý \r\n ½áÎ²µÄ¿ÕÐÐ
+    // trailer ×´Ì¬ï¿½ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½ï¿½ \r\n ï¿½ï¿½Î²ï¿½Ä¿ï¿½ï¿½ï¿½
     bool trailer_prev_cr = false;
 
     void reset()
@@ -805,8 +805,8 @@ struct chunked_decoder {
         return state == st::err;
     }
 
-    // Ïò½âÂëÆ÷Î¹ÈëÔ­Ê¼½ÓÊÕ×Ö½Ú£¬½«½âÂëºóµÄÒôÆµÌåÐ´Èë out[0..out_cap)¡£
-    // ·µ»ØÐ´Èë out µÄ×Ö½ÚÊý£¨>=0£©£»-1 ±íÊ¾½âÎö´íÎó£»Í¨¹ý is_done ±¨¸æ×îÖÕ 0-chunk¡£
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î¹ï¿½ï¿½Ô­Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½Ö½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½ï¿½Ð´ï¿½ï¿½ out[0..out_cap)ï¿½ï¿½
+    // ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½ out ï¿½ï¿½ï¿½Ö½ï¿½ï¿½ï¿½ï¿½ï¿½>=0ï¿½ï¿½ï¿½ï¿½-1 ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¨ï¿½ï¿½ is_done ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 0-chunkï¿½ï¿½
     int feed(const uint8_t *in, int in_len, uint8_t *out, int out_cap, bool &is_done)
     {
         is_done = false;
@@ -835,12 +835,12 @@ struct chunked_decoder {
                         if (hex_len < static_cast<int>(hex_buf.size()) - 1) {
                             hex_buf[hex_len++] = static_cast<char>(b);
                         } else {
-                            osal_printk("chunked: chunk-size ×Ö¶Î¹ý³¤\n");
+                            osal_printk("chunked: chunk-size ï¿½Ö¶Î¹ï¿½ï¿½ï¿½\n");
                             state = st::err;
                             return -1;
                         }
                     } else {
-                        osal_printk("chunked: chunk-size º¬·Ç·¨×Ö·û 0x%02X\n", b);
+                        osal_printk("chunked: chunk-size ï¿½ï¿½ï¿½Ç·ï¿½ï¿½Ö·ï¿½ 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
@@ -854,14 +854,14 @@ struct chunked_decoder {
 
                 case st::rd_lf:
                     if (b != '\n') {
-                        osal_printk("chunked: ÆÚÍû '\\n'£¬µÃµ½ 0x%02X\n", b);
+                        osal_printk("chunked: ï¿½ï¿½ï¿½ï¿½ '\\n'ï¿½ï¿½ï¿½Ãµï¿½ 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
                     {
-                        // ½âÎöÊ®Áù½øÖÆ chunk ´óÐ¡£¨ÔÊÐí hex_len==0 Ö»ÔÚ rd_size ½×¶Î±» \r ´¥·¢Ê±£©
+                        // ï¿½ï¿½ï¿½ï¿½Ê®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ chunk ï¿½ï¿½Ð¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ hex_len==0 Ö»ï¿½ï¿½ rd_size ï¿½×¶Î±ï¿½ \r ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
                         if (hex_len == 0) {
-                            osal_printk("chunked: ¿Õ chunk-size ×Ö¶Î\n");
+                            osal_printk("chunked: ï¿½ï¿½ chunk-size ï¿½Ö¶ï¿½\n");
                             state = st::err;
                             return -1;
                         }
@@ -871,7 +871,7 @@ struct chunked_decoder {
                         hex_len = 0;
                         chunk_remaining = static_cast<int32_t>(sz);
                         if (chunk_remaining == 0) {
-                            // ×îÖÕ 0-chunk£¬½øÈë trailer Ïû·Ñ½×¶Î
+                            // ï¿½ï¿½ï¿½ï¿½ 0-chunkï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ trailer ï¿½ï¿½ï¿½Ñ½×¶ï¿½
                             state = st::trailer;
                             trailer_prev_cr = false;
                         } else {
@@ -891,7 +891,7 @@ struct chunked_decoder {
 
                 case st::data_cr:
                     if (b != '\r') {
-                        osal_printk("chunked: chunk Î²²¿ÆÚÍû '\\r'£¬µÃµ½ 0x%02X\n", b);
+                        osal_printk("chunked: chunk Î²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ '\\r'ï¿½ï¿½ï¿½Ãµï¿½ 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
@@ -900,20 +900,20 @@ struct chunked_decoder {
 
                 case st::data_lf:
                     if (b != '\n') {
-                        osal_printk("chunked: chunk Î²²¿ÆÚÍû '\\n'£¬µÃµ½ 0x%02X\n", b);
+                        osal_printk("chunked: chunk Î²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ '\\n'ï¿½ï¿½ï¿½Ãµï¿½ 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
-                    // ×¼±¸¶ÁÈ¡ÏÂÒ»¸ö chunk
+                    // ×¼ï¿½ï¿½ï¿½ï¿½È¡ï¿½ï¿½Ò»ï¿½ï¿½ chunk
                     state = st::rd_size;
                     break;
 
                 case st::trailer:
-                    // Ïû·Ñ trailer headers£¬µÈ´ý¿ÕÐÐ (\r\n) ±íÊ¾½áÊø
+                    // ï¿½ï¿½ï¿½ï¿½ trailer headersï¿½ï¿½ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½ (\r\n) ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½
                     if (b == '\r') {
                         trailer_prev_cr = true;
                     } else if (b == '\n' && trailer_prev_cr) {
-                        // Óöµ½ \r\n£¬ÒÑÊÇ¿ÕÐÐ£¨¼ò»¯£ºµÚÒ»¸ö \r\n ¼´ÖÕÖ¹£©
+                        // ï¿½ï¿½ï¿½ï¿½ \r\nï¿½ï¿½ï¿½ï¿½ï¿½Ç¿ï¿½ï¿½Ð£ï¿½ï¿½ò»¯£ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ \r\n ï¿½ï¿½ï¿½ï¿½Ö¹ï¿½ï¿½
                         state = st::done;
                         is_done = true;
                         trailer_prev_cr = false;
@@ -933,24 +933,24 @@ struct chunked_decoder {
     }
 };
 
-// ©¤©¤©¤ minimp3_ex IO callbacks ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ minimp3_ex IO callbacks ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 // Context shared between read and seek callbacks.
 struct stream_ex_io_ctx {
     stream_transport transport = {};
     stream_url_desc url = {};
     bool connected = false;
-    uint64_t stream_pos = 0;       // µ±Ç° HTTP Á÷ÒÑ¶ÁÈ¡µ½µÄÎÄ¼þ×Ö½ÚÆ«ÒÆ
-    uint64_t mp3_start_offset = 0; // ÎÄ¼þÖÐµÚÒ»¸ö MP3 Ö¡µÄÆ«ÒÆ£¨= dec->start_offset£©
-    uint64_t content_length = 0;   // HTTP Content-Length£¨0=Î´Öª/chunked£©
-    uint64_t seek_on_open = 0;     // ·Ç0Ê±£ºÏÂ´Î open µÄ seek(0) ½«ÓÃ Range ÇëÇó¶¨Î»µ½´Ë×Ö½Ú
+    uint64_t stream_pos = 0;       // ï¿½ï¿½Ç° HTTP ï¿½ï¿½ï¿½Ñ¶ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½Ö½ï¿½Æ«ï¿½ï¿½
+    uint64_t mp3_start_offset = 0; // ï¿½Ä¼ï¿½ï¿½Ðµï¿½Ò»ï¿½ï¿½ MP3 Ö¡ï¿½ï¿½Æ«ï¿½Æ£ï¿½= dec->start_offsetï¿½ï¿½
+    uint64_t content_length = 0;   // HTTP Content-Lengthï¿½ï¿½0=Î´Öª/chunkedï¿½ï¿½
+    uint64_t seek_on_open = 0;     // ï¿½ï¿½0Ê±ï¿½ï¿½ï¿½Â´ï¿½ open ï¿½ï¿½ seek(0) ï¿½ï¿½ï¿½ï¿½ Range ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½Ö½ï¿½
     bool seek_on_open_active = false;
-    // Range ÖØ¶¨Ïòºó£¬mp3dec_ex_open_cb »áÔÙ´Î seek(dec->start_offset)¡£
-    // start_offset ÊÇÏà¶ÔÓÚ Range ÆðÊ¼Î»ÖÃµÄÆ«ÒÆ£¬seek_base ¼ÇÂ¼ Range ÆðÊ¼
-    // ¾ø¶Ô×Ö½ÚÎ»ÖÃ£¬ÓÃÓÚ½«µÚ¶þ´Î seek µÄÏà¶ÔÆ«ÒÆ×ª»»Îª¾ø¶ÔÎ»ÖÃ¡£
+    // Range ï¿½Ø¶ï¿½ï¿½ï¿½ï¿½mp3dec_ex_open_cb ï¿½ï¿½ï¿½Ù´ï¿½ seek(dec->start_offset)ï¿½ï¿½
+    // start_offset ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Range ï¿½ï¿½Ê¼Î»ï¿½Ãµï¿½Æ«ï¿½Æ£ï¿½seek_base ï¿½ï¿½Â¼ Range ï¿½ï¿½Ê¼
+    // ï¿½ï¿½ï¿½ï¿½ï¿½Ö½ï¿½Î»ï¿½Ã£ï¿½ï¿½ï¿½ï¿½Ú½ï¿½ï¿½Ú¶ï¿½ï¿½ï¿½ seek ï¿½ï¿½ï¿½ï¿½ï¿½Æ«ï¿½ï¿½×ªï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½Î»ï¿½Ã¡ï¿½
     uint64_t seek_base = 0;
 };
 
-// ´Ó HTTP ÏìÓ¦Í·ÖÐÌáÈ¡ Content-Length¡£·µ»Ø 0 ±íÊ¾Î´ÕÒµ½»ò½âÎöÊ§°Ü¡£
+// ï¿½ï¿½ HTTP ï¿½ï¿½Ó¦Í·ï¿½ï¿½ï¿½ï¿½È¡ Content-Lengthï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 0 ï¿½ï¿½Ê¾Î´ï¿½Òµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½
 static uint64_t parse_content_length_from_header(const char *header)
 {
     if (header == nullptr) {
@@ -958,14 +958,14 @@ static uint64_t parse_content_length_from_header(const char *header)
     }
     const char *p = header;
     while (*p) {
-        // ÕÒÏÂÒ»ÐÐ¿ªÍ·
+        // ï¿½ï¿½ï¿½ï¿½Ò»ï¿½Ð¿ï¿½Í·
         while (*p == '\r' || *p == '\n')
             ++p;
         if (*p == '\0')
             break;
-        // ²»Çø·Ö´óÐ¡Ð´±È½Ï "content-length:"
+        // ï¿½ï¿½ï¿½ï¿½ï¿½Ö´ï¿½Ð¡Ð´ï¿½È½ï¿½ "content-length:"
         if (!starts_with_ascii_ignore_case_local(p, "content-length:")) {
-            // Ìøµ½ÏÂÒ»ÐÐ
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½
             const char *eol = strchr(p, '\r');
             if (eol == nullptr)
                 eol = strchr(p, '\n');
@@ -975,7 +975,7 @@ static uint64_t parse_content_length_from_header(const char *header)
             continue;
         }
         p += 14; // strlen("content-length")
-        // Ìø¹ý ':' ºÍ¿Õ¸ñ
+        // ï¿½ï¿½ï¿½ï¿½ ':' ï¿½Í¿Õ¸ï¿½
         while (*p == ':' || *p == ' ' || *p == '\t')
             ++p;
         if (*p < '0' || *p > '9')
@@ -990,8 +990,8 @@ static uint64_t parse_content_length_from_header(const char *header)
     return 0;
 }
 
-// ´Ó HTTP ÏìÓ¦Í·ÖÐÌáÈ¡ Content-Range µÄÍêÕû³¤¶È£¨bytes X-Y/Z ÖÐµÄ Z£©¡£
-// ·µ»Ø 0 ±íÊ¾Î´ÕÒµ½»ò½âÎöÊ§°Ü¡£
+// ï¿½ï¿½ HTTP ï¿½ï¿½Ó¦Í·ï¿½ï¿½ï¿½ï¿½È¡ Content-Range ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È£ï¿½bytes X-Y/Z ï¿½Ðµï¿½ Zï¿½ï¿½ï¿½ï¿½
+// ï¿½ï¿½ï¿½ï¿½ 0 ï¿½ï¿½Ê¾Î´ï¿½Òµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½
 static uint64_t parse_content_range_total(const char *header)
 {
     if (header == nullptr) {
@@ -1015,13 +1015,13 @@ static uint64_t parse_content_range_total(const char *header)
         p += 13; // strlen("content-range")
         while (*p == ':' || *p == ' ' || *p == '\t')
             ++p;
-        // ÆÚÍû¸ñÊ½: bytes X-Y/Z »ò bytes */Z
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½: bytes X-Y/Z ï¿½ï¿½ bytes */Z
         if (!starts_with_ascii_ignore_case_local(p, "bytes"))
             return 0;
         p += 5; // strlen("bytes")
         while (*p == ' ')
             ++p;
-        // Ìø¹ý X-Y »ò *
+        // ï¿½ï¿½ï¿½ï¿½ X-Y ï¿½ï¿½ *
         while (*p >= '0' && *p <= '9')
             ++p;
         if (*p == '-') {
@@ -1033,7 +1033,7 @@ static uint64_t parse_content_range_total(const char *header)
         }
         if (*p != '/')
             return 0;
-        ++p; // Ìø¹ý '/'
+        ++p; // ï¿½ï¿½ï¿½ï¿½ '/'
         while (*p == ' ')
             ++p;
         if (*p < '0' || *p > '9')
@@ -1083,24 +1083,24 @@ static size_t stream_ex_read_cb(void *buf, size_t size, void *user_data)
             osal_msleep(10);
             continue;
         }
-        // ret <= 0, not retry-later, not timeout ¡ú hard error or remote close
+        // ret <= 0, not retry-later, not timeout ï¿½ï¿½ hard error or remote close
         break;
     }
     return total;
 }
 
-// Seek callback: ÓÅÏÈÅÅ¿Õ×Ö½ÚÇ°ÒÆ£¨±ÜÃâ TCP ÖØÁ¬£©£¬½öÔÚÐèÒªºóÍË¡¢³¬¹ý drain ãÐÖµ
-// »òÎ´Á¬½ÓÊ±²ÅÖØÁ¬ HTTP¡£
+// Seek callback: ï¿½ï¿½ï¿½ï¿½ï¿½Å¿ï¿½ï¿½Ö½ï¿½Ç°ï¿½Æ£ï¿½ï¿½ï¿½ï¿½ï¿½ TCP ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½Ë¡ï¿½ï¿½ï¿½ï¿½ï¿½ drain ï¿½ï¿½Öµ
+// ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ HTTPï¿½ï¿½
 static int stream_ex_seek_cb(uint64_t position, void *user_data)
 {
     auto *ctx = static_cast<stream_ex_io_ctx *>(user_data);
 
-    // ©¤©¤ ´¦Àí seek_on_open£ºµ± minimp3_ex_open_cb µ÷ÓÃ seek(0) Ê±£¬
-    // Èç¹û seek_on_open_active ÎªÕæ£¬ÔòÓÃ Range ÇëÇóÖ±½ÓÌøµ½Ä¿±êÎ»ÖÃ£¬
-    // ±ÜÃâÏÈ GET ÔÙ drain µÄÀË·Ñ¡£Í¬Ê±¼ÇÂ¼ seek_base ÓÃÓÚºóÐøµÚ¶þ´Î seek¡£ ©¤©¤
+    // ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ seek_on_openï¿½ï¿½ï¿½ï¿½ minimp3_ex_open_cb ï¿½ï¿½ï¿½ï¿½ seek(0) Ê±ï¿½ï¿½
+    // ï¿½ï¿½ï¿½ seek_on_open_active Îªï¿½æ£¬ï¿½ï¿½ï¿½ï¿½ Range ï¿½ï¿½ï¿½ï¿½Ö±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Î»ï¿½Ã£ï¿½
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ GET ï¿½ï¿½ drain ï¿½ï¿½ï¿½Ë·Ñ¡ï¿½Í¬Ê±ï¿½ï¿½Â¼ seek_base ï¿½ï¿½ï¿½Úºï¿½ï¿½ï¿½ï¿½Ú¶ï¿½ï¿½ï¿½ seekï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
     if (ctx->seek_on_open_active && position == 0) {
         ctx->seek_on_open_active = false;
-        ctx->seek_base = ctx->seek_on_open; // ¼ÇÂ¼ Range ÆðÊ¼¾ø¶ÔÎ»ÖÃ£¬¹©µÚ¶þ´Î seek Æ«ÒÆ×ª»»
+        ctx->seek_base = ctx->seek_on_open; // ï¿½ï¿½Â¼ Range ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½Î»ï¿½Ã£ï¿½ï¿½ï¿½ï¿½Ú¶ï¿½ï¿½ï¿½ seek Æ«ï¿½ï¿½×ªï¿½ï¿½
         position = ctx->seek_on_open;
         ctx->seek_on_open = 0;
         if (position > 0) {
@@ -1110,33 +1110,33 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
         }
     }
 
-    // ©¤©¤ ´¦Àí post-Range µÚ¶þ´Î seek ©¤©¤
-    // mp3dec_ex_open_cb ÔÚ Range ÖØ¶¨Ïò+É¨Ãèºó£¬»áÓÃ start_offset ÔÙ´Î seek¡£
-    // start_offset ÊÇÏà¶ÔÓÚ Range ÆðÊ¼Î»ÖÃµÄÆ«ÒÆ£¨Í¨³£ 0 »ò ID3 ±êÇ©´óÐ¡£©£¬
-    // ±ØÐë¼ÓÉÏ seek_base ×ª»»Îª¾ø¶ÔÎÄ¼þÆ«ÒÆ£¬·ñÔò»á»ØÍËµ½ÎÄ¼þÍ·ÖØÐÂ GET¡£
-    // Ê¹ÓÃ position < seek_base ×÷ÎªÅÐ¶ÏÌõ¼þ£ºstart_offset ×ÜÊÇÔ¶Ð¡ÓÚ seek_base£¬
-    // ¶ø mp3dec_iterate_cb ÄÚ²¿µÄ ID3 seek »á±»ÕýÈ·×ª»»Îª¾ø¶ÔÎ»ÖÃÇÒ²»Ïû·Ñ seek_base¡£
+    // ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ post-Range ï¿½Ú¶ï¿½ï¿½ï¿½ seek ï¿½ï¿½ï¿½ï¿½
+    // mp3dec_ex_open_cb ï¿½ï¿½ Range ï¿½Ø¶ï¿½ï¿½ï¿½+É¨ï¿½ï¿½ó£¬»ï¿½ï¿½ï¿½ start_offset ï¿½Ù´ï¿½ seekï¿½ï¿½
+    // start_offset ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Range ï¿½ï¿½Ê¼Î»ï¿½Ãµï¿½Æ«ï¿½Æ£ï¿½Í¨ï¿½ï¿½ 0 ï¿½ï¿½ ID3 ï¿½ï¿½Ç©ï¿½ï¿½Ð¡ï¿½ï¿½ï¿½ï¿½
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ seek_base ×ªï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½Æ«ï¿½Æ£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ëµï¿½ï¿½Ä¼ï¿½Í·ï¿½ï¿½ï¿½ï¿½ GETï¿½ï¿½
+    // Ê¹ï¿½ï¿½ position < seek_base ï¿½ï¿½Îªï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½start_offset ï¿½ï¿½ï¿½ï¿½Ô¶Ð¡ï¿½ï¿½ seek_baseï¿½ï¿½
+    // ï¿½ï¿½ mp3dec_iterate_cb ï¿½Ú²ï¿½ï¿½ï¿½ ID3 seek ï¿½á±»ï¿½ï¿½È·×ªï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½Ò²ï¿½ï¿½ï¿½ï¿½ï¿½ seek_baseï¿½ï¿½
     if (ctx->seek_base > 0 && position < ctx->seek_base) {
         osal_printk("ex-seek: post-Range seek adjust: %llu + base %llu = %llu\n",
                     static_cast<unsigned long long>(position), static_cast<unsigned long long>(ctx->seek_base),
                     static_cast<unsigned long long>(position + ctx->seek_base));
         position += ctx->seek_base;
-        ctx->seek_base = 0; // Ïû·Ñ£¬½ö¶ÔµÚÒ»´Î post-Range seek ÉúÐ§
+        ctx->seek_base = 0; // ï¿½ï¿½ï¿½Ñ£ï¿½ï¿½ï¿½ï¿½Ôµï¿½Ò»ï¿½ï¿½ post-Range seek ï¿½ï¿½Ð§
     }
 
-    // ©¤©¤ ¿ìËÙÂ·¾¶£ºÒÑÁ¬½ÓÇÒÄ¿±êÎ»ÖÃ >= µ±Ç°Î»ÖÃ ¡ú ÅÅ¿Õ×Ö½Ú¼´¿É ©¤©¤
+    // ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Î»ï¿½ï¿½ >= ï¿½ï¿½Ç°Î»ï¿½ï¿½ ï¿½ï¿½ ï¿½Å¿ï¿½ï¿½Ö½Ú¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
     if (ctx->connected && position >= ctx->stream_pos) {
         uint64_t to_skip = position - ctx->stream_pos;
         if (to_skip == 0) {
-            return 0; // ÒÑÔÚÄ¿±êÎ»ÖÃ
+            return 0; // ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Î»ï¿½ï¿½
         }
-        // ³¬¹ýãÐÖµÔò×ßÖØÁ¬Â·¾¶£¨Range ÇëÇó¸ü¿É¿¿£©
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½Range ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É¿ï¿½ï¿½ï¿½
         if (to_skip > k_max_drain_bytes) {
             osal_printk("ex-seek: drain %llu exceeds limit %llu, reconnecting\n",
                         static_cast<unsigned long long>(to_skip), static_cast<unsigned long long>(k_max_drain_bytes));
             goto do_reconnect;
         }
-        // ÅÅ¿Õ to_skip ×Ö½Ú£¨Ð¡¿é¶ÁÈ¡¶ªÆú£©
+        // ï¿½Å¿ï¿½ to_skip ï¿½Ö½Ú£ï¿½Ð¡ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         uint8_t drain_buf[256];
         const uint64_t drain_start = stream_now_ms();
         static constexpr uint32_t k_drain_timeout_ms = 5000;
@@ -1144,23 +1144,23 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
             size_t chunk = (to_skip > sizeof(drain_buf)) ? sizeof(drain_buf) : static_cast<size_t>(to_skip);
             size_t got = stream_ex_read_cb(drain_buf, chunk, user_data);
             if (got == 0) {
-                // Á¬½Ó¶Ï¿ª£¬»ØÍËµ½ÖØÁ¬Â·¾¶
+                // ï¿½ï¿½ï¿½Ó¶Ï¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ëµï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½
                 osal_printk("ex-seek: drain lost connection at %llu, reconnecting\n",
                             static_cast<unsigned long long>(ctx->stream_pos));
                 goto do_reconnect;
             }
             to_skip -= got;
-            // stream_ex_read_cb ÒÑ¸üÐÂ ctx->stream_pos
+            // stream_ex_read_cb ï¿½Ñ¸ï¿½ï¿½ï¿½ ctx->stream_pos
             if (stream_elapsed_ms(drain_start) > k_drain_timeout_ms) {
                 osal_printk("ex-seek: drain timeout, reconnecting\n");
                 goto do_reconnect;
             }
         }
-        return 0; // ÅÅ¿ÕÍê³É
+        return 0; // ï¿½Å¿ï¿½ï¿½ï¿½ï¿½
     }
 
 do_reconnect:
-    // ©¤©¤ ÖØÁ¬Â·¾¶£º¶Ï¿ª¾ÉÁ¬½Ó£¬·¢ÆðÐÂ HTTP ÇëÇó ©¤©¤
+    // ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½Ï¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ HTTP ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
     free_stream_transport(ctx->transport);
     ctx->connected = false;
     ctx->stream_pos = 0;
@@ -1240,16 +1240,16 @@ do_reconnect:
         return -1;
     }
 
-    // ½âÎö Content-Length ºÍ Content-Range£¨ÓÃÓÚ seek ¼ÆËãºÍ½ø¶È×·×Ù£©
+    // ï¿½ï¿½ï¿½ï¿½ Content-Length ï¿½ï¿½ Content-Rangeï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ seek ï¿½ï¿½ï¿½ï¿½Í½ï¿½ï¿½ï¿½×·ï¿½Ù£ï¿½
     {
-        // Content-Range ÓÅÏÈ£ºRange ÇëÇóµÄ 206 ÏìÓ¦Ð¯´øÍêÕûÎÄ¼þ´óÐ¡(bytes X-Y/Z)
+        // Content-Range ï¿½ï¿½ï¿½È£ï¿½Range ï¿½ï¿½ï¿½ï¿½ï¿½ 206 ï¿½ï¿½Ó¦Ð¯ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½Ð¡(bytes X-Y/Z)
         uint64_t cr_total = parse_content_range_total(header.data());
         if (cr_total > 0) {
             ctx->content_length = cr_total;
             osal_printk("ex-seek: Content-Range total=%llu\n", static_cast<unsigned long long>(cr_total));
         } else if (position == 0) {
-            // ½öÔÚ·Ç Range ÇëÇó(´ÓÍ· GET)Ê±Ê¹ÓÃ Content-Length£¬
-            // Range ÇëÇóµÄ Content-Length Ö»ÊÇ range Ìå´óÐ¡£¬²»ÄÜ×÷ÎªÎÄ¼þ×Ü³¤¡£
+            // ï¿½ï¿½ï¿½Ú·ï¿½ Range ï¿½ï¿½ï¿½ï¿½(ï¿½ï¿½Í· GET)Ê±Ê¹ï¿½ï¿½ Content-Lengthï¿½ï¿½
+            // Range ï¿½ï¿½ï¿½ï¿½ï¿½ Content-Length Ö»ï¿½ï¿½ range ï¿½ï¿½ï¿½Ð¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îªï¿½Ä¼ï¿½ï¿½Ü³ï¿½ï¿½ï¿½
             uint64_t cl = parse_content_length_from_header(header.data());
             if (cl > 0) {
                 ctx->content_length = cl;
@@ -1268,13 +1268,13 @@ do_reconnect:
     }
 
     ctx->connected = true;
-    ctx->stream_pos = position; // HTTP Range ÏìÓ¦Ìå´Ó position ¿ªÊ¼
+    ctx->stream_pos = position; // HTTP Range ï¿½ï¿½Ó¦ï¿½ï¿½ï¿½ position ï¿½ï¿½Ê¼
     return 0;
 }
 
 } // namespace
 
-// ³õÊ¼»¯¾²Ì¬³ÉÔ±±äÁ¿
+// ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½Ì¬ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ï¿½
 std::array<char, 512> minimp3::current_url = {0};
 bool minimp3::is_playing = false;
 bool minimp3::is_url_ready = false;
@@ -1289,6 +1289,7 @@ uint32_t minimp3::s_duration_seconds = 0;
 uint64_t minimp3::s_bytes_streamed = 0;
 uint32_t minimp3::s_avg_bitrate_bps = 0;
 minimp3::iis_set_rate minimp3::iis_set_rate_func = nullptr;
+volatile bool minimp3::s_exit_requested = false;
 minimp3::mp3_get_into_iis minimp3::mp3_get_into_iis_func = nullptr;
 minimp3::playback_queue_level_getter minimp3::playback_queue_level_getter_func = nullptr;
 
@@ -1328,6 +1329,17 @@ void minimp3::play_url(const char *url)
     http_get_url(url);
 }
 
+
+void minimp3::request_exit()
+{
+    s_exit_requested = true;
+    is_playing = false;
+}
+
+void minimp3::reset_exit()
+{
+    s_exit_requested = false;
+}
 void minimp3::stop_playback()
 {
     http_stop();
@@ -1342,7 +1354,7 @@ void minimp3::http_set_url(const char *url, bool start_playback)
 {
     if (url == nullptr || url[0] == '\0') {
         if (start_playback) {
-            // ÔÊÐíPlayÃüÁîÔÚÒÑÓÐURL³¡¾°ÏÂ½öÀ­Æð²¥·Å¿ª¹Ø¡£
+            // ï¿½ï¿½ï¿½ï¿½Playï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½URLï¿½ï¿½ï¿½ï¿½ï¿½Â½ï¿½ï¿½ï¿½ï¿½ð²¥·Å¿ï¿½ï¿½Ø¡ï¿½
             if (current_url[0] != '\0') {
                 is_playing = true;
                 if (!is_url_ready) {
@@ -1357,7 +1369,7 @@ void minimp3::http_set_url(const char *url, bool start_playback)
     if (!is_same_url) {
         copy_string_safe(current_url.data(), current_url.size(), url);
         is_url_ready = true;
-        // ÐÂURLÊ±ÖØÖÃËùÓÐÎ»ÖÃ×·×Ù×´Ì¬
+        // ï¿½ï¿½URLÊ±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½×·ï¿½ï¿½×´Ì¬
         is_paused = false;
         s_has_range = false;
         s_range_start_byte = 0;
@@ -1372,7 +1384,7 @@ void minimp3::http_set_url(const char *url, bool start_playback)
             minimp3::bump_stream_epoch();
         }
     } else if (!is_playing && !is_url_ready) {
-        // Í¬URL´ÓÔÝÍ£/Í£Ö¹»Ö¸´Ê±£¬È·±£ÄÜÖØÆôÀ­Á÷¡£
+        // Í¬URLï¿½ï¿½ï¿½ï¿½Í£/Í£Ö¹ï¿½Ö¸ï¿½Ê±ï¿½ï¿½È·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         is_url_ready = true;
     }
 
@@ -1393,7 +1405,7 @@ void minimp3::http_get_url(const char *url)
 
 void minimp3::http_stop()
 {
-    // ¸üÐÂ×´Ì¬
+    // ï¿½ï¿½ï¿½ï¿½×´Ì¬
     is_playing = false;
     is_url_ready = false;
     is_paused = false;
@@ -1406,9 +1418,9 @@ void minimp3::http_stop()
 
 void minimp3::http_clear_url()
 {
-    // Çå¿ÕURLÊý¾Ý
+    // ï¿½ï¿½ï¿½URLï¿½ï¿½ï¿½ï¿½
     memset(current_url.data(), 0, current_url.size());
-    // ¸üÐÂ×´Ì¬
+    // ï¿½ï¿½ï¿½ï¿½×´Ì¬
     is_playing = false;
     is_url_ready = false;
     is_paused = false;
@@ -1428,9 +1440,9 @@ void minimp3::pause_playback()
     if (!is_playing) {
         return;
     }
-    // ¼ÇÂ¼Î»ÖÃ£¬ÉèÖÃ Range »Ö¸´²ÎÊý¡£
-    // ÔÝÍ£Ê±Ö÷Ñ­»·»á¹Ø±Õ TCP Á¬½ÓÊÍ·Å LWIP ÄÚ´æ£¬
-    // ·ñÔò·þÎñÆ÷³ÖÐøÍÆËÍÊý¾Ý»áºÄ¾¡ LWIP »º³åÇø£¬µ¼ÖÂ NOTIFY Ê§°Ü¡£
+    // ï¿½ï¿½Â¼Î»ï¿½Ã£ï¿½ï¿½ï¿½ï¿½ï¿½ Range ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+    // ï¿½ï¿½Í£Ê±ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½Ø±ï¿½ TCP ï¿½ï¿½ï¿½ï¿½ï¿½Í·ï¿½ LWIP ï¿½Ú´æ£¬
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý»ï¿½Ä¾ï¿½ LWIP ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ NOTIFY Ê§ï¿½Ü¡ï¿½
     s_resume_target_byte = s_bytes_streamed;
     s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
     s_has_range = true;
@@ -1454,8 +1466,8 @@ void minimp3::resume_playback()
         return;
     }
     osal_printk("resume_playback: resuming from byte %llu\n", static_cast<unsigned long long>(s_resume_target_byte));
-    // ÔÝÍ£Ê± TCP Á¬½ÓÒÑ¹Ø±Õ¡£s_has_range ÒÑÉèÖÃ£¬Ö÷Ñ­»·Í¨¹ý REOPEN
-    // ÓÃ Range ÇëÇóÖØÁ¬¡£IO »º³åÇøÎª¾²Ì¬Ô¤·ÖÅä£¬ÓÀ²»Ê§°Ü¡£
+    // ï¿½ï¿½Í£Ê± TCP ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¹Ø±Õ¡ï¿½s_has_range ï¿½ï¿½ï¿½ï¿½ï¿½Ã£ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½Í¨ï¿½ï¿½ REOPEN
+    // ï¿½ï¿½ Range ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½IO ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îªï¿½ï¿½Ì¬Ô¤ï¿½ï¿½ï¿½ä£¬ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü¡ï¿½
     is_paused = false;
     is_playing = true;
     minimp3::bump_stream_epoch();
@@ -1476,10 +1488,10 @@ void minimp3::seek_to_seconds(uint32_t seconds)
             byte_offset = (uint64_t)seconds * s_content_length / (uint64_t)s_duration_seconds;
         }
     } else if (s_avg_bitrate_bps > 0) {
-        // ·½·¨2: Ê×Ö¡/Æ½¾ù±ÈÌØÂÊ¹ÀËã (CBR×¼È·, VBR½üËÆ)
+        // ï¿½ï¿½ï¿½ï¿½2: ï¿½ï¿½Ö¡/Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½ï¿½ (CBR×¼È·, VBRï¿½ï¿½ï¿½ï¿½)
         byte_offset = (uint64_t)seconds * (s_avg_bitrate_bps / 8U);
     } else {
-        // ¶µµ×: ¼ÙÉè 128kbps CBR£¬±ÜÃâ s_content_length/s_avg_bitrate ¾ùÎ´¾ÍÐ÷Ê±Ìøµ½¿ªÍ·
+        // ï¿½ï¿½ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½ 128kbps CBRï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ s_content_length/s_avg_bitrate ï¿½ï¿½Î´ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í·
         static constexpr uint32_t k_fallback_bitrate_bps = 128000U;
         byte_offset = (uint64_t)seconds * (k_fallback_bitrate_bps / 8U);
         osal_printk("seek_to_seconds: using fallback 128kbps (cl=%llu dur=%u bps=%u)\n",
@@ -1505,7 +1517,7 @@ uint32_t minimp3::get_duration_seconds()
 
 void minimp3::stream_mp3_to_iis()
 {
-    // ©¤©¤ IO context shared between the read / seek callbacks ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    // ï¿½ï¿½ï¿½ï¿½ IO context shared between the read / seek callbacks ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     static stream_ex_io_ctx io_ctx = {};
 
     mp3dec_io_t io = {};
@@ -1518,12 +1530,12 @@ void minimp3::stream_mp3_to_iis()
     memset(&dec, 0, sizeof(dec));
     bool dec_open = false;
 
-    // ÖØÊÔ¼ÆÊýÆ÷£º·ÀÖ¹´ò¿ªÊ§°ÜÊ±ÎÞÏÞÖØÊÔºÄ¾¡ CPU ºÍÈÕÖ¾
+    // ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¹ï¿½ï¿½Ê§ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÔºÄ¾ï¿½ CPU ï¿½ï¿½ï¿½ï¿½Ö¾
     int open_retry_count = 0;
     static constexpr int k_max_open_retries = 5;
     static constexpr uint32_t k_open_retry_base_ms = 200;
 
-    // ©¤©¤ PCM buffer for IIS output ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    // ï¿½ï¿½ï¿½ï¿½ PCM buffer for IIS output ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     static constexpr size_t k_pcm_batch_samples = 1152 * 2;
     int16_t *pcm_buf = static_cast<int16_t *>(osal_kmalloc(k_pcm_batch_samples * sizeof(int16_t), OSAL_GFP_KERNEL));
     if (pcm_buf == nullptr) {
@@ -1532,13 +1544,17 @@ void minimp3::stream_mp3_to_iis()
     }
 
     while (true) {
-        // ©¤©¤ Wait while paused / stopped ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        if (s_exit_requested) {
+            osal_printk("[minimp3] exit requested\r\n");
+            break;
+        }
+        // ï¿½ï¿½ï¿½ï¿½ Wait while paused / stopped ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (!is_playing) {
             if (dec_open && is_paused) {
-                // ÔÝÍ££ºÏÈÇåÀí IIS »º³åÇø£¨Óë data_write Í¬Ïß³Ì£¬ÎÞ¾ºÕù£©£¬
-                // ÔÙ¿ìÕÕÎ»ÖÃºó¹Ø±Õ½âÂëÆ÷ºÍ TCP Á¬½Ó£¬ÊÍ·Å LWIP ÄÚ´æ¡£
-                // ·ñÔò·þÎñÆ÷³ÖÐøÍÆËÍÊý¾Ý»áºÄ¾¡ LWIP »º³åÇø£¬
-                // µ¼ÖÂ DLNA NOTIFY µÄ lwip_send ·ÖÅä²»µ½ÄÚ´æ¶øÊ§°Ü¡£
+                // ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ IIS ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ data_write Í¬ï¿½ß³Ì£ï¿½ï¿½Þ¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+                // ï¿½Ù¿ï¿½ï¿½ï¿½Î»ï¿½Ãºï¿½Ø±Õ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ TCP ï¿½ï¿½ï¿½Ó£ï¿½ï¿½Í·ï¿½ LWIP ï¿½Ú´æ¡£
+                // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ý»ï¿½Ä¾ï¿½ LWIP ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+                // ï¿½ï¿½ï¿½ï¿½ DLNA NOTIFY ï¿½ï¿½ lwip_send ï¿½ï¿½ï¿½ä²»ï¿½ï¿½ï¿½Ú´ï¿½ï¿½Ê§ï¿½Ü¡ï¿½
                 iis::data_clear();
                 s_resume_target_byte = s_bytes_streamed;
                 s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
@@ -1549,7 +1565,7 @@ void minimp3::stream_mp3_to_iis()
                 io_ctx.connected = false;
                 io_ctx.stream_pos = 0;
             } else if (dec_open && !is_paused) {
-                // Stopped: ÇåÀí IIS£¬ÊÍ·Å½âÂëÆ÷ºÍ´«Êä×ÊÔ´ÒÔ»ØÊÕ¿çÇúÄÚ´æ¡£
+                // Stopped: ï¿½ï¿½ï¿½ï¿½ IISï¿½ï¿½ï¿½Í·Å½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í´ï¿½ï¿½ï¿½ï¿½ï¿½Ô´ï¿½Ô»ï¿½ï¿½Õ¿ï¿½ï¿½ï¿½ï¿½Ú´æ¡£
                 iis::data_clear();
                 mp3dec_ex_close(&dec);
                 dec_open = false;
@@ -1557,13 +1573,13 @@ void minimp3::stream_mp3_to_iis()
                 io_ctx.connected = false;
                 io_ctx.stream_pos = 0;
             }
-            // Í£Ö¹×´Ì¬Ê±ÖØÖÃÖØÊÔ¼ÆÊýÆ÷£¬ÏÂ´Î²¥·Å¿ÉÖØÐÂ³¢ÊÔ
+            // Í£Ö¹×´Ì¬Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â´Î²ï¿½ï¿½Å¿ï¿½ï¿½ï¿½ï¿½Â³ï¿½ï¿½ï¿½
             open_retry_count = 0;
             osal_msleep(100);
             continue;
         }
 
-        // ©¤©¤ Open / reopen decoder when URL changes ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ï¿½ï¿½ï¿½ï¿½ Open / reopen decoder when URL changes ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (is_url_ready || !dec_open) {
             if (dec_open) {
                 mp3dec_ex_close(&dec);
@@ -1572,13 +1588,13 @@ void minimp3::stream_mp3_to_iis()
             free_stream_transport(io_ctx.transport);
             io_ctx.connected = false;
             io_ctx.stream_pos = 0;
-            // ÈÃ LWIP / mbedTLS ÓÐÊ±¼ä»ØÊÕ TCP PCB ºÍÄÚ²¿»º³åÇø£¬
-            // ±ÜÃâÏÂ´Î malloc(18KB) ÒòËéÆ¬»¯Ê§°Ü¡£
+            // ï¿½ï¿½ LWIP / mbedTLS ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ TCP PCB ï¿½ï¿½ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+            // ï¿½ï¿½ï¿½ï¿½ï¿½Â´ï¿½ malloc(18KB) ï¿½ï¿½ï¿½ï¿½Æ¬ï¿½ï¿½Ê§ï¿½Ü¡ï¿½
             if (open_retry_count == 0) {
                 osal_msleep(300);
             }
 
-            // ÄÚ´æÑ¹Á¦¼ì²é£ºÈç¹ûÁ¬Ðø´ò¿ªÊ§°Ü£¬µÈ´ý¸ü³¤Ê±¼äÈÃÏµÍ³»ØÊÕ×ÊÔ´
+            // ï¿½Ú´ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½é£ºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ÏµÍ³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô´
             if (open_retry_count >= k_max_open_retries) {
                 osal_printk("minimp3_ex: too many open failures (%d), stopping playback\n", open_retry_count);
                 is_playing = false;
@@ -1596,15 +1612,15 @@ void minimp3::stream_mp3_to_iis()
                 continue;
             }
 
-            // ÖØÖÃ io_ctx ÖÐ¿çÁ¬½ÓµÄ×´Ì¬£¬·ÀÖ¹ÉÏÒ»Ê×¸èµÄ²ÐÁôÖµÎÛÈ¾ÐÂÁ¬½Ó¡£
+            // ï¿½ï¿½ï¿½ï¿½ io_ctx ï¿½Ð¿ï¿½ï¿½ï¿½ï¿½Óµï¿½×´Ì¬ï¿½ï¿½ï¿½ï¿½Ö¹ï¿½ï¿½Ò»ï¿½×¸ï¿½Ä²ï¿½ï¿½ï¿½Öµï¿½ï¿½È¾ï¿½ï¿½ï¿½ï¿½ï¿½Ó¡ï¿½
             io_ctx.content_length = 0;
             io_ctx.mp3_start_offset = 0;
             io_ctx.seek_on_open = 0;
             io_ctx.seek_on_open_active = false;
             io_ctx.seek_base = 0;
 
-            // ÓÐ pending seek£¨½ö seek_to_seconds£¬²»º¬ resume£©¡ú
-            // ÉèÖÃ seek_on_open£¬ÈÃ stream_ex_seek_cb ÔÚ seek(0) Ê±Ê¹ÓÃ Range ÇëÇó¡£
+            // ï¿½ï¿½ pending seekï¿½ï¿½ï¿½ï¿½ seek_to_secondsï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ resumeï¿½ï¿½ï¿½ï¿½
+            // ï¿½ï¿½ï¿½ï¿½ seek_on_openï¿½ï¿½ï¿½ï¿½ stream_ex_seek_cb ï¿½ï¿½ seek(0) Ê±Ê¹ï¿½ï¿½ Range ï¿½ï¿½ï¿½ï¿½
             if (s_has_range && s_resume_target_byte > 0) {
                 io_ctx.seek_on_open = s_range_start_byte;
                 io_ctx.seek_on_open_active = true;
@@ -1612,13 +1628,13 @@ void minimp3::stream_mp3_to_iis()
                             static_cast<unsigned long long>(s_range_start_byte));
             }
 
-            // Fast open ¨C byte-level seeking only, NO sample index (avoids full-file scan)
+            // Fast open ï¿½C byte-level seeking only, NO sample index (avoids full-file scan)
             int ret = mp3dec_ex_open_cb(&dec, &io, MP3D_DO_NOT_SCAN);
-            io_ctx.seek_on_open_active = false; // Ïû·Ñ±êÖ¾
+            io_ctx.seek_on_open_active = false; // ï¿½ï¿½ï¿½Ñ±ï¿½Ö¾
             if (ret != 0) {
                 osal_printk("minimp3_ex: open_cb failed ret=%d (attempt %d)\n", ret, open_retry_count + 1);
-                // mp3dec_ex_open_cb ÔÚ·ÖÅä IO »º³åÇøºóÈÔ¿ÉÄÜÒòÍøÂç´íÎóÊ§°Ü£¬
-                // ±ØÐëµ÷ÓÃ mp3dec_ex_close ÊÍ·ÅÒÑ·ÖÅäµÄ»º³åÇø/ÖØÖÃ¾²Ì¬»º³åÇø±êÖ¾¡£
+                // mp3dec_ex_open_cb ï¿½Ú·ï¿½ï¿½ï¿½ IO ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½
+                // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ mp3dec_ex_close ï¿½Í·ï¿½ï¿½Ñ·ï¿½ï¿½ï¿½Ä»ï¿½ï¿½ï¿½ï¿½ï¿½/ï¿½ï¿½ï¿½Ã¾ï¿½Ì¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¾ï¿½ï¿½
                 mp3dec_ex_close(&dec);
                 free_stream_transport(io_ctx.transport);
                 io_ctx.connected = false;
@@ -1626,36 +1642,36 @@ void minimp3::stream_mp3_to_iis()
                 open_retry_count++;
                 uint32_t delay = k_open_retry_base_ms * (1U << (open_retry_count > 4 ? 4 : open_retry_count));
                 if (ret == MP3D_E_MEMORY) {
-                    // ÄÚ´æ²»×ã£¬µÈ¸ü¾ÃÈÃ LWIP / TLS ÊÍ·Å×ÊÔ´
+                    // ï¿½Ú´æ²»ï¿½ã£¬ï¿½È¸ï¿½ï¿½ï¿½ï¿½ï¿½ LWIP / TLS ï¿½Í·ï¿½ï¿½ï¿½Ô´
                     delay += 800;
                     osal_printk("minimp3_ex: memory exhausted, waiting %u ms\n", delay);
                 }
                 osal_msleep(delay);
                 continue;
             }
-            // ´ò¿ª³É¹¦£¬ÖØÖÃÖØÊÔ¼ÆÊý
+            // ï¿½ò¿ª³É¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½
             open_retry_count = 0;
             dec_open = true;
             is_url_ready = false;
-            io_ctx.mp3_start_offset = dec.start_offset; // ¼ÇÂ¼ÎÄ¼þÖÐ MP3 Êý¾ÝÆðÊ¼Æ«ÒÆ
+            io_ctx.mp3_start_offset = dec.start_offset; // ï¿½ï¿½Â¼ï¿½Ä¼ï¿½ï¿½ï¿½ MP3 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¼Æ«ï¿½ï¿½
 
-            // ´Ó open_cb ÒÑ½âÎöµÄÊ×Ö¡Í·³õÊ¼»¯±ÈÌØÂÊ£¨²»µÈÊ×Ö¡½âÂë£©£¬È·±£ seek Ê± byte_offset ¿ÉÓÃ
+            // ï¿½ï¿½ open_cb ï¿½Ñ½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¡Í·ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ë£©ï¿½ï¿½È·ï¿½ï¿½ seek Ê± byte_offset ï¿½ï¿½ï¿½ï¿½
             if (dec.info.bitrate_kbps > 0 && s_avg_bitrate_bps == 0) {
                 s_avg_bitrate_bps = static_cast<uint32_t>(dec.info.bitrate_kbps) * 1000U;
             }
 
             // Sync Content-Length from HTTP response header (parsed in stream_ex_seek_cb).
-            // Content-Range ½âÎöµÄ×Ü´óÐ¡ÓÅÏÈ£¬·Ç Range ÇëÇóµÄ Content-Length Òà¿É½ÓÊÜ¡£
+            // Content-Range ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ü´ï¿½Ð¡ï¿½ï¿½ï¿½È£ï¿½ï¿½ï¿½ Range ï¿½ï¿½ï¿½ï¿½ï¿½ Content-Length ï¿½ï¿½É½ï¿½ï¿½Ü¡ï¿½
             if (io_ctx.content_length > 0) {
                 s_content_length = io_ctx.content_length;
                 osal_printk("minimp3_ex: Content-Length=%llu\n", static_cast<unsigned long long>(s_content_length));
             }
 
-            // ÓÐ pending seek£¨½ö seek_to_seconds ´¥·¢£©¡ú
-            // Range ÇëÇóÒÑ¶¨Î»µ½Ô¤¾íÎ»ÖÃ£¬´Ó Range ÆðÊ¼×Ö½Ú¿ªÊ¼×·×ÙÎ»ÖÃ£¬
-            // ºóÐøÖðÖ¡ÀÛ¼Ó frame_bytes ×ÔÈ»±Æ½üÄ¿±êÎ»ÖÃ¡£
-            // ×¢Òâ£ºÎÞÂÛ s_resume_target_byte ÊÇ·ñÎª 0£¬¶¼±ØÐëÇå³ý s_has_range£¬
-            // ·ñÔòÏÂÒ»ÂÖÑ­»·»áÖØ¸´½øÈë mid-playback seek ¡ú ËÀÑ­»·¿¨¶Ù¡£
+            // ï¿½ï¿½ pending seekï¿½ï¿½ï¿½ï¿½ seek_to_seconds ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+            // Range ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¶ï¿½Î»ï¿½ï¿½Ô¤ï¿½ï¿½Î»ï¿½Ã£ï¿½ï¿½ï¿½ Range ï¿½ï¿½Ê¼ï¿½Ö½Ú¿ï¿½Ê¼×·ï¿½ï¿½Î»ï¿½Ã£ï¿½
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½Û¼ï¿½ frame_bytes ï¿½ï¿½È»ï¿½Æ½ï¿½Ä¿ï¿½ï¿½Î»ï¿½Ã¡ï¿½
+            // ×¢ï¿½â£ºï¿½ï¿½ï¿½ï¿½ s_resume_target_byte ï¿½Ç·ï¿½Îª 0ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ s_has_rangeï¿½ï¿½
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½ï¿½Ø¸ï¿½ï¿½ï¿½ï¿½ï¿½ mid-playback seek ï¿½ï¿½ ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½ï¿½Ù¡ï¿½
             if (s_has_range) {
                 osal_printk("minimp3_ex: seeked, Range start=%llu target=%llu\n",
                             static_cast<unsigned long long>(s_range_start_byte),
@@ -1665,7 +1681,7 @@ void minimp3::stream_mp3_to_iis()
                 s_resume_target_byte = 0;
                 s_range_start_byte = 0;
             } else {
-                s_bytes_streamed = 0; // ÐÂÁ÷´Ó 0 ¿ªÊ¼¼ÆÊý
+                s_bytes_streamed = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 0 ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½
             }
 
             // Apply detected sampling rate
@@ -1684,13 +1700,13 @@ void minimp3::stream_mp3_to_iis()
             }
         }
 
-        // ©¤©¤ Pending seek during playback (e.g. DLNA seek / resume) ©¤©¤
+        // ï¿½ï¿½ï¿½ï¿½ Pending seek during playback (e.g. DLNA seek / resume) ï¿½ï¿½ï¿½ï¿½
         if (s_has_range && dec_open) {
             osal_printk("minimp3_ex: mid-playback seek to byte %llu\n",
                         static_cast<unsigned long long>(s_resume_target_byte));
-            // ÏÈÇåÀí IIS£¬±ÜÃâ¾ÉÒôÆµ²ÐÁôµ¼ÖÂÔÓÒô»òÎ»ÖÃ´íÂÒ£¨Óë data_write Í¬Ïß³ÌÎÞ¾ºÕù£©
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ IISï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½Ã´ï¿½ï¿½Ò£ï¿½ï¿½ï¿½ data_write Í¬ï¿½ß³ï¿½ï¿½Þ¾ï¿½ï¿½ï¿½ï¿½ï¿½
             iis::data_clear();
-            // ÉèÖÃ seek_on_open ÈÃ reopen Ê±Ê¹ÓÃ Range ÇëÇó£¬±ÜÃâÏÈ GET ÔÙ drain¡£
+            // ï¿½ï¿½ï¿½ï¿½ seek_on_open ï¿½ï¿½ reopen Ê±Ê¹ï¿½ï¿½ Range ï¿½ï¿½ï¿½ó£¬±ï¿½ï¿½ï¿½ï¿½ï¿½ GET ï¿½ï¿½ drainï¿½ï¿½
             io_ctx.seek_on_open = s_range_start_byte;
             io_ctx.seek_on_open_active = true;
             mp3dec_ex_close(&dec);
@@ -1698,19 +1714,19 @@ void minimp3::stream_mp3_to_iis()
             free_stream_transport(io_ctx.transport);
             io_ctx.connected = false;
             io_ctx.stream_pos = 0;
-            is_url_ready = true; // ´¥·¢ reopen Â·¾¶
+            is_url_ready = true; // ï¿½ï¿½ï¿½ï¿½ reopen Â·ï¿½ï¿½
             continue;
         }
 
-        // ©¤©¤ Read one frame of decoded PCM ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ï¿½ï¿½ï¿½ï¿½ Read one frame of decoded PCM ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         mp3dec_frame_info_t frame_info;
         memset(&frame_info, 0, sizeof(frame_info));
         mp3d_sample_t *frame_samples = nullptr;
         size_t n = mp3dec_ex_read_frame(&dec, &frame_samples, &frame_info, k_pcm_batch_samples);
 
-        // ©¤©¤ Update position / bitrate trackers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-        // ±ØÐëÔÚ n==0 ¼ì²éÖ®Ç°£ºÌøÖ¡£¨to_skip£©Ê± n=0 µ« frame_bytes>0£¬
-        // ÈÔÐè¸üÐÂÎ»ÖÃ×·×ÙºÍ±ÈÌØÂÊ¡£
+        // ï¿½ï¿½ï¿½ï¿½ Update position / bitrate trackers ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ n==0 ï¿½ï¿½ï¿½Ö®Ç°ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½to_skipï¿½ï¿½Ê± n=0 ï¿½ï¿½ frame_bytes>0ï¿½ï¿½
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½×·ï¿½ÙºÍ±ï¿½ï¿½ï¿½ï¿½Ê¡ï¿½
         if (frame_info.bitrate_kbps > 0) {
             s_avg_bitrate_bps = static_cast<uint32_t>(frame_info.bitrate_kbps) * 1000U;
         }
@@ -1719,9 +1735,9 @@ void minimp3::stream_mp3_to_iis()
         }
 
         if (n == 0) {
-            // ÌøÖ¡£¨½âÂëÆ÷ÕýÔÚÌî³ä bit reservoir »òÌø¹ý encoder delay£©£º
-            // frame_bytes > 0 ±íÊ¾ÏûºÄÁËÊäÈëÊý¾Ýµ«Î´²ú³ö PCM ²ÉÑù¡£
-            // ¼ÌÐøÑ­»·¶ø·ÇÍ£Ö¹²¥·Å¡£
+            // ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ bit reservoir ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ encoder delayï¿½ï¿½ï¿½ï¿½
+            // frame_bytes > 0 ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ýµï¿½Î´ï¿½ï¿½ï¿½ï¿½ PCM ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+            // ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½ï¿½Å¡ï¿½
             if (dec.last_error == 0 && frame_info.frame_bytes > 0) {
                 continue;
             }
@@ -1736,8 +1752,8 @@ void minimp3::stream_mp3_to_iis()
             free_stream_transport(io_ctx.transport);
             io_ctx.connected = false;
             io_ctx.stream_pos = 0;
-            // Á÷½áÊø£ºÍ£Ö¹²¥·Å£¬²»ÔÙ×Ô¶¯ÖØÁ¬£¨±ÜÃâÎÞÏÞÑ­»·ÏûºÄÄÚ´æ£©
-            // DLNA ¿ØÖÆ¶Ë»áÍ¨¹ý SetAVTransportURI+Play Æô¶¯ÏÂÒ»Ê×¸è
+            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½ï¿½Å£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´æ£©
+            // DLNA ï¿½ï¿½ï¿½Æ¶Ë»ï¿½Í¨ï¿½ï¿½ SetAVTransportURI+Play ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ò»ï¿½×¸ï¿½
             s_range_start_byte = s_bytes_streamed;
             s_has_range = false;
             s_resume_target_byte = 0;
@@ -1748,17 +1764,17 @@ void minimp3::stream_mp3_to_iis()
             continue;
         }
 
-        // ©¤©¤ Rate-change detection ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ï¿½ï¿½ï¿½ï¿½ Rate-change detection ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (frame_info.hz > 0 && frame_info.hz != dec.info.hz && iis_set_rate_func) {
             const int old_hz = dec.info.hz;
             iis_set_rate_func(frame_info.hz);
             osal_printk("minimp3_ex: rate switch %d -> %d Hz\n", old_hz, frame_info.hz);
         }
 
-        // ©¤©¤ Push PCM to IIS ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ï¿½ï¿½ï¿½ï¿½ Push PCM to IIS ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (mp3_get_into_iis_func) {
             if (frame_info.channels == 1) {
-                // Mono ¡ú stereo expansion
+                // Mono ï¿½ï¿½ stereo expansion
                 for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
                     pcm_buf[2 * i] = frame_samples[i];
                     pcm_buf[2 * i + 1] = frame_samples[i];
@@ -1769,14 +1785,14 @@ void minimp3::stream_mp3_to_iis()
             }
         }
 
-        // ©¤©¤ Duration from VBR tag ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ï¿½ï¿½ï¿½ï¿½ Duration from VBR tag ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (dec.detected_samples > 0 && dec.info.hz > 0 && s_duration_seconds == 0) {
             s_duration_seconds = static_cast<uint32_t>(dec.detected_samples / dec.info.hz);
         }
         // Content-Length is synced from io_ctx.content_length during REOPEN.
         // dec.end_offset is only the scan window boundary, NOT the file size.
 
-        // ©¤©¤ Back-pressure from IIS queue ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ï¿½ï¿½ï¿½ï¿½ Back-pressure from IIS queue ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (playback_queue_level_getter_func) {
             int q = playback_queue_level_getter_func();
             if (q >= 34) {
