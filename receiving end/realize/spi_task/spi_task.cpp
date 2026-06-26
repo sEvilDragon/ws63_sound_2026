@@ -1,6 +1,18 @@
 #include "spi_task.h"
 #include "spi_master.hpp"
 
+static const char *mode_name(uint8_t mode)
+{
+    switch (mode) {
+        case SPI_MODE_WIREED:   return "WIRED";
+        case SPI_MODE_SLE:      return "SLE";
+        case SPI_MODE_DLNA:     return "DLNA";
+        case SPI_MODE_SLE_MIC:  return "SLE_MIC";
+        case SPI_MODE_DLNA_NET: return "DLNA_NET";
+        default:                return "UNKNOWN";
+    }
+}
+
 static spi_settings_t g_settings = {
     SPI_CMD_SYNC,
     (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN),
@@ -61,6 +73,12 @@ void *spi_master_task(void *arg)
     osal_printk("[SPI_Master] settings task started\r\n");
 
     uint8_t rx_buf[sed_ws63::spi_master::TRANSFER_LEN];
+    uint8_t prev_mode = g_settings.mode;
+    uint8_t prev_volume = g_settings.volume;
+    uint8_t prev_bass = g_settings.bass;
+    osal_printk("[SPI_Master] initial: mode=%s vol=%u bass=%u bri=%u\r\n",
+                mode_name(g_settings.mode), (unsigned)g_settings.volume,
+                (unsigned)g_settings.bass, (unsigned)g_settings.brightness);
 
     while (true) {
         int ret = spi.transfer((const uint8_t *)&g_settings, SPI_SETTINGS_LEN,
@@ -85,6 +103,22 @@ void *spi_master_task(void *arg)
 
         if (g_settings.cmd == SPI_CMD_SYNC) {
             g_settings.cmd = SPI_CMD_QUERY;
+        }
+
+        if (g_settings.mode != prev_mode) {
+            osal_printk("[SPI_Master] MODE CHANGED: %s -> %s\r\n",
+                        mode_name(prev_mode), mode_name(g_settings.mode));
+            prev_mode = g_settings.mode;
+        }
+        if (g_settings.volume != prev_volume) {
+            osal_printk("[SPI_Master] volume: %u -> %u\r\n",
+                        (unsigned)prev_volume, (unsigned)g_settings.volume);
+            prev_volume = g_settings.volume;
+        }
+        if (g_settings.bass != prev_bass) {
+            osal_printk("[SPI_Master] bass: %u -> %u\r\n",
+                        (unsigned)prev_bass, (unsigned)g_settings.bass);
+            prev_bass = g_settings.bass;
         }
 
         osal_msleep(500);

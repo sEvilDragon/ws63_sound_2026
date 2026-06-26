@@ -18,26 +18,20 @@ float iis::biquad_by2_l = 0;
 float iis::biquad_bx1_r = 0;
 float iis::biquad_bx2_r = 0;
 float iis::biquad_by1_r = 0;
-float iis::biquad_by2_r = 0;
+float iis::biquad_by2_r = 0;
 
 const uint16_t iis::volume_gain_table[101] = {
-        0,   110,   116,   123,   130,   138,   146,   155,   164,   174,
-      184,   195,   207,   219,   232,   246,   260,   276,   292,   309,
-      328,   347,   368,   389,   413,   437,   463,   490,   519,   550,
-      583,   617,   654,   693,   734,   777,   823,   872,   923,   978,
-     1036,  1098,  1163,  1232,  1304,  1382,  1464,  1550,  1642,  1740,
-     1843,  1952,  2067,  2190,  2320,  2457,  2603,  2757,  2920,  3093,
-     3277,  3471,  3677,  3894,  4125,  4370,  4628,  4903,  5193,  5501,
-     5827,  6172,  6538,  6925,  7336,  7770,  8231,  8718,  9235,  9782,
-    10362, 10976, 11626, 12315, 13045, 13818, 14636, 15504, 16422, 17395,
-    18426, 19518, 20675, 21900, 23197, 24572, 26028, 27570, 29204, 30934,
-    32767
-};
-
+    0,     110,   116,   123,   130,   138,   146,   155,   164,   174,   184,   195,   207,   219,   232,
+    246,   260,   276,   292,   309,   328,   347,   368,   389,   413,   437,   463,   490,   519,   550,
+    583,   617,   654,   693,   734,   777,   823,   872,   923,   978,   1036,  1098,  1163,  1232,  1304,
+    1382,  1464,  1550,  1642,  1740,  1843,  1952,  2067,  2190,  2320,  2457,  2603,  2757,  2920,  3093,
+    3277,  3471,  3677,  3894,  4125,  4370,  4628,  4903,  5193,  5501,  5827,  6172,  6538,  6925,  7336,
+    7770,  8231,  8718,  9235,  9782,  10362, 10976, 11626, 12315, 13045, 13818, 14636, 15504, 16422, 17395,
+    18426, 19518, 20675, 21900, 23197, 24572, 26028, 27570, 29204, 30934, 32767};
 
 iis::iis()
 {
-    osal_msleep(8000); // 等待系统稳定，确保DMA和I2S驱动准备就绪
+    osal_msleep(4000); // 等待系统稳定，确保DMA和I2S驱动准备就绪
     pin_init();
     i2s_dma_init_1();
     i2s_init();
@@ -284,17 +278,29 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
             int16_t *dst = &dma_buffers[write_idx][write_offset];
             for (uint32_t i = 0; i < to_copy; i += 2) {
                 float x = (float)dst[i];
-                float y = bass_b0 * x + bass_b1 * biquad_bx1_l + bass_b2 * biquad_bx2_l - bass_a1 * biquad_by1_l - bass_a2 * biquad_by2_l;
-                biquad_bx2_l = biquad_bx1_l; biquad_bx1_l = x;
-                biquad_by2_l = biquad_by1_l; biquad_by1_l = y;
-                if (y > 32767.0f) y = 32767.0f; else if (y < -32768.0f) y = -32768.0f;
+                float y = bass_b0 * x + bass_b1 * biquad_bx1_l + bass_b2 * biquad_bx2_l - bass_a1 * biquad_by1_l -
+                          bass_a2 * biquad_by2_l;
+                biquad_bx2_l = biquad_bx1_l;
+                biquad_bx1_l = x;
+                biquad_by2_l = biquad_by1_l;
+                biquad_by1_l = y;
+                if (y > 32767.0f)
+                    y = 32767.0f;
+                else if (y < -32768.0f)
+                    y = -32768.0f;
                 dst[i] = (int16_t)y;
                 if (i + 1 < to_copy) {
                     x = (float)dst[i + 1];
-                    y = bass_b0 * x + bass_b1 * biquad_bx1_r + bass_b2 * biquad_bx2_r - bass_a1 * biquad_by1_r - bass_a2 * biquad_by2_r;
-                    biquad_bx2_r = biquad_bx1_r; biquad_bx1_r = x;
-                    biquad_by2_r = biquad_by1_r; biquad_by1_r = y;
-                    if (y > 32767.0f) y = 32767.0f; else if (y < -32768.0f) y = -32768.0f;
+                    y = bass_b0 * x + bass_b1 * biquad_bx1_r + bass_b2 * biquad_bx2_r - bass_a1 * biquad_by1_r -
+                        bass_a2 * biquad_by2_r;
+                    biquad_bx2_r = biquad_bx1_r;
+                    biquad_bx1_r = x;
+                    biquad_by2_r = biquad_by1_r;
+                    biquad_by1_r = y;
+                    if (y > 32767.0f)
+                        y = 32767.0f;
+                    else if (y < -32768.0f)
+                        y = -32768.0f;
                     dst[i + 1] = (int16_t)y;
                 }
             }

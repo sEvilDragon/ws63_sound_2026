@@ -21,24 +21,10 @@ void *spi_slave_task(void *arg)
         spi_settings_t response = g_settings;
         response.cmd = SPI_CMD_QUERY;
 
-        int ret = spi.transfer(rx_buf, sed_ws63::spi_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
-
-        if (ret == 0) {
-            spi_settings_t received;
-            for (int i = 0; i < SPI_SETTINGS_LEN; i++) {
-                ((uint8_t *)&received)[i] = rx_buf[i];
-            }
-
-            if (spi_validate_settings(&received)) {
-                if (received.cmd == SPI_CMD_SYNC) {
-                    g_settings.hotspot_network = received.hotspot_network;
-                    g_settings.mode = received.mode;
-                    g_settings.volume = received.volume;
-                    g_settings.brightness = received.brightness;
-                    g_settings.bass = received.bass;
-                }
-            }
-        }
+        spi.transfer(rx_buf, sed_ws63::spi_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
+        (void)rx_buf;
+        // control end is authoritative: ignore master data,
+        // only send our settings back (master reads on QUERY cycle)
 
         osal_msleep(500); // 与 Master 同步周期, 防止 FIFO 堆积
     }

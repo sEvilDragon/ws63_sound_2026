@@ -41,13 +41,10 @@ public:
 
 private:
     // 滑条: 物理从左到右顺序 (chip pin 号, 1-based)
-    // 功能键已移至低位 pin (1/2/3), 滑条使用高位 pin (9..16)
     // 物理顺序: 模块上从左到右依次对应 pin 9,10,11,12,16,15,14,13
     // 如果发现滑动方向反了, 把整个数组 reverse 即可
-    // 如果某个位置不响应, 说明 pin 号不对, 请根据 raw 日志确认后自行调整
     static constexpr int PAD_SLIDER[8] = {9, 10, 11, 12, 16, 15, 14, 13};
     // 功能键: 模块上低位的 3 个独立按键
-    // 如果按键和预期不符, 请在 PAD_FUNC_A/B/C 和 1/2/3 之间调换
     static constexpr int PAD_FUNC_A = 1;
     static constexpr int PAD_FUNC_B = 2;
     static constexpr int PAD_FUNC_C = 3;

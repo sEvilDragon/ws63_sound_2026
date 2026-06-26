@@ -375,7 +375,43 @@ void ttp229::process_function_keys(uint16_t raw)
     m_state.func_just_released = just_r;
 
     if (pressed != prev_pressed || just_p || just_r) {
-        TTP_LOG("keys: pressed=0x%02x just_p=0x%02x just_r=0x%02x raw=0x%04x\r\n", pressed, just_p, just_r, raw);
+        // 把 bitmask 解码为 A/B/C 便于确认按键映射是否正确
+        static const char kname[3] = {'A', 'B', 'C'};
+        char p_str[8], jp_str[8], jr_str[8];
+        int p_len = 0, jp_len = 0, jr_len = 0;
+        for (int i = 0; i < 3; i++) {
+            if (pressed & (1u << i)) {
+                if (p_len)
+                    p_str[p_len++] = '+';
+                p_str[p_len++] = kname[i];
+            }
+            if (just_p & (1u << i)) {
+                if (jp_len)
+                    jp_str[jp_len++] = '+';
+                jp_str[jp_len++] = kname[i];
+            }
+            if (just_r & (1u << i)) {
+                if (jr_len)
+                    jr_str[jr_len++] = '+';
+                jr_str[jr_len++] = kname[i];
+            }
+        }
+        if (p_len == 0) {
+            p_str[0] = '-';
+            p_len = 1;
+        }
+        if (jp_len == 0) {
+            jp_str[0] = '-';
+            jp_len = 1;
+        }
+        if (jr_len == 0) {
+            jr_str[0] = '-';
+            jr_len = 1;
+        }
+        p_str[p_len] = '\0';
+        jp_str[jp_len] = '\0';
+        jr_str[jr_len] = '\0';
+        TTP_LOG("keys: pressed=[%s] just_press=[%s] just_release=[%s] raw=0x%04X\r\n", p_str, jp_str, jr_str, raw);
     }
 }
 
