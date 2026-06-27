@@ -27,12 +27,8 @@ namespace sed_ws63 {
 ttp229::ttp229()
     : m_healthy(false),
       m_state{},
-      m_history{},
-      m_history_idx(0),
-      m_history_count(0),
-      m_last_pos(TTP_SLIDER_NO_POS),
-      m_ticks_since_change(0),
-      m_was_active(false),
+      m_slider_prev(0),
+      m_slider_integrator(0),
       m_func_debounce{},
       m_func_hold{},
       m_func_stable{},
@@ -90,7 +86,7 @@ bool ttp229::read_serial(uint16_t *state_out)
 
     uapi_gpio_set_val(SCL_PIN, GPIO_LEVEL_HIGH);
 
-    // 位序翻转: 芯片实际 LSB-first 输出, pin1↔pin16 对调
+    // 位序翻转: 芯片 LSB-first 输出, 翻转为 MSB-first 使 pin 号归正
     result = (uint16_t)(((result & 0x00FF) << 8) | ((result & 0xFF00) >> 8));
     result = (uint16_t)(((result & 0x0F0F) << 4) | ((result & 0xF0F0) >> 4));
     result = (uint16_t)(((result & 0x3333) << 2) | ((result & 0xCCCC) >> 2));
@@ -153,144 +149,170 @@ bool ttp229::is_pad_touched(uint16_t raw, int pad_number)
     return (raw & (1u << (pad_number - 1))) != 0;
 }
 
-int ttp229::compute_slider_position(uint16_t raw)
+// 找 uint8_t 中最高置位的位置, 无置位返回 -1
+static int bit_high(uint8_t x)
 {
-    // 最大连续段算法: 找到 PAD_SLIDER 索引中连续被按下的最长一段,
-    // 取其质心。非连续位置的孤立触发（如手指在右边但左边 pad 也被意外桥接）
-    // 会被自动忽略, 不会把质心拖偏。
-    //
-    // 平局规则: 优先选离上次位置 (m_last_pos) 最近的段;
-    // 若无上次位置, 选最右段 (手指更可能在右边)。
-    bool active[TTP_SLIDER_PADS_COUNT];
-    for (int i = 0; i < TTP_SLIDER_PADS_COUNT; i++) {
-        active[i] = is_pad_touched(raw, PAD_SLIDER[i]);
-    }
-
-    int best_start = -1;
-    int best_len = 0;
-    int run_start = -1;
-    int run_len = 0;
-
-    auto pick_best = [&](int start, int len) {
-        if (len > best_len) {
-            best_start = start;
-            best_len = len;
-        } else if (len == best_len && len > 0) {
-            // 平局: 优先选离上次位置更近的段
-            int prev_idx = (m_last_pos >= 0) ? m_last_pos / TTP_SLIDER_SCALE : -1;
-            if (prev_idx >= 0) {
-                int dist_new = (start + len / 2) - prev_idx;
-                int dist_best = (best_start + best_len / 2) - prev_idx;
-                if (dist_new < 0)
-                    dist_new = -dist_new;
-                if (dist_best < 0)
-                    dist_best = -dist_best;
-                if (dist_new < dist_best) {
-                    best_start = start;
-                    best_len = len;
-                }
-            } else {
-                // 无历史位置, 选最右 (手指更可能在右边)
-                if (start > best_start) {
-                    best_start = start;
-                    best_len = len;
-                }
-            }
-        }
-    };
-
-    for (int i = 0; i < TTP_SLIDER_PADS_COUNT; i++) {
-        if (active[i]) {
-            if (run_start < 0)
-                run_start = i;
-            run_len++;
-        } else {
-            pick_best(run_start, run_len);
-            run_start = -1;
-            run_len = 0;
-        }
-    }
-    pick_best(run_start, run_len); // 末尾段
-
-    if (best_len == 0)
-        return TTP_SLIDER_NO_POS;
-
-    // 最大连续段质心
-    int sum_index = 0;
-    for (int i = best_start; i < best_start + best_len; i++) {
-        sum_index += i;
-    }
-    return (sum_index * TTP_SLIDER_SCALE) / best_len;
+    if (x == 0) return -1;
+    int n = 7;
+    while (!(x & 0x80)) { x <<= 1; n--; }
+    return n;
+}
+// 找 uint8_t 中最低置位的位置, 无置位返回 8
+static int bit_low(uint8_t x)
+{
+    if (x == 0) return 8;
+    int n = 0;
+    while (!(x & 1)) { x >>= 1; n++; }
+    return n;
 }
 
 void ttp229::process_slider(uint16_t raw)
 {
-    int prev_pos = m_state.slider_pos;
-    int pos = compute_slider_position(raw);
-    m_state.slider_pos = pos;
-
-    bool active = (pos != TTP_SLIDER_NO_POS);
-
-    if (!active) {
-        m_history_count = 0;
-        m_history_idx = 0;
-        m_ticks_since_change = 0;
-        m_was_active = false;
-        m_last_pos = TTP_SLIDER_NO_POS; // 抬手清零, 避免下次段选择被旧位置误导
-        m_state.slider_direction = TTP_SWIPE_NONE;
-        m_state.slider_speed = 0;
-        return;
-    }
-
-    m_history[m_history_idx] = pos;
-    m_history_idx = (m_history_idx + 1) % SLIDER_HISTORY_SIZE;
-    if (m_history_count < SLIDER_HISTORY_SIZE)
-        m_history_count++;
-
-    if (!m_was_active) {
-        m_was_active = true;
-        m_last_pos = pos;
-        m_ticks_since_change = 0;
-        m_state.slider_direction = TTP_SWIPE_NONE;
-        m_state.slider_speed = 0;
-        return;
-    }
-
-    m_ticks_since_change++;
-
-    if (pos != m_last_pos) {
-        int delta = pos - m_last_pos;
-
-        // speed: 逻辑档位/秒, 归一化到缩放前的量级以保持 UI 阈值兼容
-        int speed = 0;
-        if (m_ticks_since_change > 0) {
-            speed = (delta * 100) / ((int)m_ticks_since_change * TTP_SLIDER_SCALE);
+    // === 二进制状态提取 ===
+    uint8_t cur = 0;
+    for (int i = 0; i < 8; i++) {
+        if (is_pad_touched(raw, PAD_SLIDER[i])) {
+            cur |= (uint8_t)(1 << i);
         }
+    }
 
-        uint8_t dir = TTP_SWIPE_NONE;
-        if (delta < 0)
-            dir = TTP_SWIPE_LEFT;
-        else if (delta > 0)
-            dir = TTP_SWIPE_RIGHT;
+    // === 无触摸 → 全部复位 ===
+    if (cur == 0) {
+        m_slider_prev = 0;
+        m_slider_integrator = 0;
+        m_state.slider_pos = TTP_SLIDER_NO_POS;
+        m_state.slider_direction = TTP_SWIPE_NONE;
+        m_state.slider_speed = 0;
+        return;
+    }
 
-        m_state.slider_direction = dir;
-        m_state.slider_speed = speed;
+    // === 首次触摸 ===
+    if (m_slider_prev == 0) {
+        m_slider_prev = cur;
+        m_slider_integrator = 0;
+        m_state.slider_pos = 0; // 由 UI 设 anchor
+        m_state.slider_direction = TTP_SWIPE_NONE;
+        m_state.slider_speed = 0;
+        return;
+    }
 
-        TTP_VLOG("slider: move %d.%02d->%d.%02d delta=%d.%02d speed=%d dir=%u\r\n", m_last_pos / TTP_SLIDER_SCALE,
-                 m_last_pos % TTP_SLIDER_SCALE, pos / TTP_SLIDER_SCALE, pos % TTP_SLIDER_SCALE,
-                 delta / TTP_SLIDER_SCALE, delta < 0 ? ((-delta) % TTP_SLIDER_SCALE) : (delta % TTP_SLIDER_SCALE),
-                 speed, (unsigned)dir);
+    // === pad 集合无变化 → 积分器衰减 ===
+    if (cur == m_slider_prev) {
+        if (m_slider_integrator > 0) {
+            m_slider_integrator--;
+            if (m_slider_integrator == 0)
+                m_state.slider_direction = TTP_SWIPE_NONE;
+        } else if (m_slider_integrator < 0) {
+            m_slider_integrator++;
+            if (m_slider_integrator == 0)
+                m_state.slider_direction = TTP_SWIPE_NONE;
+        }
+        m_state.slider_speed = 0;
+        return;
+    }
 
-        m_last_pos = pos;
-        m_ticks_since_change = 0;
-    } else if (m_ticks_since_change > SPEED_DECAY_TICKS) {
-        int s = m_state.slider_speed;
-        s = s >> 1;
-        m_state.slider_speed = s;
-        if (s == 0) {
+    // === 抬手再放检测: pad 集合无交集 且 距离 > 3 pad → 复位 ===
+    if ((cur & m_slider_prev) == 0) {
+        int lo_cur = bit_low(cur);
+        int hi_cur = bit_high(cur);
+        int lo_prv = bit_low(m_slider_prev);
+        int hi_prv = bit_high(m_slider_prev);
+        int dist = (lo_cur > hi_prv) ? (lo_cur - hi_prv) :
+                   (lo_prv > hi_cur) ? (lo_prv - hi_cur) : 0;
+        if (dist > 3) { // 跳跃 > 3 pad → 抬手再放
+            m_slider_prev = cur;
+            m_slider_integrator = 0;
             m_state.slider_direction = TTP_SWIPE_NONE;
+            m_state.slider_speed = 0;
+            return;
+        }
+        // 否则是单键模式正常滑动, 继续进入/离开分析
+    }
+
+    // === 进入 / 离开 位集 ===
+    uint8_t entered = cur & ~m_slider_prev; // 新按下
+    uint8_t left    = m_slider_prev & ~cur; // 新释放
+
+    int hi_ent = bit_high(entered);
+    int lo_ent = bit_low(entered);
+    int hi_lft = bit_high(left);
+    int lo_lft = bit_low(left);
+
+    // 帧内位移方向 (加权)
+    int frame_dir = 0;
+    int frame_mag = 0;
+
+    if (entered && left) {
+        // 既有进入又有离开: 比较两组的中心
+        int ent_ctr = hi_ent + lo_ent;       // ×2 省去, 不影响比较
+        int lft_ctr = hi_lft + lo_lft;
+        frame_dir = ent_ctr - lft_ctr;
+        frame_mag = (hi_ent >= lo_lft) ? (hi_ent - lo_lft + 1) : (lo_lft - hi_ent + 1);
+    } else if (entered) {
+        // 仅有进入: 手指在扩张
+        // 与当前保持的 pads 比较
+        uint8_t stay = cur & m_slider_prev;
+        int hi_stay = bit_high(stay);
+        int lo_stay = bit_low(stay);
+        if (hi_stay >= 0) {
+            if (lo_ent > hi_stay) {
+                frame_dir = +1; // 向右扩张
+                frame_mag = lo_ent - hi_stay;
+            } else if (hi_ent < lo_stay) {
+                frame_dir = -1; // 向左扩张
+                frame_mag = lo_stay - hi_ent;
+            }
+        }
+    } else if (left) {
+        // 仅有离开: 手指在收缩
+        uint8_t stay = cur & m_slider_prev;
+        int hi_stay = bit_high(stay);
+        int lo_stay = bit_low(stay);
+        if (hi_stay >= 0) {
+            if (lo_lft > hi_stay) {
+                frame_dir = -1; // 右侧离开 = 向左收缩
+                frame_mag = lo_lft - hi_stay;
+            } else if (hi_lft < lo_stay) {
+                frame_dir = +1; // 左侧离开 = 向右收缩
+                frame_mag = lo_stay - hi_lft;
+            }
         }
     }
+
+    // === 积分器累积 / 衰减 ===
+    if (frame_dir > 0) {
+        m_slider_integrator += frame_mag * TTP_SLIDER_SCALE;
+        if (m_slider_integrator > SLIDER_INTEGRATOR_MAX)
+            m_slider_integrator = SLIDER_INTEGRATOR_MAX;
+    } else if (frame_dir < 0) {
+        m_slider_integrator -= frame_mag * TTP_SLIDER_SCALE;
+        if (m_slider_integrator < -SLIDER_INTEGRATOR_MAX)
+            m_slider_integrator = -SLIDER_INTEGRATOR_MAX;
+    } else {
+        // 方向不明 (进入和离开对称) → 衰减
+        if (m_slider_integrator > 0)
+            m_slider_integrator = (m_slider_integrator * 3) / 4;
+        else if (m_slider_integrator < 0)
+            m_slider_integrator = (m_slider_integrator * 3) / 4;
+    }
+
+    // === 积分器超过阈值 → 发射一步 (漏电积分-发射) ===
+    if (m_slider_integrator > SLIDER_FIRE_THRESHOLD) {
+        m_state.slider_direction = TTP_SWIPE_RIGHT;
+        m_state.slider_speed = SLIDER_STEP;
+        m_state.slider_pos += SLIDER_STEP;
+        m_slider_integrator -= SLIDER_FIRE_THRESHOLD;
+    } else if (m_slider_integrator < -SLIDER_FIRE_THRESHOLD) {
+        m_state.slider_direction = TTP_SWIPE_LEFT;
+        m_state.slider_speed = SLIDER_STEP;
+        m_state.slider_pos -= SLIDER_STEP;
+        m_slider_integrator += SLIDER_FIRE_THRESHOLD;
+    } else {
+        m_state.slider_direction = TTP_SWIPE_NONE;
+        m_state.slider_speed = 0;
+    }
+
+    m_slider_prev = cur;
 }
 
 void ttp229::process_function_keys(uint16_t raw)
