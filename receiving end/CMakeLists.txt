@@ -16,6 +16,7 @@ set(PUBLIC_HEADER "${PUBLIC_HEADER}"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/audio_play"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/wifi"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/spi_task"
+    "${CMAKE_CURRENT_SOURCE_DIR}/realize/wifi_connected"
 
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/wlan/softap"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/wlan/sta"

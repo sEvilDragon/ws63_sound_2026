@@ -1,6 +1,7 @@
 #include "wifi_task.hpp"
 #include "spi_task.h"
 #include "udp.hpp"
+#include "discover_broadcast.hpp"
 
 extern "C" {
 #include "cJSON.h"
@@ -42,11 +43,44 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
     }
 }
 
+} // namespace
+
+// ======================== 跨 TU 共享的 WiFi 状态 ========================
+// 由 wifi_task 主循环维护，供 http_control / discover_broadcast 读取
+
 static char provisioned_ssid[64] = "OPPO Find X8 972E";
 static char provisioned_password[64] = "mytc4386";
 static bool has_credentials = true;
 
-} // namespace
+// 本机 IP（STA 连接后由 dhcp 分配），供外部查询
+static char g_sta_ip[16] = "0.0.0.0";
+static bool g_sta_connected_flag = false;
+
+const char *wifi_get_current_ssid(void)
+{
+    return provisioned_ssid;
+}
+
+const char *wifi_get_current_ip(void)
+{
+    return g_sta_ip;
+}
+
+bool wifi_is_sta_connected(void)
+{
+    return g_sta_connected_flag;
+}
+
+static void update_sta_ip(void)
+{
+    netif *iface = netifapi_netif_find_by_name("wlan0");
+    if (iface) {
+        uint32_t ip_host = lwip_ntohl(iface->ip_addr.u_addr.ip4.addr);
+        snprintf(g_sta_ip, sizeof(g_sta_ip), "%u.%u.%u.%u",
+                 (ip_host >> 24) & 0xFF, (ip_host >> 16) & 0xFF,
+                 (ip_host >> 8) & 0xFF, ip_host & 0xFF);
+    }
+}
 
 void *dlna_task(void *arg)
 {
@@ -93,9 +127,11 @@ void *wifi_task(void *arg)
     bool dlna_running = false;
     bool sta_connected = false;
     bool http_ctrl_running = false;
+    bool discover_running = false;
     osal_task *dlna_handle = nullptr;
     osal_task *mp3_handle = nullptr;
     osal_task *http_ctrl_handle = nullptr;
+    osal_task *discover_handle = nullptr;
 
     while (true) {
         const spi_settings_t *s = get_spi_settings();
@@ -113,9 +149,16 @@ void *wifi_task(void *arg)
                 mp3_handle = nullptr;
                 dlna_running = false;
             }
+            if (discover_running) {
+                discover_broadcast_request_stop();
+                osal_msleep(3500);
+                discover_handle = nullptr;
+                discover_running = false;
+            }
             if (sta_connected) {
                 sta_.sta_disconnect();
                 sta_connected = false;
+                g_sta_connected_flag = false;
             }
 
             osal_printk("[WiFi] starting SoftAP for provisioning\r\n");
@@ -194,7 +237,9 @@ void *wifi_task(void *arg)
                 errcode_t r = sta_.sta_connect(cred);
                 if (r == ERRCODE_SUCC) {
                     sta_connected = true;
-                    osal_printk("[WiFi] STA connected\r\n");
+                    g_sta_connected_flag = true;
+                    update_sta_ip();
+                    osal_printk("[WiFi] STA connected, IP=%s\r\n", g_sta_ip);
                 } else {
                     osal_printk("[WiFi] STA connect failed: %u\r\n", r);
                 }
@@ -212,7 +257,9 @@ void *wifi_task(void *arg)
             errcode_t r = sta_.sta_connect(cred);
             if (r == ERRCODE_SUCC) {
                 sta_connected = true;
-                osal_printk("[WiFi] STA connected\r\n");
+                g_sta_connected_flag = true;
+                update_sta_ip();
+                osal_printk("[WiFi] STA connected, IP=%s\r\n", g_sta_ip);
             } else {
                 osal_printk("[WiFi] STA failed: %u, retry in 3s\r\n", r);
                 osal_msleep(3000);
@@ -223,6 +270,25 @@ void *wifi_task(void *arg)
         if (sta_connected && !sta_.is_connected()) {
             osal_printk("[WiFi] STA disconnected\r\n");
             sta_connected = false;
+            g_sta_connected_flag = false;
+        }
+
+        // ===== UDP DISCOVER BROADCAST LIFECYCLE =====
+        // STA 连接后广播设备信息到 :20262，供小程序自动发现
+        if (sta_connected && !discover_running) {
+            discover_broadcast_reset_stop();
+            discover_handle = osal_kthread_create((osal_kthread_handler)discover_broadcast_task,
+                                                  NULL, "discover", 4096);
+            discover_running = true;
+            osal_printk("[WiFi] discover broadcast started on port 20262\r\n");
+        }
+
+        if (!sta_connected && discover_running) {
+            osal_printk("[WiFi] stopping discover broadcast\r\n");
+            discover_broadcast_request_stop();
+            osal_msleep(3500); // 等待 sleep 分段超时 + 任务退出
+            discover_handle = nullptr;
+            discover_running = false;
         }
 
         // ===== HTTP CONTROL SERVER LIFECYCLE =====
@@ -276,6 +342,10 @@ void *wifi_task(void *arg)
             dlna_handle = nullptr;
             mp3_handle = nullptr;
             dlna_running = false;
+        }
+
+        if (sta_connected) {
+            update_sta_ip(); // DHCP 租约可能变更 IP
         }
 
         osal_msleep(500);

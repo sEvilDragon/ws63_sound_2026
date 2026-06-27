@@ -1,5 +1,6 @@
 #include "http_control.hpp"
 #include "spi_task.h"
+#include "wifi_task.hpp"
 
 extern "C" {
 #include "lwip/sockets.h"
@@ -11,12 +12,14 @@ extern "C" {
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 // ======================== 文件作用域常量 ========================
 static constexpr uint16_t k_http_port = 8080;
-static constexpr int k_max_backlog = 2;
+static constexpr int k_max_backlog = 4;
 static constexpr size_t k_recv_buf_size = 1024;
 static constexpr size_t k_resp_body_size = 320;
+static constexpr int k_client_timeout_sec = 3;
 
 // 停止标志（由 wifi_task 通过 http_control_request_stop() 设置）
 static volatile bool s_stop_requested = false;
@@ -91,6 +94,82 @@ static const char *get_body(const char *http_req)
     return p ? (p + 4) : nullptr;
 }
 
+// 从 headers 中解析 Content-Length 值
+static int parse_content_length(const char *buf)
+{
+    // 大小写不敏感搜索
+    const char *cl = strstr(buf, "Content-Length:");
+    if (!cl)
+        cl = strstr(buf, "content-length:");
+    if (!cl)
+        return 0;
+
+    cl += 15; // 跳过 "Content-Length:"
+    while (*cl == ' ' || *cl == '\t')
+        cl++;
+    return atoi(cl);
+}
+
+// 循环读取直到收完完整的 HTTP 请求（headers + body）
+// 返回 true=成功, false=超时/错误/缓冲区满
+static bool recv_http_request(int sock, char *buf, size_t buf_size, size_t *out_len)
+{
+    size_t total = 0;
+
+    // 设置客户端 socket 超时
+    timeval tv = {k_client_timeout_sec, 0};
+    lwip_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // 阶段 1: 循环读取直到收到 \r\n\r\n（headers 结束标志）
+    while (total < buf_size - 1) {
+        int n = lwip_recv(sock, buf + total, (int)(buf_size - 1 - total), 0);
+        if (n <= 0) {
+            osal_printk("[HTTP] recv headers failed: %d (got %u bytes)\r\n", n, (unsigned)total);
+            return false;
+        }
+        total += (size_t)n;
+        buf[total] = '\0';
+        if (strstr(buf, "\r\n\r\n") != nullptr)
+            break;
+    }
+
+    if (total >= buf_size - 1) {
+        osal_printk("[HTTP] headers too large\r\n");
+        return false;
+    }
+
+    // 阶段 2: 解析 Content-Length，读取 body
+    int content_length = parse_content_length(buf);
+    if (content_length <= 0) {
+        *out_len = total;
+        return true; // GET 请求无 body，直接完成
+    }
+
+    const char *body_start = strstr(buf, "\r\n\r\n");
+    if (!body_start) {
+        return false;
+    }
+    body_start += 4;
+
+    size_t body_received = total - (size_t)(body_start - buf);
+
+    // 阶段 3: 循环读取剩余 body 字节
+    while (body_received < (size_t)content_length && total < buf_size - 1) {
+        int n = lwip_recv(sock, buf + total, (int)(buf_size - 1 - total), 0);
+        if (n <= 0) {
+            osal_printk("[HTTP] recv body failed: %d (got %u/%d bytes)\r\n",
+                        n, (unsigned)body_received, content_length);
+            return false;
+        }
+        total += (size_t)n;
+        body_received += (size_t)n;
+    }
+
+    buf[total] = '\0';
+    *out_len = total;
+    return true;
+}
+
 // 从 JSON body 提取 int 字段
 static bool json_get_int(const char *body, const char *key, int *out)
 {
@@ -135,14 +214,8 @@ static void handle_status(int sock)
 {
     const spi_settings_t *s = get_spi_settings();
 
-    // 获取本机 IP
-    char ip[16] = "0.0.0.0";
-    netif *iface = netifapi_netif_find_by_name("wlan0");
-    if (iface) {
-        uint32_t ip_host = lwip_ntohl(iface->ip_addr.u_addr.ip4.addr);
-        snprintf(ip, sizeof(ip), "%u.%u.%u.%u", (ip_host >> 24) & 0xFF, (ip_host >> 16) & 0xFF, (ip_host >> 8) & 0xFF,
-                 ip_host & 0xFF);
-    }
+    const char *ip = wifi_get_current_ip();
+    const char *ssid = wifi_get_current_ssid();
 
     uint8_t hotspot = spi_get_hotspot(s->hotspot_network);
     uint8_t network = spi_get_network(s->hotspot_network);
@@ -152,10 +225,11 @@ static void handle_status(int sock)
              "{\"mode\":%u,\"mode_name\":\"%s\","
              "\"volume\":%u,\"bass\":%u,\"brightness\":%u,"
              "\"hotspot\":\"%s\",\"network\":\"%s\","
-             "\"device_ip\":\"%s\"}",
+             "\"wifi_ssid\":\"%s\",\"device_ip\":\"%s\"}",
              s->mode, mode_name_str(s->mode), s->volume, s->bass, s->brightness,
-             (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF", (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
-             ip);
+             (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF",
+             (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
+             ssid, ip);
     send_json(sock, 200, 0, "ok", body);
 }
 
@@ -377,11 +451,9 @@ void *http_control_task(void *arg)
 
         char recv_buf[k_recv_buf_size];
         memset(recv_buf, 0, sizeof(recv_buf));
-        int recv_len = lwip_recv(client_sock, recv_buf, sizeof(recv_buf) - 1, 0);
+        size_t recv_len = 0;
 
-        if (recv_len > 0) {
-            recv_buf[recv_len] = '\0';
-
+        if (recv_http_request(client_sock, recv_buf, sizeof(recv_buf), &recv_len)) {
             char method[8] = {0};
             char path[64] = {0};
             if (parse_first_line(recv_buf, method, sizeof(method), path, sizeof(path))) {
@@ -390,6 +462,10 @@ void *http_control_task(void *arg)
                 const char *err = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
                 lwip_send(client_sock, err, strlen(err), 0);
             }
+        } else {
+            // recv 超时或错误
+            const char *err = "HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n";
+            lwip_send(client_sock, err, strlen(err), 0);
         }
 
         lwip_close(client_sock);
