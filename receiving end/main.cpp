@@ -26,10 +26,10 @@ void app_entry(void)
     // taskid = osal_kthread_create((osal_kthread_handler)spi_master_task, NULL, "spi_master_task", 2048);
     // (void)taskid;
 
-    taskid = osal_kthread_create((osal_kthread_handler)audio_play_task, NULL, "audio_play_task", 4096);
+    taskid = osal_kthread_create((osal_kthread_handler)audio_play_task, NULL, "audio_play_task", 3072);
     (void)taskid;
 
-    taskid = osal_kthread_create((osal_kthread_handler)wifi_task, NULL, "wifi_task", 8192);
+    taskid = osal_kthread_create((osal_kthread_handler)wifi_task, NULL, "wifi_task", 6144);
     (void)taskid;
 
     // minimp3_task is created dynamically by wifi_task when DLNA mode starts

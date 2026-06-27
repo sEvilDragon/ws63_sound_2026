@@ -1,15 +1,15 @@
-// WS63 LiteOS: �� mmap/munmap/stdio��ֻ�ûص� API
+// WS63 LiteOS: 无 mmap/munmap/stdio，只用回调 API
 #define MINIMP3_NO_STDIO
-// ��С IO ������������ malloc(128KB) ��Ƕ��ʽ����ʧ��
-// ϵͳ���ö�Լ 340KB����Ϊ TLS/�׽���/HTTP ͷ����ռ�
-#define MINIMP3_IO_SIZE (18 * 1024)
+// IO 缓冲区：10KB ≈ 0.64s 128kbps MP3，节省内存
+#define MINIMP3_IO_SIZE (10 * 1024)
 #define MINIMP3_IMPLEMENTATION
 
-// ���ף����Ԥ����δ��ȷ�ų� mmap/munmap ·�����ṩ��׮������������
-// RISCV musl ����������Ԥ���� __linux__������ minimp3_ex.h �е�
-// #if defined(__linux__) ��֧�����롪����ʹ��� MINIMP3_NO_STDIO �Ѷ��塣
-// ��׮�������ᱻʵ�ʵ��ã���Ϊ�ص� IO ·���������ļ�ӳ����룩��
-// �������������ӽ׶ε� undefined reference��
+// ���ף����Ԥ����δ��ȷ�ų� mmap/munmap
+// ·�����ṩ��׮������������ RISCV musl ����������Ԥ����
+// __linux__������ minimp3_ex.h �е� #if defined(__linux__) ��֧�����롪����ʹ��� MINIMP3_NO_STDIO �Ѷ��塣
+// ��׮�������ᱻʵ�ʵ��ã���Ϊ�ص� IO
+// ·���������ļ�ӳ����룩�� �������������ӽ׶ε� undefined
+// reference��
 extern "C" {
 int munmap(void *addr, unsigned long length)
 {
@@ -859,7 +859,8 @@ struct chunked_decoder {
                         return -1;
                     }
                     {
-                        // ����ʮ������ chunk ��С������ hex_len==0 ֻ�� rd_size �׶α� \r ����ʱ��
+                        // ����ʮ������ chunk ��С������ hex_len==0 ֻ�� rd_size �׶α�
+                        // \r ����ʱ��
                         if (hex_len == 0) {
                             osal_printk("chunked: �� chunk-size �ֶ�\n");
                             state = st::err;
@@ -913,7 +914,8 @@ struct chunked_decoder {
                     if (b == '\r') {
                         trailer_prev_cr = true;
                     } else if (b == '\n' && trailer_prev_cr) {
-                        // ���� \r\n�����ǿ��У��򻯣���һ�� \r\n ����ֹ��
+                        // ���� \r\n�����ǿ��У��򻯣���һ�� \r\n
+                        // ����ֹ��
                         state = st::done;
                         is_done = true;
                         trailer_prev_cr = false;
@@ -1329,7 +1331,6 @@ void minimp3::play_url(const char *url)
     http_get_url(url);
 }
 
-
 void minimp3::request_exit()
 {
     s_exit_requested = true;
@@ -1535,13 +1536,10 @@ void minimp3::stream_mp3_to_iis()
     static constexpr int k_max_open_retries = 5;
     static constexpr uint32_t k_open_retry_base_ms = 200;
 
-    // ���� PCM buffer for IIS output ����������������������������������������������������������������
+    // PCM buffer for IIS output — 静态分配，避免堆碎片化导致分配失败
     static constexpr size_t k_pcm_batch_samples = 1152 * 2;
-    int16_t *pcm_buf = static_cast<int16_t *>(osal_kmalloc(k_pcm_batch_samples * sizeof(int16_t), OSAL_GFP_KERNEL));
-    if (pcm_buf == nullptr) {
-        osal_printk("minimp3_ex: pcm buffer alloc failed\n");
-        return;
-    }
+    static int16_t s_pcm_buf[k_pcm_batch_samples];
+    int16_t *pcm_buf = s_pcm_buf;
 
     while (true) {
         if (s_exit_requested) {
@@ -1551,10 +1549,9 @@ void minimp3::stream_mp3_to_iis()
         // ���� Wait while paused / stopped ����������������������������������������������������
         if (!is_playing) {
             if (dec_open && is_paused) {
-                // ��ͣ�������� IIS ���������� data_write ͬ�̣߳��޾�������
-                // �ٿ���λ�ú�رս������� TCP ���ӣ��ͷ� LWIP �ڴ档
-                // ��������������������ݻ�ľ� LWIP ��������
-                // ���� DLNA NOTIFY �� lwip_send ���䲻���ڴ��ʧ�ܡ�
+                // ��ͣ�������� IIS ���������� data_write
+                // ͬ�̣߳��޾������� �ٿ���λ�ú�رս������� TCP ���ӣ��ͷ� LWIP
+                // �ڴ档 ��������������������ݻ�ľ� LWIP �������� ���� DLNA NOTIFY �� lwip_send ���䲻���ڴ��ʧ�ܡ�
                 iis::data_clear();
                 s_resume_target_byte = s_bytes_streamed;
                 s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
@@ -1612,7 +1609,8 @@ void minimp3::stream_mp3_to_iis()
                 continue;
             }
 
-            // ���� io_ctx �п����ӵ�״̬����ֹ��һ�׸�Ĳ���ֵ��Ⱦ�����ӡ�
+            // ���� io_ctx
+            // �п����ӵ�״̬����ֹ��һ�׸�Ĳ���ֵ��Ⱦ�����ӡ�
             io_ctx.content_length = 0;
             io_ctx.mp3_start_offset = 0;
             io_ctx.seek_on_open = 0;
@@ -1704,9 +1702,11 @@ void minimp3::stream_mp3_to_iis()
         if (s_has_range && dec_open) {
             osal_printk("minimp3_ex: mid-playback seek to byte %llu\n",
                         static_cast<unsigned long long>(s_resume_target_byte));
-            // ������ IIS���������Ƶ��������������λ�ô��ң��� data_write ͬ�߳��޾�����
+            // ������ IIS���������Ƶ��������������λ�ô��ң��� data_write
+            // ͬ�߳��޾�����
             iis::data_clear();
-            // ���� seek_on_open �� reopen ʱʹ�� Range ���󣬱����� GET �� drain��
+            // ���� seek_on_open �� reopen ʱʹ�� Range ���󣬱����� GET ��
+            // drain��
             io_ctx.seek_on_open = s_range_start_byte;
             io_ctx.seek_on_open_active = true;
             mp3dec_ex_close(&dec);
@@ -1806,5 +1806,4 @@ void minimp3::stream_mp3_to_iis()
     }
     free_stream_transport(io_ctx.transport);
     io_ctx.connected = false;
-    osal_kfree(pcm_buf);
 }

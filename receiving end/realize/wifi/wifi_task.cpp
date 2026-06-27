@@ -23,8 +23,8 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
     static bool first_call = true;
     if (first_call) {
         first_call = false;
-        osal_printk("[DLNA] first PCM push, size=%u, pending=%d, is_ready=%d\r\n",
-                    size, iis::pending_frames, iis::is_ready);
+        osal_printk("[DLNA] first PCM push, size=%u, pending=%d, is_ready=%d\r\n", size, iis::pending_frames,
+                    iis::is_ready);
     }
 
     int queue_level = static_cast<int>(iis::pending_frames);
@@ -284,7 +284,7 @@ void *wifi_task(void *arg)
         if (sta_connected && !discover_running) {
             discover_broadcast_reset_stop();
             discover_handle =
-                osal_kthread_create((osal_kthread_handler)discover_broadcast_task, NULL, "discover", 4096);
+                osal_kthread_create((osal_kthread_handler)discover_broadcast_task, NULL, "discover", 3072);
             discover_running = true;
             osal_printk("[WiFi] discover broadcast started on port 20262\r\n");
         }
@@ -302,7 +302,7 @@ void *wifi_task(void *arg)
         // 独立于 DLNA：任何模式下只要 STA 在线，小程序均可控制
         if (sta_connected && !http_ctrl_running) {
             http_control_reset_stop();
-            http_ctrl_handle = osal_kthread_create((osal_kthread_handler)http_control_task, NULL, "http_ctrl", 4096);
+            http_ctrl_handle = osal_kthread_create((osal_kthread_handler)http_control_task, NULL, "http_ctrl", 3072);
             http_ctrl_running = true;
             osal_printk("[WiFi] HTTP control server started on port 8080\r\n");
         }
@@ -321,8 +321,8 @@ void *wifi_task(void *arg)
         if (want_dlna && sta_connected && !dlna_running) {
             dlan::reset_stop();
             minimp3::reset_exit();
-            dlna_handle = osal_kthread_create((osal_kthread_handler)dlna_task, NULL, "dlna_task", 8192);
-            mp3_handle = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", 8192 * 4);
+            dlna_handle = osal_kthread_create((osal_kthread_handler)dlna_task, NULL, "dlna_task", 6144);
+            mp3_handle = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", 20480);
             dlna_running = true;
             osal_printk("[WiFi] DLNA started\r\n");
         }

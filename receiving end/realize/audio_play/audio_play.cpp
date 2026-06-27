@@ -12,12 +12,18 @@ static osal_task *s_sle_task_handle = nullptr;
 static const char *mode_name(uint8_t mode)
 {
     switch (mode) {
-        case SPI_MODE_WIREED:   return "WIRED";
-        case SPI_MODE_SLE:      return "SLE";
-        case SPI_MODE_DLNA:     return "DLNA";
-        case SPI_MODE_SLE_MIC:  return "SLE_MIC";
-        case SPI_MODE_DLNA_NET: return "DLNA_NET";
-        default:                return "UNKNOWN";
+        case SPI_MODE_WIREED:
+            return "WIRED";
+        case SPI_MODE_SLE:
+            return "SLE";
+        case SPI_MODE_DLNA:
+            return "DLNA";
+        case SPI_MODE_SLE_MIC:
+            return "SLE_MIC";
+        case SPI_MODE_DLNA_NET:
+            return "DLNA_NET";
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -25,8 +31,7 @@ static void sle_data_process(const uint8_t *data, uint16_t len)
 {
     if (data == nullptr || len % 2 == 1)
         return;
-    iis::data_write((const int16_t *)data, len / sizeof(int16_t),
-                     get_spi_settings()->volume, get_spi_settings()->bass);
+    iis::data_write((const int16_t *)data, len / sizeof(int16_t), get_spi_settings()->volume, get_spi_settings()->bass);
     iis::fill_buffer_if_needed();
 }
 
@@ -55,14 +60,14 @@ static void start_sle_mode(void)
 {
     s_sle_stop = false;
     s_sle_done = false;
-    s_sle_task_handle = osal_kthread_create(
-        (osal_kthread_handler)sle_audio_task, NULL, "sle_audio", 4096);
+    s_sle_task_handle = osal_kthread_create((osal_kthread_handler)sle_audio_task, NULL, "sle_audio", 3072);
     osal_printk("[Mode] SLE task created\r\n");
 }
 
 static void stop_sle_mode(void)
 {
-    if (!s_sle_task_handle) return;
+    if (!s_sle_task_handle)
+        return;
     s_sle_stop = true;
     int timeout = 50;
     while (!s_sle_done && timeout-- > 0) {
@@ -89,15 +94,14 @@ void *audio_play_task(void *arg)
     while (true) {
         uint8_t new_mode = get_spi_settings()->mode;
         if (new_mode != current_mode) {
-            osal_printk("[Audio] mode switch: %s -> %s\r\n",
-                        mode_name(current_mode), mode_name(new_mode));
+            osal_printk("[Audio] mode switch: %s -> %s\r\n", mode_name(current_mode), mode_name(new_mode));
 
             if (current_mode == SPI_MODE_SLE || current_mode == SPI_MODE_SLE_MIC) {
                 stop_sle_mode();
             }
 
-            osal_printk("[Audio] calling data_clear for mode switch: %s -> %s\r\n",
-                        mode_name(current_mode), mode_name(new_mode));
+            osal_printk("[Audio] calling data_clear for mode switch: %s -> %s\r\n", mode_name(current_mode),
+                        mode_name(new_mode));
             iis::data_clear();
 
             if (new_mode == SPI_MODE_SLE || new_mode == SPI_MODE_SLE_MIC) {

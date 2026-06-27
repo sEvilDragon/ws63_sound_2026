@@ -5,10 +5,11 @@ volatile int iis::write_idx = 0;
 volatile int iis::read_idx = 0;
 volatile int iis::pending_frames = 0;
 volatile uint32_t iis::write_offset = 0;
-std::array<void *, 100> iis::raw_buffers;
-std::array<int16_t *, 100> iis::dma_buffers;
+std::array<void *, 50> iis::raw_buffers;
+std::array<int16_t *, 50> iis::dma_buffers;
 uint8_t iis::dma_channel = 0;
 bool iis::is_ready = false;
+
 int16_t iis::last_left_sample = 0;
 int16_t iis::last_right_sample = 0;
 float iis::biquad_bx1_l = 0;
@@ -36,15 +37,16 @@ iis::iis()
     i2s_dma_init_1();
     i2s_init();
     i2s_dma_init_2();
-    set_rate_of_iis(i2s_sample_rate); // dma_config 会用 FREQ_OF_NEED=32 覆盖 BCLK，必须在其后重置为48kHz
+    set_rate_of_iis(i2s_sample_rate);
     sem_mutex_init();
     dma_lli_init();
+    osal_printk("[IIS] init complete, buffers=%d, TX initially off\r\n", buffer_num);
 }
 
 iis::~iis()
 {
-    // 释放分配的DMA缓冲区
-    for (int i = 0; i < buffer_num; i++) {
+    hal_sio_set_tx_enable(i2s_num, 0);
+    for (int i = 0; i < (int)buffer_num; i++) {
         if (raw_buffers[i] != nullptr) {
             osal_kfree(raw_buffers[i]);
             raw_buffers[i] = nullptr;
@@ -178,8 +180,8 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         // 每 60 次回调打印一次，避免刷屏
         static int cb_count = 0;
         if (++cb_count % 60 == 1) {
-            osal_printk("[IIS] DMA cb #%d, read=%d, write=%d, pending=%d\r\n",
-                        cb_count, read_idx, write_idx, pending_frames);
+            osal_printk("[IIS] DMA cb #%d, read=%d, write=%d, pending=%d\r\n", cb_count, read_idx, write_idx,
+                        pending_frames);
         }
 
         // 欠载不再关闭 TX：data_clear_one 已用最后采样值填充空槽，输出为平滑静音。
@@ -239,16 +241,15 @@ void iis::dma_lli_init()
     hal_sio_set_crg_clock_enable(i2s_num, true);
     // TX 不立即激活，等待 data_write 积累足够帧数后再开启，避免缓冲区不足时播放噪声
     hal_sio_set_tx_enable(i2s_num, 0);
-    osal_printk("[IIS] DMA LLI started, ch=%d, buffers=%d, TX initially off\r\n",
-                dma_channel, buffer_num);
+    osal_printk("[IIS] DMA LLI started, ch=%d, buffers=%d, TX initially off\r\n", dma_channel, buffer_num);
 }
 
 void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t bass)
 {
     static int dw_count = 0;
     if (++dw_count % 200 == 1) {
-        osal_printk("[IIS] data_write #%d, size=%u, pending=%d, write_idx=%d, offset=%d, ready=%d\r\n",
-                    dw_count, size, pending_frames, write_idx, write_offset, is_ready);
+        osal_printk("[IIS] data_write #%d, size=%u, pending=%d, write_idx=%d, offset=%d, ready=%d\r\n", dw_count, size,
+                    pending_frames, write_idx, write_offset, is_ready);
     }
 
     if (size % 2 != 0) {
@@ -343,8 +344,7 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
             if (!is_ready && pending_frames >= prebuffer_num) {
                 is_ready = true;
                 hal_sio_set_tx_enable(i2s_num, 1);
-                osal_printk("[IIS] TX ENABLED, pending_frames=%d, write_idx=%d\r\n",
-                            pending_frames, write_idx);
+                osal_printk("[IIS] TX ENABLED, pending_frames=%d, write_idx=%d\r\n", pending_frames, write_idx);
             }
             osal_irq_restore(irq);
         }
@@ -353,8 +353,7 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 
 void iis::data_clear()
 {
-    osal_printk("[IIS] data_clear: pending=%d, read=%d, write=%d\r\n",
-                pending_frames, read_idx, write_idx);
+    osal_printk("[IIS] data_clear: pending=%d, read=%d, write=%d\r\n", pending_frames, read_idx, write_idx);
     // 不再关闭 TX：DMA LLI 一旦启动即持续运行，关 TX 只关输出引脚，
     // DMA 内部请求仍继续消耗缓冲区，导致 pending_frames 永远无法重新积累，
     // TX 永久失去重开机会。改为保持 TX 开启，让 DMA 播放已清零的静音帧。
