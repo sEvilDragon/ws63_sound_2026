@@ -15,7 +15,7 @@
 | TP1 | 悬空 → 多键同时有效（滑条质心/峰检测需要） |
 | TP2 | 接 GND → 16 键模式 |
 | SCL | GPIO00（WS63 输出） |
-| SDO | GPIO01（WS63 输入） |
+| SDO | GPIO04（WS63 输入） |
 | 电平 | 3.3V，ACTIVE_LOW=false |
 
 模块丝印标注的 pad 编号与芯片 pin 号**错位 1 档**：

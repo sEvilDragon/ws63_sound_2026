@@ -30,8 +30,8 @@ void *discover_broadcast_task(void *arg)
 {
     (void)arg;
     s_stop_requested = false;
-    osal_printk("[Discover] broadcast task started, port=%u interval=%dms\r\n",
-                k_discover_port, k_broadcast_interval_ms);
+    osal_printk("[Discover] broadcast task started, port=%u interval=%dms\r\n", k_discover_port,
+                k_broadcast_interval_ms);
 
     int32_t sock = lwip_socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -63,13 +63,11 @@ void *discover_broadcast_task(void *arg)
 
         // 格式: FBB_SOUND_DISCOVER|{"ip":"...","name":"...","version":"..."}
         char msg[256];
-        int len = snprintf(msg, sizeof(msg),
-                           "FBB_SOUND_DISCOVER|{\"ip\":\"%s\",\"name\":\"%s\",\"version\":\"%s\"}",
+        int len = snprintf(msg, sizeof(msg), "FBB_SOUND_DISCOVER|{\"ip\":\"%s\",\"name\":\"%s\",\"version\":\"%s\"}",
                            ip, name, version);
 
         if (len > 0 && (size_t)len < sizeof(msg)) {
-            int sent = lwip_sendto(sock, msg, (size_t)len, 0,
-                                   (sockaddr *)&dest, sizeof(dest));
+            int sent = lwip_sendto(sock, msg, (size_t)len, 0, (sockaddr *)&dest, sizeof(dest));
             if (sent > 0) {
                 // 仅首次或 IP 变更时打印，避免刷屏
                 static char last_ip[16] = "";

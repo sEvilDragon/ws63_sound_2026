@@ -96,6 +96,8 @@ void *audio_play_task(void *arg)
                 stop_sle_mode();
             }
 
+            osal_printk("[Audio] calling data_clear for mode switch: %s -> %s\r\n",
+                        mode_name(current_mode), mode_name(new_mode));
             iis::data_clear();
 
             if (new_mode == SPI_MODE_SLE || new_mode == SPI_MODE_SLE_MIC) {

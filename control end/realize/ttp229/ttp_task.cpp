@@ -13,9 +13,8 @@ extern "C" {
 #define TTP_VERBOSE 0
 #endif
 
-#define TTP_LOG(fmt, ...) osal_printk("[TTP229] " fmt, ##__VA_ARGS__)
 #if TTP_VERBOSE
-#define TTP_VLOG(fmt, ...) osal_printk("[TTP229][v] " fmt, ##__VA_ARGS__)
+#define TTP_VLOG(fmt, ...) osal_printk("[TTP229] " fmt, ##__VA_ARGS__)
 #else
 #define TTP_VLOG(fmt, ...) \
     do {                   \
@@ -44,37 +43,18 @@ ttp229::ttp229()
 
 void ttp229::init_serial()
 {
-    TTP_LOG("init: SCL=GPIO%d, SDO=GPIO%d, ACTIVE_LOW=%d\r\n", (int)SCL_PIN, (int)SDA_PIN, ACTIVE_LOW ? 1 : 0);
-
     uapi_pin_set_mode(SCL_PIN, PIN_MODE_0);
     uapi_pin_set_mode(SDA_PIN, PIN_MODE_0);
     uapi_gpio_set_dir(SCL_PIN, GPIO_DIRECTION_OUTPUT);
     uapi_gpio_set_dir(SDA_PIN, GPIO_DIRECTION_INPUT);
     uapi_gpio_set_val(SCL_PIN, GPIO_LEVEL_HIGH);
-
     osal_msleep(2);
-
-    // 探测: 在拉低前先看 SDO 当前电平 (悬空/上拉应为 1; 若为 0 说明线接反或短路)
-    uint32_t sdo_before = uapi_gpio_get_val(SDA_PIN);
-    uapi_gpio_set_val(SCL_PIN, GPIO_LEVEL_LOW);
-    uint32_t sdo_after = uapi_gpio_get_val(SDA_PIN);
-    TTP_LOG("init: SDO before_clk=%u after_clk_low=%u (both=1 正常, both=0 可能悬空)\r\n", (unsigned)sdo_before,
-            (unsigned)sdo_after);
-
-    uapi_gpio_set_val(SCL_PIN, GPIO_LEVEL_HIGH);
 
     uint16_t sample = 0;
     if (read_serial(&sample)) {
         m_healthy = true;
-        TTP_LOG("serial probe OK, raw=0x%04x (touch a pad to verify)\r\n", sample);
-        // 多读几次, 帮助确认线路是否稳定
-        uint16_t s2 = 0, s3 = 0;
-        read_serial(&s2);
-        read_serial(&s3);
-        TTP_LOG("serial probe x3: 0x%04x / 0x%04x / 0x%04x\r\n", sample, s2, s3);
-    } else {
-        TTP_LOG("serial probe FAILED\r\n");
     }
+    osal_printk("TTP:%d\r\n", m_healthy ? 1 : 0);
 }
 
 bool ttp229::read_serial(uint16_t *state_out)
@@ -109,6 +89,13 @@ bool ttp229::read_serial(uint16_t *state_out)
     }
 
     uapi_gpio_set_val(SCL_PIN, GPIO_LEVEL_HIGH);
+
+    // 位序翻转: 芯片实际 LSB-first 输出, pin1↔pin16 对调
+    result = (uint16_t)(((result & 0x00FF) << 8) | ((result & 0xFF00) >> 8));
+    result = (uint16_t)(((result & 0x0F0F) << 4) | ((result & 0xF0F0) >> 4));
+    result = (uint16_t)(((result & 0x3333) << 2) | ((result & 0xCCCC) >> 2));
+    result = (uint16_t)(((result & 0x5555) << 1) | ((result & 0xAAAA) >> 1));
+
     *state_out = result;
 #if TTP_VERBOSE
     {
@@ -245,9 +232,6 @@ void ttp229::process_slider(uint16_t raw)
     bool active = (pos != TTP_SLIDER_NO_POS);
 
     if (!active) {
-        if (prev_pos != TTP_SLIDER_NO_POS) {
-            TTP_LOG("slider: released (was pos=%d.%02d)\r\n", prev_pos / TTP_SLIDER_SCALE, prev_pos % TTP_SLIDER_SCALE);
-        }
         m_history_count = 0;
         m_history_idx = 0;
         m_ticks_since_change = 0;
@@ -256,11 +240,6 @@ void ttp229::process_slider(uint16_t raw)
         m_state.slider_direction = TTP_SWIPE_NONE;
         m_state.slider_speed = 0;
         return;
-    }
-
-    if (prev_pos != pos) {
-        TTP_LOG("slider: pos=%d.%02d (raw=0x%04x, prev=%d.%02d)\r\n", pos / TTP_SLIDER_SCALE, pos % TTP_SLIDER_SCALE,
-                raw, prev_pos / TTP_SLIDER_SCALE, prev_pos % TTP_SLIDER_SCALE);
     }
 
     m_history[m_history_idx] = pos;
@@ -373,46 +352,6 @@ void ttp229::process_function_keys(uint16_t raw)
     m_state.func_pressed = pressed;
     m_state.func_just_pressed = just_p;
     m_state.func_just_released = just_r;
-
-    if (pressed != prev_pressed || just_p || just_r) {
-        // 把 bitmask 解码为 A/B/C 便于确认按键映射是否正确
-        static const char kname[3] = {'A', 'B', 'C'};
-        char p_str[8], jp_str[8], jr_str[8];
-        int p_len = 0, jp_len = 0, jr_len = 0;
-        for (int i = 0; i < 3; i++) {
-            if (pressed & (1u << i)) {
-                if (p_len)
-                    p_str[p_len++] = '+';
-                p_str[p_len++] = kname[i];
-            }
-            if (just_p & (1u << i)) {
-                if (jp_len)
-                    jp_str[jp_len++] = '+';
-                jp_str[jp_len++] = kname[i];
-            }
-            if (just_r & (1u << i)) {
-                if (jr_len)
-                    jr_str[jr_len++] = '+';
-                jr_str[jr_len++] = kname[i];
-            }
-        }
-        if (p_len == 0) {
-            p_str[0] = '-';
-            p_len = 1;
-        }
-        if (jp_len == 0) {
-            jp_str[0] = '-';
-            jp_len = 1;
-        }
-        if (jr_len == 0) {
-            jr_str[0] = '-';
-            jr_len = 1;
-        }
-        p_str[p_len] = '\0';
-        jp_str[jp_len] = '\0';
-        jr_str[jr_len] = '\0';
-        TTP_LOG("keys: pressed=[%s] just_press=[%s] just_release=[%s] raw=0x%04X\r\n", p_str, jp_str, jr_str, raw);
-    }
 }
 
 void ttp229::update()
@@ -421,6 +360,16 @@ void ttp229::update()
     if (!read_touch(&raw)) {
         return;
     }
+
+    // 输出所有新触碰的 pad (chip pin 号, 1..16)
+    static uint16_t last_raw = 0;
+    uint16_t changed = raw ^ last_raw;
+    for (int p = 1; p <= 16; p++) {
+        if ((changed & (1u << (p - 1))) && (raw & (1u << (p - 1)))) {
+            osal_printk("%d\r\n", p);
+        }
+    }
+    last_raw = raw;
 
     m_state.raw_state = raw;
     process_slider(raw);
@@ -462,59 +411,15 @@ void *ttp_task(void *arg)
     static sed_ws63::ttp229 s_ttp;
     g_ttp = &s_ttp;
 
-    TTP_LOG("task started (serial: SCL=GPIO%d, SDO=GPIO%d, 16-key, ACTIVE_LOW=%d)\r\n", (int)sed_ws63::ttp229::SCL_PIN,
-            (int)sed_ws63::ttp229::SDA_PIN, sed_ws63::ttp229::ACTIVE_LOW ? 1 : 0);
-
-    uint32_t ticks = 0;
-    uint32_t frame_counter = 0;
-    uint32_t dump_ticks = 0;
-    uint32_t hb_ticks = 0;
-    uint16_t last_raw = 0;
-    uint8_t last_pressed = 0;
-
     while (true) {
         g_ttp->update();
         g_ttp_state = g_ttp->get_state();
 
-        // 把本帧边沿累加进锁存, 保证 ui_task 无论何时读都能拿到, 且只消费一次
         if (g_ttp_state.func_just_pressed)
             g_press_latch |= g_ttp_state.func_just_pressed;
         if (g_ttp_state.func_just_released)
             g_release_latch |= g_ttp_state.func_just_released;
 
-        frame_counter++;
-
-        const ttp_state_t *s = &g_ttp_state;
-
-        // 启动后前 5 帧: 强制打印原始值, 立刻判断 SDO 是否完全没信号
-        if (frame_counter <= 5) {
-            TTP_LOG("boot frame #%u: raw=0x%04x slider=%d.%02d fn=0x%02x\r\n", (unsigned)frame_counter, s->raw_state,
-                    s->slider_pos / TTP_SLIDER_SCALE, s->slider_pos % TTP_SLIDER_SCALE, s->func_pressed);
-        }
-
-        // 周期性原始状态转储 (~500ms)
-        if (++dump_ticks >= 100) {
-            dump_ticks = 0;
-            TTP_LOG("dump: raw=0x%04x slider=%d.%02d dir=%u spd=%d fn=0x%02x jp=0x%02x jr=0x%02x\r\n", s->raw_state,
-                    s->slider_pos / TTP_SLIDER_SCALE, s->slider_pos % TTP_SLIDER_SCALE, (unsigned)s->slider_direction,
-                    s->slider_speed, s->func_pressed, s->func_just_pressed, s->func_just_released);
-        }
-
-        // 心跳 (~2s) 确认任务活着
-        if (++hb_ticks >= 400) {
-            hb_ticks = 0;
-            TTP_LOG("heartbeat: frames=%u ticks=%u raw=0x%04x slider=%d.%02d fn=0x%02x\r\n", (unsigned)frame_counter,
-                    (unsigned)ticks, s->raw_state, s->slider_pos / TTP_SLIDER_SCALE, s->slider_pos % TTP_SLIDER_SCALE,
-                    s->func_pressed);
-        }
-
-        last_raw = s->raw_state;
-        last_pressed = s->func_pressed;
-        (void)last_raw;
-        (void)last_pressed;
-        (void)ticks;
-
-        ticks++;
         osal_msleep(sed_ws63::ttp229::POLL_INTERVAL_MS);
     }
     return nullptr;

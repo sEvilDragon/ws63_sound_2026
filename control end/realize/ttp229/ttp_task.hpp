@@ -14,8 +14,8 @@ namespace sed_ws63 {
 class ttp229 {
 public:
     static constexpr uint32_t POLL_INTERVAL_MS = 5;
-    static constexpr pin_t SCL_PIN = GPIO_00;
-    static constexpr pin_t SDA_PIN = GPIO_01;
+    static constexpr pin_t SCL_PIN = GPIO_12;
+    static constexpr pin_t SDA_PIN = GPIO_00;
 
     // 当前芯片配置 (根据模块 TP 跳线决定, 若有变化请修改下列标志)
     //  - TP2 接 GND → 16 键模式已启用
@@ -41,13 +41,14 @@ public:
 
 private:
     // 滑条: 物理从左到右顺序 (chip pin 号, 1-based)
-    // 物理顺序: 模块上从左到右依次对应 pin 9,10,11,12,16,15,14,13
+    // raw bit:        9  11   8  10  14  15   0   1
+    // chip pin:      10  12   9  11  15  16   1   2
     // 如果发现滑动方向反了, 把整个数组 reverse 即可
-    static constexpr int PAD_SLIDER[8] = {9, 10, 11, 12, 16, 15, 14, 13};
-    // 功能键: 模块上低位的 3 个独立按键
-    static constexpr int PAD_FUNC_A = 1;
-    static constexpr int PAD_FUNC_B = 2;
-    static constexpr int PAD_FUNC_C = 3;
+    static constexpr int PAD_SLIDER[8] = {10, 12, 9, 11, 15, 16, 1, 2};
+    // 功能键: raw bit 4/5/6 → chip pin 5/6/7
+    static constexpr int PAD_FUNC_A = 5;
+    static constexpr int PAD_FUNC_B = 6;
+    static constexpr int PAD_FUNC_C = 7;
 
     static constexpr int SLIDER_HISTORY_SIZE = 8;
     static constexpr uint32_t SPEED_DECAY_TICKS = 500;

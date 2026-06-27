@@ -158,6 +158,7 @@ void iis::sem_mutex_init()
             dma_buffers[i][j] = 0; // 初始化缓冲区数据为0
         }
     }
+    osal_printk("[IIS] DMA buffers allocated: %d x %d samples\r\n", buffer_num, buffer_size);
 }
 
 void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
@@ -174,10 +175,18 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         data_clear_one(read_idx); // 清理刚发送完的缓冲区，DMA下次经过此槽时播平滑保持采样
         read_idx = new_read_idx;  // 更新读取索引
 
-        // 在消耗侧检查缓冲是否耗尽：pending_frames 刚被减，此处最准确
+        // 每 60 次回调打印一次，避免刷屏
+        static int cb_count = 0;
+        if (++cb_count % 60 == 1) {
+            osal_printk("[IIS] DMA cb #%d, read=%d, write=%d, pending=%d\r\n",
+                        cb_count, read_idx, write_idx, pending_frames);
+        }
+
+        // 欠载不再关闭 TX：data_clear_one 已用最后采样值填充空槽，输出为平滑静音。
+        // 关闭 TX 会导致 DMA 继续空转消耗 pending_frames，使其永远无法重新积累到
+        // prebuffer_num，TX 永久失去重开机会。
         if (is_ready && pending_frames <= min_buffer_num) {
-            hal_sio_set_tx_enable(i2s_num, 0);
-            is_ready = false;
+            osal_printk("[IIS] underrun, pending=%d, read=%d (TX stays on)\r\n", pending_frames, read_idx);
         }
     }
 }
@@ -230,10 +239,18 @@ void iis::dma_lli_init()
     hal_sio_set_crg_clock_enable(i2s_num, true);
     // TX 不立即激活，等待 data_write 积累足够帧数后再开启，避免缓冲区不足时播放噪声
     hal_sio_set_tx_enable(i2s_num, 0);
+    osal_printk("[IIS] DMA LLI started, ch=%d, buffers=%d, TX initially off\r\n",
+                dma_channel, buffer_num);
 }
 
 void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t bass)
 {
+    static int dw_count = 0;
+    if (++dw_count % 200 == 1) {
+        osal_printk("[IIS] data_write #%d, size=%u, pending=%d, write_idx=%d, offset=%d, ready=%d\r\n",
+                    dw_count, size, pending_frames, write_idx, write_offset, is_ready);
+    }
+
     if (size % 2 != 0) {
         size--;
         return;
@@ -259,6 +276,10 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 
     while (size > 0) {
         if (write_offset == 0 && pending_frames >= (int)buffer_num) {
+            static int drop_count = 0;
+            if (++drop_count % 50 == 1) {
+                osal_printk("[IIS] buffer full, dropping data (x%d)\r\n", drop_count);
+            }
             return;
         }
 
@@ -322,6 +343,8 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
             if (!is_ready && pending_frames >= prebuffer_num) {
                 is_ready = true;
                 hal_sio_set_tx_enable(i2s_num, 1);
+                osal_printk("[IIS] TX ENABLED, pending_frames=%d, write_idx=%d\r\n",
+                            pending_frames, write_idx);
             }
             osal_irq_restore(irq);
         }
@@ -330,7 +353,11 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 
 void iis::data_clear()
 {
-    hal_sio_set_tx_enable(i2s_num, 0);
+    osal_printk("[IIS] data_clear: pending=%d, read=%d, write=%d\r\n",
+                pending_frames, read_idx, write_idx);
+    // 不再关闭 TX：DMA LLI 一旦启动即持续运行，关 TX 只关输出引脚，
+    // DMA 内部请求仍继续消耗缓冲区，导致 pending_frames 永远无法重新积累，
+    // TX 永久失去重开机会。改为保持 TX 开启，让 DMA 播放已清零的静音帧。
 
     for (int i = 0; i < buffer_num; i++) {
         memset(dma_buffers[i], 0, buffer_size * sizeof(uint16_t));

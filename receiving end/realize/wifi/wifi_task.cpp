@@ -20,6 +20,13 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
     if (data == nullptr || size == 0)
         return;
 
+    static bool first_call = true;
+    if (first_call) {
+        first_call = false;
+        osal_printk("[DLNA] first PCM push, size=%u, pending=%d, is_ready=%d\r\n",
+                    size, iis::pending_frames, iis::is_ready);
+    }
+
     int queue_level = static_cast<int>(iis::pending_frames);
 
     int wait_loops = 0;
@@ -76,8 +83,7 @@ static void update_sta_ip(void)
     netif *iface = netifapi_netif_find_by_name("wlan0");
     if (iface) {
         uint32_t ip_host = lwip_ntohl(iface->ip_addr.u_addr.ip4.addr);
-        snprintf(g_sta_ip, sizeof(g_sta_ip), "%u.%u.%u.%u",
-                 (ip_host >> 24) & 0xFF, (ip_host >> 16) & 0xFF,
+        snprintf(g_sta_ip, sizeof(g_sta_ip), "%u.%u.%u.%u", (ip_host >> 24) & 0xFF, (ip_host >> 16) & 0xFF,
                  (ip_host >> 8) & 0xFF, ip_host & 0xFF);
     }
 }
@@ -277,8 +283,8 @@ void *wifi_task(void *arg)
         // STA 连接后广播设备信息到 :20262，供小程序自动发现
         if (sta_connected && !discover_running) {
             discover_broadcast_reset_stop();
-            discover_handle = osal_kthread_create((osal_kthread_handler)discover_broadcast_task,
-                                                  NULL, "discover", 4096);
+            discover_handle =
+                osal_kthread_create((osal_kthread_handler)discover_broadcast_task, NULL, "discover", 4096);
             discover_running = true;
             osal_printk("[WiFi] discover broadcast started on port 20262\r\n");
         }

@@ -157,8 +157,8 @@ static bool recv_http_request(int sock, char *buf, size_t buf_size, size_t *out_
     while (body_received < (size_t)content_length && total < buf_size - 1) {
         int n = lwip_recv(sock, buf + total, (int)(buf_size - 1 - total), 0);
         if (n <= 0) {
-            osal_printk("[HTTP] recv body failed: %d (got %u/%d bytes)\r\n",
-                        n, (unsigned)body_received, content_length);
+            osal_printk("[HTTP] recv body failed: %d (got %u/%d bytes)\r\n", n, (unsigned)body_received,
+                        content_length);
             return false;
         }
         total += (size_t)n;
@@ -227,8 +227,7 @@ static void handle_status(int sock)
              "\"hotspot\":\"%s\",\"network\":\"%s\","
              "\"wifi_ssid\":\"%s\",\"device_ip\":\"%s\"}",
              s->mode, mode_name_str(s->mode), s->volume, s->bass, s->brightness,
-             (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF",
-             (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
+             (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF", (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
              ssid, ip);
     send_json(sock, 200, 0, "ok", body);
 }
