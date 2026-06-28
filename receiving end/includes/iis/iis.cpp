@@ -5,8 +5,8 @@ volatile int iis::write_idx = 0;
 volatile int iis::read_idx = 0;
 volatile int iis::pending_frames = 0;
 volatile uint32_t iis::write_offset = 0;
-std::array<void *, 50> iis::raw_buffers;
-std::array<int16_t *, 50> iis::dma_buffers;
+std::array<void *, 100> iis::raw_buffers;
+std::array<int16_t *, 100> iis::dma_buffers;
 uint8_t iis::dma_channel = 0;
 bool iis::is_ready = false;
 
@@ -177,9 +177,9 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         data_clear_one(read_idx); // 清理刚发送完的缓冲区，DMA下次经过此槽时播平滑保持采样
         read_idx = new_read_idx;  // 更新读取索引
 
-        // 每 60 次回调打印一次，避免刷屏
+        // 每 6000 次回调打印一次（≈2分钟），避免刷屏
         static int cb_count = 0;
-        if (++cb_count % 60 == 1) {
+        if (++cb_count % 6000 == 1) {
             osal_printk("[IIS] DMA cb #%d, read=%d, write=%d, pending=%d\r\n", cb_count, read_idx, write_idx,
                         pending_frames);
         }
@@ -187,8 +187,16 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         // 欠载不再关闭 TX：data_clear_one 已用最后采样值填充空槽，输出为平滑静音。
         // 关闭 TX 会导致 DMA 继续空转消耗 pending_frames，使其永远无法重新积累到
         // prebuffer_num，TX 永久失去重开机会。
+        static bool was_underrun = false;
+        static int underrun_cb_last = 0;
         if (is_ready && pending_frames <= min_buffer_num) {
-            osal_printk("[IIS] underrun, pending=%d, read=%d (TX stays on)\r\n", pending_frames, read_idx);
+            if (!was_underrun || (cb_count - underrun_cb_last) >= 2750) {
+                osal_printk("[IIS] underrun, pending=%d, read=%d (TX stays on)\r\n", pending_frames, read_idx);
+                underrun_cb_last = cb_count;
+            }
+            was_underrun = true;
+        } else {
+            was_underrun = false;
         }
     }
 }

@@ -29,8 +29,6 @@ ttp229::ttp229()
       m_state{},
       m_slider_prev(0),
       m_slider_integrator(0),
-      m_slider_last_lock(0),
-      m_slider_notouch_cnt(0),
       m_func_debounce{},
       m_func_hold{},
       m_func_stable{},
@@ -186,66 +184,56 @@ void ttp229::process_slider(uint16_t raw)
         }
     }
 
-    // === 无触摸 → 全部复位, 记录抬手帧数 ===
+    // === 无触摸 → 全部复位 ===
     if (cur == 0) {
-        m_slider_notouch_cnt++;
         m_slider_prev = 0;
         m_slider_integrator = 0;
-        m_slider_last_lock = 0;
         m_state.slider_pos = TTP_SLIDER_NO_POS;
         m_state.slider_direction = TTP_SWIPE_NONE;
         m_state.slider_speed = 0;
         return;
     }
 
-    // === 首次触摸 (含抬手后重新按下) ===
+    // === 首次触摸 ===
     if (m_slider_prev == 0) {
         m_slider_prev = cur;
         m_slider_integrator = 0;
-        m_slider_last_lock = 0;
-        m_slider_notouch_cnt = 0;
         m_state.slider_pos = 0; // 由 UI 设 anchor
         m_state.slider_direction = TTP_SWIPE_NONE;
         m_state.slider_speed = 0;
         return;
     }
 
-    // === 位置跳跃检测: 抬手再放太快, 中间未采到无触摸帧 ===
-    // 新旧最低激活 pad 间距 > 2 → 不可能是连续滑动, 视为新触摸
-    {
-        int lo_new = bit_low(cur);
-        int lo_old = bit_low(m_slider_prev);
-        int hi_new = bit_high(cur);
-        int hi_old = bit_high(m_slider_prev);
-        int gap = (lo_new > hi_old) ? (lo_new - hi_old) : (lo_old > hi_new) ? (lo_old - hi_new) : 0;
-        if (gap > 2) {
+    // === pad 集合无变化 → 积分器衰减 ===
+    if (cur == m_slider_prev) {
+        if (m_slider_integrator > 0) {
+            m_slider_integrator--;
+            if (m_slider_integrator == 0)
+                m_state.slider_direction = TTP_SWIPE_NONE;
+        } else if (m_slider_integrator < 0) {
+            m_slider_integrator++;
+            if (m_slider_integrator == 0)
+                m_state.slider_direction = TTP_SWIPE_NONE;
+        }
+        m_state.slider_speed = 0;
+        return;
+    }
+
+    // === 抬手再放检测: pad 集合无交集 且 距离 > 3 pad → 复位 ===
+    if ((cur & m_slider_prev) == 0) {
+        int lo_cur = bit_low(cur);
+        int hi_cur = bit_high(cur);
+        int lo_prv = bit_low(m_slider_prev);
+        int hi_prv = bit_high(m_slider_prev);
+        int dist = (lo_cur > hi_prv) ? (lo_cur - hi_prv) : (lo_prv > hi_cur) ? (lo_prv - hi_cur) : 0;
+        if (dist > 3) { // 跳跃 > 3 pad → 抬手再放
             m_slider_prev = cur;
             m_slider_integrator = 0;
-            m_slider_last_lock = 0;
-            m_slider_notouch_cnt = 0;
             m_state.slider_direction = TTP_SWIPE_NONE;
             m_state.slider_speed = 0;
             return;
         }
-    }
-
-    // === pad 集合无变化 → 积分器衰减, 解除方向锁定 ===
-    if (cur == m_slider_prev) {
-        if (m_slider_integrator > 0) {
-            m_slider_integrator--;
-            if (m_slider_integrator == 0) {
-                m_state.slider_direction = TTP_SWIPE_NONE;
-                m_slider_last_lock = 0;
-            }
-        } else if (m_slider_integrator < 0) {
-            m_slider_integrator++;
-            if (m_slider_integrator == 0) {
-                m_state.slider_direction = TTP_SWIPE_NONE;
-                m_slider_last_lock = 0;
-            }
-        }
-        m_state.slider_speed = 0;
-        return;
+        // 否则是单键模式正常滑动, 继续进入/离开分析
     }
 
     // === 进入 / 离开 位集 ===
@@ -308,39 +296,25 @@ void ttp229::process_slider(uint16_t raw)
         if (m_slider_integrator < -SLIDER_INTEGRATOR_MAX)
             m_slider_integrator = -SLIDER_INTEGRATOR_MAX;
     } else {
-        // 方向不明 (进入和离开对称) → 衰减, 解除锁定
+        // 方向不明 (进入和离开对称) → 衰减
         if (m_slider_integrator > 0)
             m_slider_integrator = (m_slider_integrator * 3) / 4;
         else if (m_slider_integrator < 0)
             m_slider_integrator = (m_slider_integrator * 3) / 4;
-        else
-            m_slider_last_lock = 0;
-    }
-
-    // === 方向锁定解除: 积分器反向越过阈值 → 强制解除, 允许立即反向 ===
-    // 原设计仅在 cur==prev 衰减到 0 时才释放锁, 导致反向滑动时永远无法解锁
-    if (m_slider_last_lock > 0 && m_slider_integrator <= -SLIDER_FIRE_THRESHOLD) {
-        m_slider_last_lock = 0;
-    } else if (m_slider_last_lock < 0 && m_slider_integrator >= SLIDER_FIRE_THRESHOLD) {
-        m_slider_last_lock = 0;
     }
 
     // === 积分器超过阈值 → 发射一步 (漏电积分-发射) ===
-    // integrator > 0 (向高 index 滑动) → SWIPE_LEFT → pos 减小
-    // integrator < 0 (向低 index 滑动) → SWIPE_RIGHT → pos 增大 → 音量增大
-    // 方向锁定: 一旦在某方向发射, 必须等积分器反向越过阈值才能反向发射, 杜绝边界抖动振荡
-    if (m_slider_integrator > SLIDER_FIRE_THRESHOLD && m_slider_last_lock >= 0) {
-        m_state.slider_direction = TTP_SWIPE_LEFT;
-        m_state.slider_speed = SLIDER_STEP;
-        m_state.slider_pos -= SLIDER_STEP;
-        m_slider_integrator -= SLIDER_FIRE_THRESHOLD;
-        m_slider_last_lock = +1;
-    } else if (m_slider_integrator < -SLIDER_FIRE_THRESHOLD && m_slider_last_lock <= 0) {
+    // 右滑(向 pad 10)→ integrator < 0 → slider_pos 增加 → 音量增大
+    if (m_slider_integrator < -SLIDER_FIRE_THRESHOLD) {
         m_state.slider_direction = TTP_SWIPE_RIGHT;
         m_state.slider_speed = SLIDER_STEP;
         m_state.slider_pos += SLIDER_STEP;
         m_slider_integrator += SLIDER_FIRE_THRESHOLD;
-        m_slider_last_lock = -1;
+    } else if (m_slider_integrator > SLIDER_FIRE_THRESHOLD) {
+        m_state.slider_direction = TTP_SWIPE_LEFT;
+        m_state.slider_speed = SLIDER_STEP;
+        m_state.slider_pos -= SLIDER_STEP;
+        m_slider_integrator -= SLIDER_FIRE_THRESHOLD;
     } else {
         m_state.slider_direction = TTP_SWIPE_NONE;
         m_state.slider_speed = 0;

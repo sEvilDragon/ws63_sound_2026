@@ -1,11 +1,13 @@
 // WS63 LiteOS: 无 mmap/munmap/stdio，只用回调 API
 #define MINIMP3_NO_STDIO
-// IO 缓冲区：10KB ≈ 0.64s 128kbps MP3，节省内存
-#define MINIMP3_IO_SIZE (10 * 1024)
+// IO ������18KB������Ƕ��ʽ����ʧ��
+// ϵͳ���ö�Լ 340KB����Ϊ TLS/�׽���/HTTP ͷ����ռ�
+#define MINIMP3_IO_SIZE (18 * 1024)
 #define MINIMP3_IMPLEMENTATION
 
 // ���ף����Ԥ����δ��ȷ�ų� mmap/munmap
-// ·�����ṩ��׮������������ RISCV musl ����������Ԥ����
+// ·�����ṩ��׮������������ RISCV musl
+// ����������Ԥ����
 // __linux__������ minimp3_ex.h �е� #if defined(__linux__) ��֧�����롪����ʹ��� MINIMP3_NO_STDIO �Ѷ��塣
 // ��׮�������ᱻʵ�ʵ��ã���Ϊ�ص� IO
 // ·���������ļ�ӳ����룩�� �������������ӽ׶ε� undefined
@@ -859,7 +861,8 @@ struct chunked_decoder {
                         return -1;
                     }
                     {
-                        // ����ʮ������ chunk ��С������ hex_len==0 ֻ�� rd_size �׶α�
+                        // ����ʮ������ chunk ��С������ hex_len==0 ֻ�� rd_size
+                        // �׶α�
                         // \r ����ʱ��
                         if (hex_len == 0) {
                             osal_printk("chunked: �� chunk-size �ֶ�\n");
@@ -1550,8 +1553,8 @@ void minimp3::stream_mp3_to_iis()
         if (!is_playing) {
             if (dec_open && is_paused) {
                 // ��ͣ�������� IIS ���������� data_write
-                // ͬ�̣߳��޾������� �ٿ���λ�ú�رս������� TCP ���ӣ��ͷ� LWIP
-                // �ڴ档 ��������������������ݻ�ľ� LWIP �������� ���� DLNA NOTIFY �� lwip_send ���䲻���ڴ��ʧ�ܡ�
+                // ͬ�̣߳��޾������� �ٿ���λ�ú�رս������� TCP ���ӣ��ͷ�
+                // LWIP �ڴ档 ��������������������ݻ�ľ� LWIP �������� ���� DLNA NOTIFY �� lwip_send ���䲻���ڴ��ʧ�ܡ�
                 iis::data_clear();
                 s_resume_target_byte = s_bytes_streamed;
                 s_range_start_byte = compute_range_request_offset(s_resume_target_byte);

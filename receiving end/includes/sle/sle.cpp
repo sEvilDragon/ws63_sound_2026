@@ -261,7 +261,8 @@ void sle::connect_changed_callback(uint16_t conn_id,
             data_clear();
         }
 
-        if (!s_active) return;
+        if (!s_active)
+            return;
 
         set_mtu();
         advertising_init();
@@ -286,7 +287,14 @@ void sle::get_data_callback(uint8_t server_id, uint16_t conn_id, ssaps_req_write
         osal_printk("[SLE] write callback failed: %u\n", status);
         return;
     }
-    if (!s_active) return;
+    static int gdc_cnt = 0;
+    gdc_cnt++;
+    if (gdc_cnt <= 3 || gdc_cnt % 50 == 1) {
+        osal_printk("[SLE] data cb #%d, len=%u, active=%d, proc=%p\r\n", gdc_cnt, req_param ? req_param->length : 0,
+                    s_active, (void *)data_process);
+    }
+    if (!s_active)
+        return;
     if (data_process == nullptr) {
         osal_printk("[SLE] data_process not init\r\n");
         return;

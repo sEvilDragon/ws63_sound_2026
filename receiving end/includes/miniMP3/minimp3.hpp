@@ -70,9 +70,9 @@ private:
     static uint32_t s_avg_bitrate_bps;       // 平均比特率（bps，由解码帧统计）
 
     // 定义解码相关的成员变量
-    // 固定输入窗口，减小以节省内存。12KB ≈ 0.77s 128kbps MP3
+    // 固定20KB输入窗口，使用普通数组，避免动态分配带来的内存碎片和抖动。
     static constexpr size_t k_mp3_buffer_chunk_size = 1024;
-    static constexpr size_t k_mp3_buffer_chunk_count = 12;
+    static constexpr size_t k_mp3_buffer_chunk_count = 20;
     static constexpr size_t mp3_buffer_size = k_mp3_buffer_chunk_size * k_mp3_buffer_chunk_count;
 };
 
