@@ -57,10 +57,13 @@ private:
     // 运动追踪: 比较相邻帧 pad 集合变化 (进入/离开) 判断滑动方向
     // 积分器累积方向证据, 超过阈值发射一步, 自然过滤对称振荡
     static constexpr int SLIDER_INTEGRATOR_MAX = 6 * TTP_SLIDER_SCALE; // 积分器饱和值
-    static constexpr int SLIDER_FIRE_THRESHOLD = 2 * TTP_SLIDER_SCALE; // 发射阈值 = 2 pad 宽度
-    static constexpr int SLIDER_STEP = TTP_SLIDER_SCALE / 7;           // 每步 ≈ 1 音量单位 (×50/700)
-    uint8_t m_slider_prev;       // 上一帧 uint8_t 滑条状态
-    int m_slider_integrator;     // 方向积分器: >0 右, <0 左
+    static constexpr int SLIDER_FIRE_THRESHOLD = 2 * TTP_SLIDER_SCALE; // 发射阈值 = 2 pad 宽度, 降速
+    static constexpr int SLIDER_STEP = TTP_SLIDER_SCALE;               // 每步 = 1 逻辑档位, 降速
+    uint8_t m_slider_prev;                                             // 上一帧 uint8_t 滑条状态
+    int m_slider_integrator;                                           // 方向积分器: >0 右, <0 左
+    int m_slider_last_lock;                                            // 方向锁定: -1=锁定右滑, +1=锁定左滑, 0=未锁定
+                                                                       // 防止边界抖动造成正负交替误触发
+    int m_slider_notouch_cnt;                                          // 连续无触摸帧计数, 用于抬手检测
 
     int m_func_debounce[TTP_FUNC_PADS_COUNT];
     int m_func_hold[TTP_FUNC_PADS_COUNT];

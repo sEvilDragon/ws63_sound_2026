@@ -5,6 +5,7 @@
 #include "spi_task.h"
 #include "ttp_task.h"
 #include "ui_task.h"
+#include "sk9822_task.h"
 
 void app_entry(void)
 {
@@ -32,6 +33,10 @@ void app_entry(void)
 
     taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 4096);
     (void)taskid;
+
+    taskid = osal_kthread_create((osal_kthread_handler)sk9822_task, NULL, "sk9822_task", 4096*2);
+    (void)taskid;
+
     // taskid = osal_kthread_create((osal_kthread_handler)cs43131_task, NULL, "cs43131_task", 4096);
     // (void)taskid;
 
