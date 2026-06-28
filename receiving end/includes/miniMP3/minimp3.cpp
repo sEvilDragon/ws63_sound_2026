@@ -1,17 +1,16 @@
-// WS63 LiteOS: 无 mmap/munmap/stdio，只用回调 API
+﻿// WS63 LiteOS: 无 mmap/munmap/stdio，只用回调 API
 #define MINIMP3_NO_STDIO
-// IO ������18KB������Ƕ��ʽ����ʧ��
-// ϵͳ���ö�Լ 340KB����Ϊ TLS/�׽���/HTTP ͷ����ռ�
+// IO 缓冲区 18KB，防止嵌入式堆分配失败
+// 系统总堆约 340KB，大部分被 TLS/套接字/HTTP 头部所占用
 #define MINIMP3_IO_SIZE (18 * 1024)
 #define MINIMP3_IMPLEMENTATION
 
-// ���ף����Ԥ����δ��ȷ�ų� mmap/munmap
-// ·�����ṩ��׮������������ RISCV musl
-// ����������Ԥ����
-// __linux__������ minimp3_ex.h �е� #if defined(__linux__) ��֧�����롪����ʹ��� MINIMP3_NO_STDIO �Ѷ��塣
-// ��׮�������ᱻʵ�ʵ��ã���Ϊ�ص� IO
-// ·���������ļ�ӳ����룩�� �������������ӽ׶ε� undefined
-// reference��
+// 提供 munmap 桩实现，因为 RISCV musl 预处理器未正确排除 mmap/munmap
+// 路径：编译器提供桩函数，链接到 RISCV musl
+// 背景：由于预处理器
+// __linux__ 导致 minimp3_ex.h 中的 #if defined(__linux__) 分支被编译——尽管 MINIMP3_NO_STDIO 已定义。
+// 这些桩函数不会被实际调用，因为使用回调 IO
+// 但链接器仍需要（移除文件映射代码后）符号，否则链接阶段报 undefined reference：
 extern "C" {
 int munmap(void *addr, unsigned long length)
 {
@@ -23,11 +22,11 @@ int munmap(void *addr, unsigned long length)
 
 #include "minimp3.hpp"
 
-// ���� ��̬Ԥ���� IO ������ ������������������������������������������������������������������������������������
-// mp3dec_ex_open_cb �ڲ��� malloc(MINIMP3_IO_SIZE)������Ƭ������
-// ����ʧ�ܣ�340KB �Ѳ��ź��ʣ 3~10KB ���У���
-// ͨ������ MINIMP3_ALLOC_IO / MINIMP3_FREE_IO �꣬����̬�����滻Ϊ
-// ����ʱ������õľ�̬�����������������˹��ϵ㡣
+// 【静态预分配 IO 缓冲区】替代动态分配，防止堆碎片导致分配失败
+// mp3dec_ex_open_cb 内部调用 malloc(MINIMP3_IO_SIZE)，极易碎片化失败。
+// 堆已满（340KB 已耗尽，剩余 3~10KB 在池中）。
+// 通过重载 MINIMP3_ALLOC_IO / MINIMP3_FREE_IO 宏，将动态堆分配替换为
+// 运行时单次使用的静态缓冲区，消除了这个故障点。
 static uint8_t g_mp3_io_buf[MINIMP3_IO_SIZE];
 static bool g_mp3_io_buf_in_use = false;
 
@@ -78,10 +77,10 @@ static constexpr uint32_t k_tls_initial_read_timeout_ms = 10;
 static constexpr uint32_t k_tls_handshake_timeout_ms = 4000;
 static constexpr uint32_t k_http_header_timeout_ms = 5000;
 static constexpr size_t k_tls_entropy_min_hardclock = 4;
-static constexpr uint64_t k_range_preroll_bytes = 8ULL * 1024ULL; // MP3 bit reservoir < 512B, 8KB �㹻
+static constexpr uint64_t k_range_preroll_bytes = 8ULL * 1024ULL; // MP3 bit reservoir < 512B, 8KB 足够
 static constexpr uint32_t k_range_recovery_read_timeout_ms = 400;
-// ������� drain ���ֽ�������������ֵ����˵� Range ������������������·��
-// ��ʱ�䶪�����ݡ�
+// 单次 drain 的最大字节数，超过该值则说明 Range 请求不可靠（丢数据），
+// 需要重连而非长时间丢弃数据。
 static constexpr uint64_t k_max_drain_bytes = 64ULL * 1024ULL;
 
 uint64_t compute_range_request_offset(uint64_t target_byte)
@@ -125,7 +124,7 @@ bool seed_tls_random(stream_transport &transport)
     int ret = mbedtls_entropy_add_source(&transport.tls_entropy, tls_entropy_source_callback, nullptr,
                                          k_tls_entropy_min_hardclock, MBEDTLS_ENTROPY_SOURCE_STRONG);
     if (ret != 0) {
-        osal_printk("HTTPS��Դע��ʧ��: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPS熵源注册失败: ret=-0x%04X\n", -ret);
         return false;
     }
 
@@ -134,7 +133,7 @@ bool seed_tls_random(stream_transport &transport)
                                 reinterpret_cast<const unsigned char *>(k_tls_personalization),
                                 strlen(k_tls_personalization));
     if (ret != 0) {
-        osal_printk("HTTPS�������ʼ��ʧ��: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPS随机数初始化失败: ret=-0x%04X\n", -ret);
         return false;
     }
 
@@ -277,7 +276,7 @@ bool open_plain_stream_transport(stream_transport &transport, const stream_url_d
     transport.use_tls = false;
     transport.plain_sock = lwip_socket(AF_INET, SOCK_STREAM, 0);
     if (transport.plain_sock < 0) {
-        osal_printk("����socketʧ��\n");
+        osal_printk("创建socket失败\n");
         return false;
     }
 
@@ -289,12 +288,12 @@ bool open_plain_stream_transport(stream_transport &transport, const stream_url_d
     addr.sin_family = AF_INET;
     addr.sin_port = lwip_htons(url.port);
     if (!resolve_ipv4_addr(url.host.data(), &addr.sin_addr)) {
-        osal_printk("�޷�����������ַ: %s\n", url.host.data());
+        osal_printk("无法解析服务器地址: %s\n", url.host.data());
         return false;
     }
 
     if (lwip_connect(transport.plain_sock, (sockaddr *)&addr, sizeof(addr)) < 0) {
-        osal_printk("���ӷ�����ʧ��: %s\n", url.host.data());
+        osal_printk("连接服务器失败: %s\n", url.host.data());
         return false;
     }
 
@@ -318,7 +317,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
     int ret = mbedtls_ssl_config_defaults(&transport.tls_conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
                                           MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret != 0) {
-        osal_printk("HTTPS����ʧ��: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPS配置失败: ret=-0x%04X\n", -ret);
         return false;
     }
 
@@ -330,13 +329,13 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
 
     ret = mbedtls_ssl_setup(&transport.tls_ssl, &transport.tls_conf);
     if (ret != 0) {
-        osal_printk("HTTPS SSL setupʧ��: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPS SSL setup失败: ret=-0x%04X\n", -ret);
         return false;
     }
 
     ret = mbedtls_ssl_set_hostname(&transport.tls_ssl, url.host.data());
     if (ret != 0) {
-        osal_printk("HTTPS����SNIʧ��: host=%s ret=-0x%04X\n", url.host.data(), -ret);
+        osal_printk("HTTPS设置SNI失败: host=%s ret=-0x%04X\n", url.host.data(), -ret);
         return false;
     }
 
@@ -344,7 +343,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
     snprintf(port_text.data(), port_text.size(), "%u", static_cast<unsigned int>(url.port));
     ret = mbedtls_net_connect(&transport.tls_net, url.host.data(), port_text.data(), MBEDTLS_NET_PROTO_TCP);
     if (ret != 0) {
-        osal_printk("HTTPS���ӷ�����ʧ��: host=%s ret=-0x%04X\n", url.host.data(), -ret);
+        osal_printk("HTTPS连接服务器失败: host=%s ret=-0x%04X\n", url.host.data(), -ret);
         return false;
     }
 
@@ -356,7 +355,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
     do {
         ret = mbedtls_ssl_handshake(&transport.tls_ssl);
         if (ret == 0) {
-            osal_printk("HTTPS���ֳɹ�: host=%s\n", url.host.data());
+            osal_printk("HTTPS握手成功: host=%s\n", url.host.data());
             return true;
         }
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret != MBEDTLS_ERR_SSL_TIMEOUT) {
@@ -364,7 +363,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
         }
     } while (stream_elapsed_ms(handshake_start_ms) < k_tls_handshake_timeout_ms);
 
-    osal_printk("HTTPS����ʧ��: host=%s ret=-0x%04X elapsed=%llu ms\n", url.host.data(), -ret,
+    osal_printk("HTTPS握手失败: host=%s ret=-0x%04X elapsed=%llu ms\n", url.host.data(), -ret,
                 static_cast<unsigned long long>(stream_elapsed_ms(handshake_start_ms)));
     return false;
 }
@@ -420,7 +419,7 @@ int stream_send_all(stream_transport &transport, const uint8_t *data, int len)
             osal_msleep(1);
             continue;
         }
-        osal_printk("HTTPS����ʧ��: ret=-0x%04X\n", -ret);
+        osal_printk("HTTPS发送失败: ret=-0x%04X\n", -ret);
         return -1;
     }
 
@@ -459,7 +458,7 @@ int stream_recv_some(stream_transport &transport, uint8_t *data, int len, bool *
         return -1;
     }
 
-    osal_printk("HTTPS����ʧ��: ret=-0x%04X\n", -ret);
+    osal_printk("HTTPS接收失败: ret=-0x%04X\n", -ret);
     return -1;
 }
 
@@ -482,13 +481,13 @@ bool has_known_non_mp3_signature(const uint8_t *data, int len)
         return true;
     }
 
-    // M3U/HLS �ı��嵥Ҳ�ᱻ�󵱳���Ƶ�壬�������ʶ��
+    // M3U/HLS 文本清单也会被误当成音频流，需要提前识别
     if (len >= 7 && data[0] == '#' && data[1] == 'E' && data[2] == 'X' && data[3] == 'T' && data[4] == 'M' &&
         data[5] == '3' && data[6] == 'U') {
         return true;
     }
 
-    // ADTS AAC ͬ���֣�minimp3 �޷����롣
+    // ADTS AAC 同步字，minimp3 无法解码。
     if (len >= 2 && data[0] == 0xFF && (data[1] & 0xF6) == 0xF0) {
         return true;
     }
@@ -496,27 +495,27 @@ bool has_known_non_mp3_signature(const uint8_t *data, int len)
     return false;
 }
 
-// ������ MPEG ֡�߽綨λ����ͨ��֡ͷ��������֡������֤��������ͬ���֡�
-// ������������Ҳ������ PCM ���壬�ʺ��� Range �ָ���ջ���ų���ʹ�á�
-// ���� true ��ʾ�ҵ���Ч֡�߽磬*first_frame_offset Ϊ��һ��ͬ����ƫ�ơ�
+// 轻量级 MPEG 帧边界定位：通过帧头解析+下一帧校验，不依赖 PCM 解码。
+// 即使数据中包含非 MP3 字节也能可靠跳过，适合在 Range 恢复后排除杂音使用。
+// 返回 true 表示找到有效帧边界，*first_frame_offset 为第一个同步字偏移。
 static bool find_mp3_frame_boundary(const uint8_t *data, int len, int *first_frame_offset)
 {
     if (data == nullptr || len < 8 || first_frame_offset == nullptr) {
         return false;
     }
 
-    // MPEG1 �����ʱ� (idx: 0=44100,1=48000,2=32000,3=reserved)
+    // MPEG1 采样率表 (idx: 0=44100,1=48000,2=32000,3=reserved)
     static constexpr uint16_t k_sample_rates_mpeg1[4] = {44100, 48000, 32000, 0};
-    // MPEG2/2.5 �����ʱ�
+    // MPEG2/2.5 采样率表
     static constexpr uint16_t k_sample_rates_mpeg2[4] = {22050, 24000, 16000, 0};
     static constexpr uint16_t k_sample_rates_mpeg25[4] = {11025, 12000, 8000, 0};
-    // �����ʱ� (idx: 1..14, 0=free/invalid), MPEG1 Layer3
+    // 比特率表 (idx: 1..14, 0=free/invalid), MPEG1 Layer3
     static constexpr uint16_t k_bitrates_mpeg1_l3[16] = {0,   32,  40,  48,  56,  64,  80,  96,
                                                          112, 128, 160, 192, 224, 256, 320, 0};
 
     const int scan_limit = (len < 4096) ? len : 4096;
     for (int off = 0; off < scan_limit - 4; ++off) {
-        // ��� MPEG ͬ����: 0xFFE0 (11��1 + 3bit)
+        // 检查 MPEG 同步字: 0xFFE0 (11个1 + 3bit)
         if (data[off] != 0xFF || (data[off + 1] & 0xE0) != 0xE0) {
             continue;
         }
@@ -529,11 +528,11 @@ static bool find_mp3_frame_boundary(const uint8_t *data, int len, int *first_fra
         const uint8_t srx = (b3 >> 2) & 0x03; // Sample rate index
         const uint8_t pad = (b3 >> 1) & 0x01; // Padding bit
 
-        // ������ Layer 3
+        // 仅处理 Layer 3
         if (lyr != 1) {
             continue;
         }
-        // ��Ч�汾/������/������
+        // 无效版本/比特率/采样率
         if (ver == 1 || brx == 0 || brx == 15 || srx == 3) {
             continue;
         }
@@ -555,19 +554,19 @@ static bool find_mp3_frame_boundary(const uint8_t *data, int len, int *first_fra
             continue;
         }
 
-        // ����֡��: MPEG1 Layer3 = 144*bitrate*1000/samplerate + pad
+        // 计算帧长: MPEG1 Layer3 = 144*bitrate*1000/samplerate + pad
         //            MPEG2/2.5 Layer3 = 72*bitrate*1000/samplerate + pad
-        // ע�⣺bitrate ��λ�� kbps����� 1000 ת��Ϊ bps��
+        // 注意：bitrate 单位是 kbps，乘 1000 转换为 bps。
         int frame_size = (ver == 3) ? (144 * (int)bitrate * 1000 / (int)sample_rate + (int)pad)
                                     : (72 * (int)bitrate * 1000 / (int)sample_rate + (int)pad);
         if (frame_size < 16 || frame_size > 2880) {
             continue;
         }
 
-        // ��֤��һ��ͬ����
+        // 验证下一个同步字
         const int next_off = off + frame_size;
         if (next_off + 2 > len) {
-            continue; // ���ݲ�������֤�������ҵ�
+            continue; // 数据不足以验证，但仍可能找到
         }
         if (data[next_off] == 0xFF && (data[next_off + 1] & 0xE0) == 0xE0) {
             *first_frame_offset = off;
@@ -634,7 +633,7 @@ int parse_id3v2_tag_total_size_if_present(const uint8_t *data, int len)
     if (!(data[0] == 'I' && data[1] == 'D' && data[2] == '3')) {
         return 0;
     }
-    // �����ܳ���ID3v2�汾���������и��ʡ�
+    // 检查是否可能是 ID3v2 版本，降低误报概率。
     if (!((data[3] == 2) || (data[3] == 3) || (data[3] == 4))) {
         return 0;
     }
@@ -660,7 +659,7 @@ int parse_http_status_code_from_header(const char *header)
         return -1;
     }
 
-    // ��������Ϊ: HTTP/1.1 200 OK
+    // 首行格式为: HTTP/1.1 200 OK
     const char *p = strchr(header, ' ');
     if (p == nullptr) {
         return -1;
@@ -751,7 +750,7 @@ int find_mp3_sync_offset(const uint8_t *data, int len)
         if (data[i] != 0xFF || (data[i + 1] & 0xE0) != 0xE0) {
             continue;
         }
-        // ���˱���ֵ���������У�layer����Ϊ00��bitrate/samplerate���������Ǳ���ֵ
+        // 过滤保留值：检查连续帧，layer 不能为 00，bitrate/samplerate 不能是保留值
         int layer_bits = (data[i + 1] >> 1) & 0x3;
         int bitrate_idx = (data[i + 2] >> 4) & 0xF;
         int sample_idx = (data[i + 2] >> 2) & 0x3;
@@ -764,29 +763,29 @@ int find_mp3_sync_offset(const uint8_t *data, int len)
 }
 
 // ============================================================
-// HTTP Chunked ���������
-// ״̬������ "size\r\n data\r\n ... 0\r\n\r\n" ��ʽ
-// �ο� RFC 7230 ��4.1����������ʽ����������Ӽ���
+// HTTP Chunked 传输解码器
+// 状态机解析 "size\r\n data\r\n ... 0\r\n\r\n" 格式
+// 参考 RFC 7230 §4.1，只解析基本格式，不支持 chunk-extension
 // ============================================================
 struct chunked_decoder {
-    // ����״̬
+    // 解析状态
     enum class st : uint8_t {
-        rd_size,  // ��ȡ chunk ��С��ʮ�������ַ���
-        skip_ext, // ���� chunk-extension���ֺź�ֱ��\r��
-        rd_lf,    // �ȴ� \n��size �е� CRLF �ĵڶ��ֽڣ�
-        rd_data,  // ��ȡ chunk ������
-        data_cr,  // �ȴ� chunk ���ݺ�� \r
-        data_lf,  // �ȴ� chunk ���ݺ�� \n
-        trailer,  // ��ȡ trailing headers��0-chunk ��
-        done,     // ���� 0-chunk + CRLF ������
-        err       // ��������
+        rd_size,  // 读取 chunk 大小（十六进制字符串）
+        skip_ext, // 跳过 chunk-extension（分号后直接到 \r）
+        rd_lf,    // 等待 \n（size 行 CRLF 的第二字节）
+        rd_data,  // 读取 chunk 数据体
+        data_cr,  // 等待 chunk 数据后的 \r
+        data_lf,  // 等待 chunk 数据后的 \n
+        trailer,  // 读取 trailing headers（0-chunk 后）
+        done,     // 收到 0-chunk + CRLF 结束标记
+        err       // 格式异常
     };
 
     st state = st::rd_size;
     int32_t chunk_remaining = 0;
     std::array<char, 20> hex_buf = {0};
     int hex_len = 0;
-    // trailer ״̬����Ҫ���� \r\n ��β�Ŀ���
+    // trailer 状态需要检测 \r\n 结尾的空行
     bool trailer_prev_cr = false;
 
     void reset()
@@ -807,8 +806,8 @@ struct chunked_decoder {
         return state == st::err;
     }
 
-    // �������ι��ԭʼ�����ֽڣ�����������Ƶ��д�� out[0..out_cap)��
-    // ����д�� out ���ֽ�����>=0����-1 ��ʾ��������ͨ�� is_done �������� 0-chunk��
+    // 逐字节喂入原始数据字节，提取解块后的数据写入 out[0..out_cap)。
+    // 返回写入 out 的字节数 >=0；-1 表示格式错误。通过 is_done 标志检测 0-chunk。
     int feed(const uint8_t *in, int in_len, uint8_t *out, int out_cap, bool &is_done)
     {
         is_done = false;
@@ -837,12 +836,12 @@ struct chunked_decoder {
                         if (hex_len < static_cast<int>(hex_buf.size()) - 1) {
                             hex_buf[hex_len++] = static_cast<char>(b);
                         } else {
-                            osal_printk("chunked: chunk-size �ֶι���\n");
+                            osal_printk("chunked: chunk-size 字段过长\n");
                             state = st::err;
                             return -1;
                         }
                     } else {
-                        osal_printk("chunked: chunk-size ���Ƿ��ַ� 0x%02X\n", b);
+                        osal_printk("chunked: chunk-size 包含非法字符 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
@@ -856,16 +855,16 @@ struct chunked_decoder {
 
                 case st::rd_lf:
                     if (b != '\n') {
-                        osal_printk("chunked: ���� '\\n'���õ� 0x%02X\n", b);
+                        osal_printk("chunked: 期望 '\\n'，得到 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
                     {
-                        // ����ʮ������ chunk ��С������ hex_len==0 ֻ�� rd_size
-                        // �׶α�
-                        // \r ����ʱ��
+                        // 解析十六进制 chunk 大小，除非 hex_len==0 只有 rd_size
+                        // 阶段标记
+                        // \r 时提交
                         if (hex_len == 0) {
-                            osal_printk("chunked: �� chunk-size �ֶ�\n");
+                            osal_printk("chunked: 缺少 chunk-size 字段\n");
                             state = st::err;
                             return -1;
                         }
@@ -875,7 +874,7 @@ struct chunked_decoder {
                         hex_len = 0;
                         chunk_remaining = static_cast<int32_t>(sz);
                         if (chunk_remaining == 0) {
-                            // ���� 0-chunk������ trailer ���ѽ׶�
+                            // 收到 0-chunk，进入 trailer 尾阶段
                             state = st::trailer;
                             trailer_prev_cr = false;
                         } else {
@@ -895,7 +894,7 @@ struct chunked_decoder {
 
                 case st::data_cr:
                     if (b != '\r') {
-                        osal_printk("chunked: chunk β������ '\\r'���õ� 0x%02X\n", b);
+                        osal_printk("chunked: chunk 尾部期望 '\\r'，得到 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
@@ -904,21 +903,21 @@ struct chunked_decoder {
 
                 case st::data_lf:
                     if (b != '\n') {
-                        osal_printk("chunked: chunk β������ '\\n'���õ� 0x%02X\n", b);
+                        osal_printk("chunked: chunk 尾部期望 '\\n'，得到 0x%02X\n", b);
                         state = st::err;
                         return -1;
                     }
-                    // ׼����ȡ��һ�� chunk
+                    // 准备读取下一个 chunk
                     state = st::rd_size;
                     break;
 
                 case st::trailer:
-                    // ���� trailer headers���ȴ����� (\r\n) ��ʾ����
+                    // 读取 trailer headers，等待空行 (\r\n) 表示结束
                     if (b == '\r') {
                         trailer_prev_cr = true;
                     } else if (b == '\n' && trailer_prev_cr) {
-                        // ���� \r\n�����ǿ��У��򻯣���һ�� \r\n
-                        // ����ֹ��
+                        // 收到 \r\n，若是空行则完成，下一个 \r\n
+                        // 则终止
                         state = st::done;
                         is_done = true;
                         trailer_prev_cr = false;
@@ -938,24 +937,24 @@ struct chunked_decoder {
     }
 };
 
-// ������ minimp3_ex IO callbacks ������������������������������������������������������������������������������
+// ========= minimp3_ex IO callbacks 共享上下文 ============
 // Context shared between read and seek callbacks.
 struct stream_ex_io_ctx {
     stream_transport transport = {};
     stream_url_desc url = {};
     bool connected = false;
-    uint64_t stream_pos = 0;       // ��ǰ HTTP ���Ѷ�ȡ�����ļ��ֽ�ƫ��
-    uint64_t mp3_start_offset = 0; // �ļ��е�һ�� MP3 ֡��ƫ�ƣ�= dec->start_offset��
-    uint64_t content_length = 0;   // HTTP Content-Length��0=δ֪/chunked��
-    uint64_t seek_on_open = 0;     // ��0ʱ���´� open �� seek(0) ���� Range ����λ�����ֽ�
+    uint64_t stream_pos = 0;       // 当前 HTTP 流已读取的文件字节偏移
+    uint64_t mp3_start_offset = 0; // 文件中第一个 MP3 帧的偏移（= dec->start_offset）
+    uint64_t content_length = 0;   // HTTP Content-Length，0=未知/chunked
+    uint64_t seek_on_open = 0;     // 非 0 时，下次 open 时 seek(0) 将 Range 跳转到该字节
     bool seek_on_open_active = false;
-    // Range �ض����mp3dec_ex_open_cb ���ٴ� seek(dec->start_offset)��
-    // start_offset ������� Range ��ʼλ�õ�ƫ�ƣ�seek_base ��¼ Range ��ʼ
-    // �����ֽ�λ�ã����ڽ��ڶ��� seek �����ƫ��ת��Ϊ����λ�á�
+    // Range 重定向后，mp3dec_ex_open_cb 会再次 seek(dec->start_offset)。
+    // start_offset 是相对于 Range 起始位置的偏移，seek_base 记录 Range 起始
+    // 绝对字节位置，用于将第二次 seek 的偏移转换为绝对位置。
     uint64_t seek_base = 0;
 };
 
-// �� HTTP ��Ӧͷ����ȡ Content-Length������ 0 ��ʾδ�ҵ������ʧ�ܡ�
+// 从 HTTP 响应头中提取 Content-Length，返回 0 表示未找到或解析失败。
 static uint64_t parse_content_length_from_header(const char *header)
 {
     if (header == nullptr) {
@@ -963,14 +962,14 @@ static uint64_t parse_content_length_from_header(const char *header)
     }
     const char *p = header;
     while (*p) {
-        // ����һ�п�ͷ
+        // 跳过一行开头
         while (*p == '\r' || *p == '\n')
             ++p;
         if (*p == '\0')
             break;
-        // �����ִ�Сд�Ƚ� "content-length:"
+        // 不区分大小写比较 "content-length:"
         if (!starts_with_ascii_ignore_case_local(p, "content-length:")) {
-            // ������һ��
+            // 跳到下一行
             const char *eol = strchr(p, '\r');
             if (eol == nullptr)
                 eol = strchr(p, '\n');
@@ -980,7 +979,7 @@ static uint64_t parse_content_length_from_header(const char *header)
             continue;
         }
         p += 14; // strlen("content-length")
-        // ���� ':' �Ϳո�
+        // 跳过 ':' 和空格
         while (*p == ':' || *p == ' ' || *p == '\t')
             ++p;
         if (*p < '0' || *p > '9')
@@ -995,8 +994,8 @@ static uint64_t parse_content_length_from_header(const char *header)
     return 0;
 }
 
-// �� HTTP ��Ӧͷ����ȡ Content-Range ���������ȣ�bytes X-Y/Z �е� Z����
-// ���� 0 ��ʾδ�ҵ������ʧ�ܡ�
+// 从 HTTP 响应头中提取 Content-Range 的总长度（bytes X-Y/Z 中的 Z）。
+// 返回 0 表示未找到或解析失败。
 static uint64_t parse_content_range_total(const char *header)
 {
     if (header == nullptr) {
@@ -1020,13 +1019,13 @@ static uint64_t parse_content_range_total(const char *header)
         p += 13; // strlen("content-range")
         while (*p == ':' || *p == ' ' || *p == '\t')
             ++p;
-        // ������ʽ: bytes X-Y/Z �� bytes */Z
+        // 预期格式: bytes X-Y/Z 或 bytes */Z
         if (!starts_with_ascii_ignore_case_local(p, "bytes"))
             return 0;
         p += 5; // strlen("bytes")
         while (*p == ' ')
             ++p;
-        // ���� X-Y �� *
+        // 跳过 X-Y 或 *
         while (*p >= '0' && *p <= '9')
             ++p;
         if (*p == '-') {
@@ -1038,7 +1037,7 @@ static uint64_t parse_content_range_total(const char *header)
         }
         if (*p != '/')
             return 0;
-        ++p; // ���� '/'
+        ++p; // 跳过 '/'
         while (*p == ' ')
             ++p;
         if (*p < '0' || *p > '9')
@@ -1088,24 +1087,24 @@ static size_t stream_ex_read_cb(void *buf, size_t size, void *user_data)
             osal_msleep(10);
             continue;
         }
-        // ret <= 0, not retry-later, not timeout �� hard error or remote close
+        // ret <= 0, not retry-later, not timeout => hard error or remote close
         break;
     }
     return total;
 }
 
-// Seek callback: �����ſ��ֽ�ǰ�ƣ����� TCP ��������������Ҫ���ˡ����� drain ��ֵ
-// ��δ����ʱ������ HTTP��
+// Seek callback: 支持向前跳跃字节偏移，避免 TCP 全局重连。超过 drain 阈值
+// 或未连接时，重建 HTTP 连接。
 static int stream_ex_seek_cb(uint64_t position, void *user_data)
 {
     auto *ctx = static_cast<stream_ex_io_ctx *>(user_data);
 
-    // ���� ���� seek_on_open���� minimp3_ex_open_cb ���� seek(0) ʱ��
-    // ��� seek_on_open_active Ϊ�棬���� Range ����ֱ������Ŀ��λ�ã�
-    // ������ GET �� drain ���˷ѡ�ͬʱ��¼ seek_base ���ں����ڶ��� seek�� ����
+    // 处理 seek_on_open：mp3dec_ex_open_cb 调用 seek(0) 时，
+    // 若 seek_on_open_active 为真，则用 Range 请求直接跳转目标位置，
+    // 避免 GET 再 drain 的浪费。同时记录 seek_base 用于后续第二次 seek。
     if (ctx->seek_on_open_active && position == 0) {
         ctx->seek_on_open_active = false;
-        ctx->seek_base = ctx->seek_on_open; // ��¼ Range ��ʼ����λ�ã����ڶ��� seek ƫ��ת��
+        ctx->seek_base = ctx->seek_on_open; // 记录 Range 起始绝对位置，用于二次 seek 偏移转换
         position = ctx->seek_on_open;
         ctx->seek_on_open = 0;
         if (position > 0) {
@@ -1115,33 +1114,33 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
         }
     }
 
-    // ���� ���� post-Range �ڶ��� seek ����
-    // mp3dec_ex_open_cb �� Range �ض���+ɨ��󣬻��� start_offset �ٴ� seek��
-    // start_offset ������� Range ��ʼλ�õ�ƫ�ƣ�ͨ�� 0 �� ID3 ��ǩ��С����
-    // ������� seek_base ת��Ϊ�����ļ�ƫ�ƣ��������˵��ļ�ͷ���� GET��
-    // ʹ�� position < seek_base ��Ϊ�ж�������start_offset ����ԶС�� seek_base��
-    // �� mp3dec_iterate_cb �ڲ��� ID3 seek �ᱻ��ȷת��Ϊ����λ���Ҳ����� seek_base��
+    // 处理 post-Range 第二次 seek：
+    // mp3dec_ex_open_cb 在 Range 重定向+扫描后，会用 start_offset 再次 seek。
+    // start_offset 是相对于 Range 起始位置的偏移（通常 0 或 ID3 标签大小），
+    // 借助 seek_base 转换为绝对文件偏移，避免错误跳到文件头部 GET。
+    // 使用 position < seek_base 作为判断：start_offset 永远远小于 seek_base。
+    // 而 mp3dec_iterate_cb 内部的 ID3 seek 会被正确转换为绝对位置而不触发 seek_base。
     if (ctx->seek_base > 0 && position < ctx->seek_base) {
         osal_printk("ex-seek: post-Range seek adjust: %llu + base %llu = %llu\n",
                     static_cast<unsigned long long>(position), static_cast<unsigned long long>(ctx->seek_base),
                     static_cast<unsigned long long>(position + ctx->seek_base));
         position += ctx->seek_base;
-        ctx->seek_base = 0; // ���ѣ����Ե�һ�� post-Range seek ��Ч
+        ctx->seek_base = 0; // 单次有效，仅对第一次 post-Range seek 生效
     }
 
-    // ���� ����·������������Ŀ��λ�� >= ��ǰλ�� �� �ſ��ֽڼ��� ����
+    // 快速路径：连接正常且目标位置 >= 当前位置，且跳跃字节数较少时
     if (ctx->connected && position >= ctx->stream_pos) {
         uint64_t to_skip = position - ctx->stream_pos;
         if (to_skip == 0) {
-            return 0; // ����Ŀ��λ��
+            return 0; // 已在目标位置
         }
-        // ������ֵ��������·����Range ������ɿ���
+        // 超过阈值说明距离太远，Range 请求更可靠
         if (to_skip > k_max_drain_bytes) {
             osal_printk("ex-seek: drain %llu exceeds limit %llu, reconnecting\n",
                         static_cast<unsigned long long>(to_skip), static_cast<unsigned long long>(k_max_drain_bytes));
             goto do_reconnect;
         }
-        // �ſ� to_skip �ֽڣ�С���ȡ������
+        // 消费 to_skip 字节（小量读取并丢弃）
         uint8_t drain_buf[256];
         const uint64_t drain_start = stream_now_ms();
         static constexpr uint32_t k_drain_timeout_ms = 5000;
@@ -1149,23 +1148,23 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
             size_t chunk = (to_skip > sizeof(drain_buf)) ? sizeof(drain_buf) : static_cast<size_t>(to_skip);
             size_t got = stream_ex_read_cb(drain_buf, chunk, user_data);
             if (got == 0) {
-                // ���ӶϿ������˵�����·��
+                // 连接断开则走重连路径
                 osal_printk("ex-seek: drain lost connection at %llu, reconnecting\n",
                             static_cast<unsigned long long>(ctx->stream_pos));
                 goto do_reconnect;
             }
             to_skip -= got;
-            // stream_ex_read_cb �Ѹ��� ctx->stream_pos
+            // stream_ex_read_cb 已更新 ctx->stream_pos
             if (stream_elapsed_ms(drain_start) > k_drain_timeout_ms) {
                 osal_printk("ex-seek: drain timeout, reconnecting\n");
                 goto do_reconnect;
             }
         }
-        return 0; // �ſ����
+        return 0; // 消费完成
     }
 
 do_reconnect:
-    // ���� ����·�����Ͽ������ӣ������� HTTP ���� ����
+    // 重连路径：断开旧连接，用 HTTP Range 请求重建
     free_stream_transport(ctx->transport);
     ctx->connected = false;
     ctx->stream_pos = 0;
@@ -1245,16 +1244,16 @@ do_reconnect:
         return -1;
     }
 
-    // ���� Content-Length �� Content-Range������ seek ����ͽ���׷�٣�
+    // 更新 Content-Length 与 Content-Range，供 seek 统计和进度追踪使用
     {
-        // Content-Range ���ȣ�Range ����� 206 ��ӦЯ�������ļ���С(bytes X-Y/Z)
+        // Content-Range 总长度：Range 请求的 206 响应携带完整文件大小(bytes X-Y/Z)
         uint64_t cr_total = parse_content_range_total(header.data());
         if (cr_total > 0) {
             ctx->content_length = cr_total;
             osal_printk("ex-seek: Content-Range total=%llu\n", static_cast<unsigned long long>(cr_total));
         } else if (position == 0) {
-            // ���ڷ� Range ����(��ͷ GET)ʱʹ�� Content-Length��
-            // Range ����� Content-Length ֻ�� range ���С��������Ϊ�ļ��ܳ���
+            // 仅在非 Range 请求(从头 GET)时使用 Content-Length。
+            // Range 请求的 Content-Length 只是 range 块大小，不能作为文件总长度
             uint64_t cl = parse_content_length_from_header(header.data());
             if (cl > 0) {
                 ctx->content_length = cl;
@@ -1273,13 +1272,13 @@ do_reconnect:
     }
 
     ctx->connected = true;
-    ctx->stream_pos = position; // HTTP Range ��Ӧ��� position ��ʼ
+    ctx->stream_pos = position; // HTTP Range 响应从 position 开始
     return 0;
 }
 
 } // namespace
 
-// ��ʼ����̬��Ա����
+// 初始化静态成员变量
 std::array<char, 512> minimp3::current_url = {0};
 bool minimp3::is_playing = false;
 bool minimp3::is_url_ready = false;
@@ -1358,7 +1357,7 @@ void minimp3::http_set_url(const char *url, bool start_playback)
 {
     if (url == nullptr || url[0] == '\0') {
         if (start_playback) {
-            // ����Play����������URL�����½����𲥷ſ��ء�
+            // 仅 Play 且无 URL，则仅启动播放开关。
             if (current_url[0] != '\0') {
                 is_playing = true;
                 if (!is_url_ready) {
@@ -1373,7 +1372,7 @@ void minimp3::http_set_url(const char *url, bool start_playback)
     if (!is_same_url) {
         copy_string_safe(current_url.data(), current_url.size(), url);
         is_url_ready = true;
-        // ��URLʱ��������λ��׷��״̬
+        // 新 URL 时，重置所有位移追踪状态
         is_paused = false;
         s_has_range = false;
         s_range_start_byte = 0;
@@ -1388,7 +1387,7 @@ void minimp3::http_set_url(const char *url, bool start_playback)
             minimp3::bump_stream_epoch();
         }
     } else if (!is_playing && !is_url_ready) {
-        // ͬURL����ͣ/ֹͣ�ָ�ʱ��ȷ��������������
+        // 同 URL 但暂停/停止恢复时，确保允许重新启动
         is_url_ready = true;
     }
 
@@ -1409,7 +1408,7 @@ void minimp3::http_get_url(const char *url)
 
 void minimp3::http_stop()
 {
-    // ����״̬
+    // 重置状态
     is_playing = false;
     is_url_ready = false;
     is_paused = false;
@@ -1422,9 +1421,9 @@ void minimp3::http_stop()
 
 void minimp3::http_clear_url()
 {
-    // ���URL����
+    // 清除 URL 内容
     memset(current_url.data(), 0, current_url.size());
-    // ����״̬
+    // 重置状态
     is_playing = false;
     is_url_ready = false;
     is_paused = false;
@@ -1444,9 +1443,9 @@ void minimp3::pause_playback()
     if (!is_playing) {
         return;
     }
-    // ��¼λ�ã����� Range �ָ�������
-    // ��ͣʱ��ѭ����ر� TCP �����ͷ� LWIP �ڴ棬
-    // ��������������������ݻ�ľ� LWIP ������������ NOTIFY ʧ�ܡ�
+    // 记录位置，用于 Range 恢复播放。
+    // 暂停时，循环会关闭 TCP 连接并释放 LWIP 内存，
+    // 否则累积的缓冲数据撑爆 LWIP 导致 DLNA NOTIFY 的 lwip_send 发送内存失败。
     s_resume_target_byte = s_bytes_streamed;
     s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
     s_has_range = true;
@@ -1470,8 +1469,8 @@ void minimp3::resume_playback()
         return;
     }
     osal_printk("resume_playback: resuming from byte %llu\n", static_cast<unsigned long long>(s_resume_target_byte));
-    // ��ͣʱ TCP �����ѹرա�s_has_range �����ã���ѭ��ͨ�� REOPEN
-    // �� Range ����������IO ������Ϊ��̬Ԥ���䣬����ʧ�ܡ�
+    // 暂停时 TCP 连接已关闭。s_has_range 仍设置，主循环通过 REOPEN
+    // 走 Range 请求恢复。IO 缓冲区为静态预分配，不会失败。
     is_paused = false;
     is_playing = true;
     minimp3::bump_stream_epoch();
@@ -1492,10 +1491,10 @@ void minimp3::seek_to_seconds(uint32_t seconds)
             byte_offset = (uint64_t)seconds * s_content_length / (uint64_t)s_duration_seconds;
         }
     } else if (s_avg_bitrate_bps > 0) {
-        // ����2: ��֡/ƽ�������ʹ��� (CBR׼ȷ, VBR����)
+        // 方案2: 按帧/平均比特率估算 (CBR 准确, VBR 近似)
         byte_offset = (uint64_t)seconds * (s_avg_bitrate_bps / 8U);
     } else {
-        // ����: ���� 128kbps CBR������ s_content_length/s_avg_bitrate ��δ����ʱ������ͷ
+        // 兜底: 假设 128kbps CBR，在 s_content_length/s_avg_bitrate 均未就绪时用于粗跳
         static constexpr uint32_t k_fallback_bitrate_bps = 128000U;
         byte_offset = (uint64_t)seconds * (k_fallback_bitrate_bps / 8U);
         osal_printk("seek_to_seconds: using fallback 128kbps (cl=%llu dur=%u bps=%u)\n",
@@ -1521,7 +1520,7 @@ uint32_t minimp3::get_duration_seconds()
 
 void minimp3::stream_mp3_to_iis()
 {
-    // ���� IO context shared between the read / seek callbacks ��������������������
+    // ===== IO context shared between the read / seek callbacks =====
     static stream_ex_io_ctx io_ctx = {};
 
     mp3dec_io_t io = {};
@@ -1534,7 +1533,7 @@ void minimp3::stream_mp3_to_iis()
     memset(&dec, 0, sizeof(dec));
     bool dec_open = false;
 
-    // ���Լ���������ֹ��ʧ��ʱ�������Ժľ� CPU ����־
+    // 重试计数器，防止失败时无限重试耗光 CPU 和日志
     int open_retry_count = 0;
     static constexpr int k_max_open_retries = 5;
     static constexpr uint32_t k_open_retry_base_ms = 200;
@@ -1549,12 +1548,12 @@ void minimp3::stream_mp3_to_iis()
             osal_printk("[minimp3] exit requested\r\n");
             break;
         }
-        // ���� Wait while paused / stopped ����������������������������������������������������
+        // ===== Wait while paused / stopped =====
         if (!is_playing) {
             if (dec_open && is_paused) {
-                // ��ͣ�������� IIS ���������� data_write
-                // ͬ�̣߳��޾������� �ٿ���λ�ú�رս������� TCP ���ӣ��ͷ�
-                // LWIP �ڴ档 ��������������������ݻ�ľ� LWIP �������� ���� DLNA NOTIFY �� lwip_send ���䲻���ڴ��ʧ�ܡ�
+                // 暂停：清空 IIS 防止缓冲区溢出 data_write
+                // 同线程，无竞争。 记录当前位置后关闭解码器和 TCP 连接，释放
+                // LWIP 内存。 否则累积的缓冲数据撑爆 LWIP 导致 DLNA NOTIFY 的 lwip_send 发送内存失败。
                 iis::data_clear();
                 s_resume_target_byte = s_bytes_streamed;
                 s_range_start_byte = compute_range_request_offset(s_resume_target_byte);
@@ -1565,7 +1564,7 @@ void minimp3::stream_mp3_to_iis()
                 io_ctx.connected = false;
                 io_ctx.stream_pos = 0;
             } else if (dec_open && !is_paused) {
-                // Stopped: ���� IIS���ͷŽ������ʹ�����Դ�Ի��տ����ڴ档
+                // Stopped: 清空 IIS，释放解码器和传输资源以回收可控内存。
                 iis::data_clear();
                 mp3dec_ex_close(&dec);
                 dec_open = false;
@@ -1573,13 +1572,13 @@ void minimp3::stream_mp3_to_iis()
                 io_ctx.connected = false;
                 io_ctx.stream_pos = 0;
             }
-            // ֹͣ״̬ʱ�������Լ��������´β��ſ����³���
+            // 停止状态时，重置重试计数器以便下次播放重新开始
             open_retry_count = 0;
             osal_msleep(100);
             continue;
         }
 
-        // ���� Open / reopen decoder when URL changes ������������������������������
+        // ===== Open / reopen decoder when URL changes =====
         if (is_url_ready || !dec_open) {
             if (dec_open) {
                 mp3dec_ex_close(&dec);
@@ -1588,13 +1587,13 @@ void minimp3::stream_mp3_to_iis()
             free_stream_transport(io_ctx.transport);
             io_ctx.connected = false;
             io_ctx.stream_pos = 0;
-            // �� LWIP / mbedTLS ��ʱ����� TCP PCB ���ڲ���������
-            // �����´� malloc(18KB) ����Ƭ��ʧ�ܡ�
+            // 等 LWIP / mbedTLS 超时释放 TCP PCB 内部资源，
+            // 避免下一次 malloc(18KB) 堆碎片失败。
             if (open_retry_count == 0) {
                 osal_msleep(300);
             }
 
-            // �ڴ�ѹ����飺���������ʧ�ܣ��ȴ�����ʱ����ϵͳ������Դ
+            // 内存压力检查：连续多次打开失败，等待更长时间以回收系统资源
             if (open_retry_count >= k_max_open_retries) {
                 osal_printk("minimp3_ex: too many open failures (%d), stopping playback\n", open_retry_count);
                 is_playing = false;
@@ -1612,16 +1611,16 @@ void minimp3::stream_mp3_to_iis()
                 continue;
             }
 
-            // ���� io_ctx
-            // �п����ӵ�״̬����ֹ��һ�׸�Ĳ���ֵ��Ⱦ�����ӡ�
+            // 重置 io_ctx
+            // 尽可能干净的初始状态，防止上一次残留的参数值污染新连接。
             io_ctx.content_length = 0;
             io_ctx.mp3_start_offset = 0;
             io_ctx.seek_on_open = 0;
             io_ctx.seek_on_open_active = false;
             io_ctx.seek_base = 0;
 
-            // �� pending seek���� seek_to_seconds������ resume����
-            // ���� seek_on_open���� stream_ex_seek_cb �� seek(0) ʱʹ�� Range ����
+            // 处理 pending seek（来自 seek_to_seconds 或 resume）
+            // 通过 seek_on_open，使 stream_ex_seek_cb 在 seek(0) 时使用 Range 请求
             if (s_has_range && s_resume_target_byte > 0) {
                 io_ctx.seek_on_open = s_range_start_byte;
                 io_ctx.seek_on_open_active = true;
@@ -1629,13 +1628,13 @@ void minimp3::stream_mp3_to_iis()
                             static_cast<unsigned long long>(s_range_start_byte));
             }
 
-            // Fast open �C byte-level seeking only, NO sample index (avoids full-file scan)
+            // Fast open – byte-level seeking only, NO sample index (avoids full-file scan)
             int ret = mp3dec_ex_open_cb(&dec, &io, MP3D_DO_NOT_SCAN);
-            io_ctx.seek_on_open_active = false; // ���ѱ�־
+            io_ctx.seek_on_open_active = false; // 清除标志
             if (ret != 0) {
                 osal_printk("minimp3_ex: open_cb failed ret=%d (attempt %d)\n", ret, open_retry_count + 1);
-                // mp3dec_ex_open_cb �ڷ��� IO ���������Կ������������ʧ�ܣ�
-                // ������� mp3dec_ex_close �ͷ��ѷ���Ļ�����/���þ�̬��������־��
+                // mp3dec_ex_open_cb 在返回 IO 错误前内部可能已分配缓冲区，
+                // 需要调用 mp3dec_ex_close 释放已分配的内存/标志静态缓冲区已占用标记。
                 mp3dec_ex_close(&dec);
                 free_stream_transport(io_ctx.transport);
                 io_ctx.connected = false;
@@ -1643,36 +1642,36 @@ void minimp3::stream_mp3_to_iis()
                 open_retry_count++;
                 uint32_t delay = k_open_retry_base_ms * (1U << (open_retry_count > 4 ? 4 : open_retry_count));
                 if (ret == MP3D_E_MEMORY) {
-                    // �ڴ治�㣬�ȸ����� LWIP / TLS �ͷ���Դ
+                    // 内存不足，等更长时间让 LWIP / TLS 释放资源
                     delay += 800;
                     osal_printk("minimp3_ex: memory exhausted, waiting %u ms\n", delay);
                 }
                 osal_msleep(delay);
                 continue;
             }
-            // �򿪳ɹ����������Լ���
+            // 打开成功，重置重试计数
             open_retry_count = 0;
             dec_open = true;
             is_url_ready = false;
-            io_ctx.mp3_start_offset = dec.start_offset; // ��¼�ļ��� MP3 ������ʼƫ��
+            io_ctx.mp3_start_offset = dec.start_offset; // 记录文件中 MP3 音频起始偏移
 
-            // �� open_cb �ѽ�������֡ͷ��ʼ�������ʣ�������֡���룩��ȷ�� seek ʱ byte_offset ����
+            // 从 open_cb 已解码的第一帧头获取初始比特率（精确到帧），确保 seek 时 byte_offset 可用
             if (dec.info.bitrate_kbps > 0 && s_avg_bitrate_bps == 0) {
                 s_avg_bitrate_bps = static_cast<uint32_t>(dec.info.bitrate_kbps) * 1000U;
             }
 
             // Sync Content-Length from HTTP response header (parsed in stream_ex_seek_cb).
-            // Content-Range �������ܴ�С���ȣ��� Range ����� Content-Length ��ɽ��ܡ�
+            // Content-Range 提供完整大小优先，非 Range 请求的 Content-Length 也可接受。
             if (io_ctx.content_length > 0) {
                 s_content_length = io_ctx.content_length;
                 osal_printk("minimp3_ex: Content-Length=%llu\n", static_cast<unsigned long long>(s_content_length));
             }
 
-            // �� pending seek���� seek_to_seconds ��������
-            // Range �����Ѷ�λ��Ԥ��λ�ã��� Range ��ʼ�ֽڿ�ʼ׷��λ�ã�
-            // ������֡�ۼ� frame_bytes ��Ȼ�ƽ�Ŀ��λ�á�
-            // ע�⣺���� s_resume_target_byte �Ƿ�Ϊ 0����������� s_has_range��
-            // ������һ��ѭ�����ظ����� mid-playback seek �� ��ѭ�����١�
+            // 处理 pending seek（来自 seek_to_seconds 等操作）
+            // Range 请求已定位到预读位置，从 Range 起始字节开始追踪位置，
+            // 逐帧累计 frame_bytes 来逐步逼近目标位置。
+            // 注意：无论 s_resume_target_byte 是否为 0，都重置 s_has_range，
+            // 避免下一循环重复触发 mid-playback seek 的重新连接逻辑。
             if (s_has_range) {
                 osal_printk("minimp3_ex: seeked, Range start=%llu target=%llu\n",
                             static_cast<unsigned long long>(s_range_start_byte),
@@ -1682,7 +1681,7 @@ void minimp3::stream_mp3_to_iis()
                 s_resume_target_byte = 0;
                 s_range_start_byte = 0;
             } else {
-                s_bytes_streamed = 0; // ������ 0 ��ʼ����
+                s_bytes_streamed = 0; // 从头开始计数
             }
 
             // Apply detected sampling rate
@@ -1701,15 +1700,15 @@ void minimp3::stream_mp3_to_iis()
             }
         }
 
-        // ���� Pending seek during playback (e.g. DLNA seek / resume) ����
+        // ===== Pending seek during playback (e.g. DLNA seek / resume) =====
         if (s_has_range && dec_open) {
             osal_printk("minimp3_ex: mid-playback seek to byte %llu\n",
                         static_cast<unsigned long long>(s_resume_target_byte));
-            // ������ IIS���������Ƶ��������������λ�ô��ң��� data_write
-            // ͬ�߳��޾�����
+            // 清空 IIS，防止旧数据在切换到新位置时残留；单 data_write
+            // 同线程无竞争。
             iis::data_clear();
-            // ���� seek_on_open �� reopen ʱʹ�� Range ���󣬱����� GET ��
-            // drain��
+            // 通过 seek_on_open 在 reopen 时使用 Range 请求，避免 GET 再
+            // drain。
             io_ctx.seek_on_open = s_range_start_byte;
             io_ctx.seek_on_open_active = true;
             mp3dec_ex_close(&dec);
@@ -1717,19 +1716,19 @@ void minimp3::stream_mp3_to_iis()
             free_stream_transport(io_ctx.transport);
             io_ctx.connected = false;
             io_ctx.stream_pos = 0;
-            is_url_ready = true; // ���� reopen ·��
+            is_url_ready = true; // 触发 reopen 路径
             continue;
         }
 
-        // ���� Read one frame of decoded PCM ��������������������������������������������������
+        // ===== Read one frame of decoded PCM =====
         mp3dec_frame_info_t frame_info;
         memset(&frame_info, 0, sizeof(frame_info));
         mp3d_sample_t *frame_samples = nullptr;
         size_t n = mp3dec_ex_read_frame(&dec, &frame_samples, &frame_info, k_pcm_batch_samples);
 
-        // ���� Update position / bitrate trackers ����������������������������������������
-        // ������ n==0 ���֮ǰ����֡��to_skip��ʱ n=0 �� frame_bytes>0��
-        // �������λ��׷�ٺͱ����ʡ�
+        // ===== Update position / bitrate trackers =====
+        // 即使 n==0（跳过了非音频帧/to_skip），n=0 但 frame_bytes>0。
+        // 始终更新位置追踪和比特率。
         if (frame_info.bitrate_kbps > 0) {
             s_avg_bitrate_bps = static_cast<uint32_t>(frame_info.bitrate_kbps) * 1000U;
         }
@@ -1738,9 +1737,9 @@ void minimp3::stream_mp3_to_iis()
         }
 
         if (n == 0) {
-            // ��֡��������������� bit reservoir ������ encoder delay����
-            // frame_bytes > 0 ��ʾ�������������ݵ�δ���� PCM ������
-            // ����ѭ������ֹͣ���š�
+            // 帧跳（跳过了非音频，可能是 bit reservoir 或 encoder delay），
+            // frame_bytes > 0 表示消耗了流数据但未输出 PCM 采样。
+            // 继续循环，不停止播放。
             if (dec.last_error == 0 && frame_info.frame_bytes > 0) {
                 continue;
             }
@@ -1755,8 +1754,8 @@ void minimp3::stream_mp3_to_iis()
             free_stream_transport(io_ctx.transport);
             io_ctx.connected = false;
             io_ctx.stream_pos = 0;
-            // ��������ֹͣ���ţ������Զ���������������ѭ�������ڴ棩
-            // DLNA ���ƶ˻�ͨ�� SetAVTransportURI+Play ������һ�׸�
+            // 流结束停止播放，不是错误，不自动重试（保持循环和内存）。
+            // DLNA 控制端会通过 SetAVTransportURI+Play 发起下一首歌。
             s_range_start_byte = s_bytes_streamed;
             s_has_range = false;
             s_resume_target_byte = 0;
@@ -1767,17 +1766,17 @@ void minimp3::stream_mp3_to_iis()
             continue;
         }
 
-        // ���� Rate-change detection ������������������������������������������������������������������
+        // ===== Rate-change detection =====
         if (frame_info.hz > 0 && frame_info.hz != dec.info.hz && iis_set_rate_func) {
             const int old_hz = dec.info.hz;
             iis_set_rate_func(frame_info.hz);
             osal_printk("minimp3_ex: rate switch %d -> %d Hz\n", old_hz, frame_info.hz);
         }
 
-        // ���� Push PCM to IIS ������������������������������������������������������������������������������
+        // ===== Push PCM to IIS =====
         if (mp3_get_into_iis_func) {
             if (frame_info.channels == 1) {
-                // Mono �� stereo expansion
+                // Mono → stereo expansion
                 for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
                     pcm_buf[2 * i] = frame_samples[i];
                     pcm_buf[2 * i + 1] = frame_samples[i];
@@ -1788,14 +1787,14 @@ void minimp3::stream_mp3_to_iis()
             }
         }
 
-        // ���� Duration from VBR tag ������������������������������������������������������������������
+        // ===== Duration from VBR tag =====
         if (dec.detected_samples > 0 && dec.info.hz > 0 && s_duration_seconds == 0) {
             s_duration_seconds = static_cast<uint32_t>(dec.detected_samples / dec.info.hz);
         }
         // Content-Length is synced from io_ctx.content_length during REOPEN.
         // dec.end_offset is only the scan window boundary, NOT the file size.
 
-        // ���� Back-pressure from IIS queue ����������������������������������������������������
+        // ===== Back-pressure from IIS queue =====
         if (playback_queue_level_getter_func) {
             int q = playback_queue_level_getter_func();
             if (q >= 34) {

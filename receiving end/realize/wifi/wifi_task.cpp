@@ -2,6 +2,7 @@
 #include "spi_task.h"
 #include "udp.hpp"
 #include "discover_broadcast.hpp"
+#include "nv_recv.hpp"
 
 extern "C" {
 #include "cJSON.h"
@@ -59,6 +60,14 @@ static char provisioned_ssid[64] = "OPPO Find X8 972E";
 static char provisioned_password[64] = "mytc4386";
 static bool has_credentials = true;
 
+// 标志：本次 SoftAP 会话中是否已通过任意方式获得了凭据
+static volatile bool g_cred_updated_this_session = false;
+
+void wifi_notify_cred_updated(void)
+{
+    g_cred_updated_this_session = true;
+}
+
 // 本机 IP（STA 连接后由 dhcp 分配），供外部查询
 static char g_sta_ip[16] = "0.0.0.0";
 static bool g_sta_connected_flag = false;
@@ -76,6 +85,52 @@ const char *wifi_get_current_ip(void)
 bool wifi_is_sta_connected(void)
 {
     return g_sta_connected_flag;
+}
+
+const char *wifi_get_current_ap_name(void)
+{
+    // 从 NV 读取 SoftAP 名称（高频调用，直接读 NV）
+    static softap_config_nv_t ap_cfg;
+    nv_recv_read_ap(&ap_cfg);
+    // 若 NV 为空，返回默认值
+    if (ap_cfg.ap_name[0] == '\0') {
+        return "ws63_softap";
+    }
+    return (const char *)ap_cfg.ap_name;
+}
+
+void wifi_update_sta_credentials(const char *ssid, const char *password)
+{
+    // 支持部分更新：任一参数为 NULL 表示不更新该字段
+    if (ssid == NULL && password == NULL)
+        return;
+
+    if (ssid != NULL) {
+        size_t sl = strlen(ssid);
+        if (sl > 0 && sl < sizeof(provisioned_ssid)) {
+            memcpy(provisioned_ssid, ssid, sl + 1);
+            has_credentials = true;
+        }
+    }
+    if (password != NULL) {
+        size_t pl = strlen(password);
+        if (pl > 0 && pl < sizeof(provisioned_password)) {
+            memcpy(provisioned_password, password, pl + 1);
+            has_credentials = true;
+        }
+    }
+    // 向 NV 写入当前完整凭据
+    nv_recv_write_sta(provisioned_ssid, provisioned_password);
+    g_cred_updated_this_session = true;
+    osal_printk("[WiFi] credentials updated via API: ssid=%s\r\n", provisioned_ssid);
+}
+
+void wifi_update_ap_config(const char *name, const char *password)
+{
+    if (name == NULL || password == NULL)
+        return;
+    nv_recv_write_ap(name, password);
+    osal_printk("[WiFi] AP config updated via API: %s\r\n", name);
 }
 
 static void update_sta_ip(void)
@@ -177,6 +232,18 @@ void *wifi_task(void *arg)
                 continue;
             }
             softap_active = true;
+            g_cred_updated_this_session = false; // 新 SoftAP 会话，重置标志
+
+            // 启动 HTTP 服务器，供小程序握手 + 配置 WiFi（与 UDP 共存作为备用）
+            if (!http_ctrl_running) {
+                http_control_reset_stop();
+                http_ctrl_handle =
+                    osal_kthread_create((osal_kthread_handler)http_control_task, NULL, "http_ctrl", 4096);
+                if (http_ctrl_handle) {
+                    http_ctrl_running = true;
+                    osal_printk("[WiFi] HTTP started for SoftAP mode\r\n");
+                }
+            }
 
             char bind_ip[16];
             snprintf(bind_ip, sizeof(bind_ip), "%u.%u.%u.%u", ap_config.ip[0], ap_config.ip[1], ap_config.ip[2],
@@ -192,10 +259,18 @@ void *wifi_task(void *arg)
                     continue;
                 }
 
-                osal_printk("[WiFi] SoftAP ready, listening on %s:20261\r\n", bind_ip);
+                osal_printk("[WiFi] SoftAP ready, HTTP:8080 + UDP:20261\r\n");
 
                 bool got_cred = false;
                 while (want_hotspot && !got_cred) {
+                    // 检查是否已通过 HTTP 在本会话中配置了凭据
+                    if (g_cred_updated_this_session) {
+                        osal_printk("[WiFi] credentials set via HTTP, waiting for hotspot off...\r\n");
+                        osal_msleep(500);
+                        want_hotspot = (spi_get_hotspot(get_spi_settings()->hotspot_network) == SPI_HOTSPOT_ON);
+                        continue;
+                    }
+
                     uint8_t buf[512] = {0};
                     int32_t len = udp_server.receive_udp(buf, sizeof(buf));
                     want_hotspot = (spi_get_hotspot(get_spi_settings()->hotspot_network) == SPI_HOTSPOT_ON);
@@ -220,6 +295,8 @@ void *wifi_task(void *arg)
                             memcpy(provisioned_password, pwd_item->valuestring, pl + 1);
                             has_credentials = true;
                             got_cred = true;
+                            nv_recv_write_sta(provisioned_ssid, provisioned_password);
+                            g_cred_updated_this_session = true;
                             osal_printk("[WiFi] provisioned: SSID=%s\r\n", provisioned_ssid);
                         }
                     }

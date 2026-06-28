@@ -1,6 +1,7 @@
 #include "http_control.hpp"
 #include "spi_task.h"
 #include "wifi_task.hpp"
+#include "nv_recv.hpp"
 
 extern "C" {
 #include "lwip/sockets.h"
@@ -8,6 +9,7 @@ extern "C" {
 #include "lwip/netifapi.h"
 #include "lwip/inet.h"
 #include "cJSON.h"
+#include "securec.h"
 }
 
 #include <cstdio>
@@ -18,7 +20,7 @@ extern "C" {
 static constexpr uint16_t k_http_port = 8080;
 static constexpr int k_max_backlog = 4;
 static constexpr size_t k_recv_buf_size = 1024;
-static constexpr size_t k_resp_body_size = 320;
+static constexpr size_t k_resp_body_size = 512;
 static constexpr int k_client_timeout_sec = 3;
 
 // 停止标志（由 wifi_task 通过 http_control_request_stop() 设置）
@@ -215,7 +217,8 @@ static void handle_status(int sock)
     const spi_settings_t *s = get_spi_settings();
 
     const char *ip = wifi_get_current_ip();
-    const char *ssid = wifi_get_current_ssid();
+    const char *sta_ssid = wifi_get_current_ssid();
+    const char *ap_ssid = wifi_get_current_ap_name();
 
     uint8_t hotspot = spi_get_hotspot(s->hotspot_network);
     uint8_t network = spi_get_network(s->hotspot_network);
@@ -225,10 +228,10 @@ static void handle_status(int sock)
              "{\"mode\":%u,\"mode_name\":\"%s\","
              "\"volume\":%u,\"bass\":%u,\"brightness\":%u,"
              "\"hotspot\":\"%s\",\"network\":\"%s\","
-             "\"wifi_ssid\":\"%s\",\"device_ip\":\"%s\"}",
+             "\"wifi_ssid\":\"%s\",\"softap_ssid\":\"%s\",\"device_ip\":\"%s\"}",
              s->mode, mode_name_str(s->mode), s->volume, s->bass, s->brightness,
              (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF", (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
-             ssid, ip);
+             sta_ssid, ap_ssid, ip);
     send_json(sock, 200, 0, "ok", body);
 }
 
@@ -338,6 +341,111 @@ static void handle_cors(int sock)
     lwip_send(sock, resp, strlen(resp), 0);
 }
 
+// ======================== WiFi 配置接口 ========================
+
+// GET /api/v1/wifi — 返回 STA + SoftAP 配置（密码脱敏）
+static void handle_get_wifi(int sock)
+{
+    wifi_sta_config_nv_t sta_cfg;
+    softap_config_nv_t ap_cfg;
+    nv_recv_read_sta(&sta_cfg);
+    nv_recv_read_ap(&ap_cfg);
+
+    char body[k_resp_body_size];
+    snprintf(body, sizeof(body),
+             "{\"sta\":{\"ssid\":\"%s\",\"has_pwd\":%s},"
+             "\"ap\":{\"ssid\":\"%s\",\"has_pwd\":%s}}",
+             (const char *)sta_cfg.ssid,
+             (sta_cfg.password[0] != '\0') ? "true" : "false",
+             (const char *)ap_cfg.ap_name,
+             (ap_cfg.ap_password[0] != '\0') ? "true" : "false");
+    send_json(sock, 200, 0, "ok", body);
+}
+
+// POST /api/v1/wifi/sta  — 支持部分更新：{ "ssid":"..." } 或 { "password":"..." } 或两者
+static void handle_set_sta(int sock, const char *body)
+{
+    char ssid[WIFI_NV_SSID_MAX_LEN] = {0};
+    char pwd[WIFI_NV_PWD_MAX_LEN] = {0};
+    bool has_ssid = json_get_str(body, "ssid", ssid, sizeof(ssid));
+    bool has_pwd = json_get_str(body, "password", pwd, sizeof(pwd));
+
+    if (!has_ssid && !has_pwd) {
+        send_json(sock, 400, -1, "no field to update (ssid or password required)", nullptr);
+        return;
+    }
+
+    if (has_ssid && (ssid[0] == '\0' || strlen(ssid) > (WIFI_NV_SSID_MAX_LEN - 1))) {
+        send_json(sock, 400, 400, "ssid too long or empty (max 32 chars)", nullptr);
+        return;
+    }
+    if (has_pwd && (pwd[0] == '\0' || strlen(pwd) > (WIFI_NV_PWD_MAX_LEN - 1))) {
+        send_json(sock, 400, 400, "password too long or empty (max 64 chars)", nullptr);
+        return;
+    }
+
+    // 部分更新：从 NV 读出现有值，只覆盖传了的字段，然后写回
+    wifi_sta_config_nv_t cur;
+    nv_recv_read_sta(&cur);
+    if (has_ssid) {
+        (void)strncpy_s((char *)cur.ssid, WIFI_NV_SSID_MAX_LEN, ssid, WIFI_NV_SSID_MAX_LEN - 1);
+    }
+    if (has_pwd) {
+        (void)strncpy_s((char *)cur.password, WIFI_NV_PWD_MAX_LEN, pwd, WIFI_NV_PWD_MAX_LEN - 1);
+    }
+    nv_recv_write_sta((const char *)cur.ssid, (const char *)cur.password);
+
+    // 同步更新内存凭据（供主循环下次连接使用）
+    wifi_update_sta_credentials((const char *)cur.ssid, (const char *)cur.password);
+
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"sta\":{\"ssid\":\"%s\"}}", (const char *)cur.ssid);
+    send_json(sock, 200, 0, "ok, reconnect required", resp);
+}
+
+// POST /api/v1/wifi/ap  — 支持部分更新：{ "ssid":"..." } 或 { "password":"..." } 或两者
+static void handle_set_ap(int sock, const char *body)
+{
+    char name[WIFI_NV_SSID_MAX_LEN] = {0};
+    char pwd[WIFI_NV_PWD_MAX_LEN] = {0};
+    bool has_ssid = json_get_str(body, "ssid", name, sizeof(name));
+    bool has_pwd = json_get_str(body, "password", pwd, sizeof(pwd));
+
+    if (!has_ssid && !has_pwd) {
+        send_json(sock, 400, -1, "no field to update (ssid or password required)", nullptr);
+        return;
+    }
+
+    if (has_ssid && (name[0] == '\0' || strlen(name) > (WIFI_NV_SSID_MAX_LEN - 1))) {
+        send_json(sock, 400, 400, "ssid too long or empty (max 32 chars)", nullptr);
+        return;
+    }
+    // 密码校验：仅当传了 password 字段时才检查 ≥8 位
+    if (has_pwd && strlen(pwd) < 8) {
+        send_json(sock, 400, 400, "password must be at least 8 chars", nullptr);
+        return;
+    }
+    if (has_pwd && strlen(pwd) > (WIFI_NV_PWD_MAX_LEN - 1)) {
+        send_json(sock, 400, 400, "password too long (max 64 chars)", nullptr);
+        return;
+    }
+
+    // 部分更新：从 NV 读出现有值，只覆盖传了的字段，然后写回
+    softap_config_nv_t cur;
+    nv_recv_read_ap(&cur);
+    if (has_ssid) {
+        (void)strncpy_s((char *)cur.ap_name, WIFI_NV_SSID_MAX_LEN, name, WIFI_NV_SSID_MAX_LEN - 1);
+    }
+    if (has_pwd) {
+        (void)strncpy_s((char *)cur.ap_password, WIFI_NV_PWD_MAX_LEN, pwd, WIFI_NV_PWD_MAX_LEN - 1);
+    }
+    nv_recv_write_ap((const char *)cur.ap_name, (const char *)cur.ap_password);
+
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"ap\":{\"ssid\":\"%s\"}}", (const char *)cur.ap_name);
+    send_json(sock, 200, 0, "ok, restart hotspot for new AP", resp);
+}
+
 // ======================== 请求分发 ========================
 static void dispatch(int sock, const char *method, const char *path, const char *body)
 {
@@ -352,6 +460,10 @@ static void dispatch(int sock, const char *method, const char *path, const char 
     if (strcmp(method, "GET") == 0) {
         if (strcmp(path, "/api/v1/status") == 0) {
             handle_status(sock);
+            return;
+        }
+        if (strcmp(path, "/api/v1/wifi") == 0) {
+            handle_get_wifi(sock);
             return;
         }
         send_json(sock, 404, 404, "not found", nullptr);
@@ -382,6 +494,14 @@ static void dispatch(int sock, const char *method, const char *path, const char 
         }
         if (strcmp(path, "/api/v1/network") == 0) {
             handle_network(sock, body);
+            return;
+        }
+        if (strcmp(path, "/api/v1/wifi/sta") == 0) {
+            handle_set_sta(sock, body);
+            return;
+        }
+        if (strcmp(path, "/api/v1/wifi/ap") == 0) {
+            handle_set_ap(sock, body);
             return;
         }
         send_json(sock, 404, 404, "not found", nullptr);

@@ -1,0 +1,4 @@
+set(SOURCES "${SOURCES}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/nv_recv.cpp"
+    PARENT_SCOPE
+)

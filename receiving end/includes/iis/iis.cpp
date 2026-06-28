@@ -170,34 +170,41 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
 
     if (intr == HAL_DMA_INTERRUPT_TFR) {
 
-        uint32_t new_read_idx = (read_idx + 1) % buffer_num; // 计算下一个读取索引
-        if (pending_frames > 0)
-            pending_frames--; // 发送了一帧数据，待处理帧数减1
+        int old_read_idx = read_idx;
+        uint32_t new_read_idx = (read_idx + 1) % buffer_num;
 
-        data_clear_one(read_idx); // 清理刚发送完的缓冲区，DMA下次经过此槽时播平滑保持采样
-        read_idx = new_read_idx;  // 更新读取索引
+        // 先清理刚发送完的缓冲区（只操作 DMA 已完成槽，无竞态）
+        data_clear_one(old_read_idx);
+
+        // 临界区：保护 pending_frames / read_idx 与 data_write 的并发
+        uint32_t irq = osal_irq_lock();
+        if (pending_frames > 0)
+            pending_frames--;
+        read_idx = new_read_idx;
+        osal_irq_restore(irq);
 
         // 每 6000 次回调打印一次（≈2分钟），避免刷屏
         static int cb_count = 0;
-        if (++cb_count % 6000 == 1) {
+        cb_count++;
+        if (cb_count % 6000 == 1) {
+            // 从 write/read 差值实时计算 pending，避免计数器漂移误导
+            int real_pending = (write_idx - (int)read_idx + (int)buffer_num) % (int)buffer_num;
             osal_printk("[IIS] DMA cb #%d, read=%d, write=%d, pending=%d\r\n", cb_count, read_idx, write_idx,
-                        pending_frames);
+                        real_pending);
         }
 
-        // 欠载不再关闭 TX：data_clear_one 已用最后采样值填充空槽，输出为平滑静音。
-        // 关闭 TX 会导致 DMA 继续空转消耗 pending_frames，使其永远无法重新积累到
-        // prebuffer_num，TX 永久失去重开机会。
-        static bool was_underrun = false;
-        static int underrun_cb_last = 0;
+        // 欠载检测：用简单计数闸门，避免 was_underrun 振荡导致刷屏
+        static int underrun_silence = 0;
         if (is_ready && pending_frames <= min_buffer_num) {
-            if (!was_underrun || (cb_count - underrun_cb_last) >= 2750) {
+            if (underrun_silence <= 0) {
                 osal_printk("[IIS] underrun, pending=%d, read=%d (TX stays on)\r\n", pending_frames, read_idx);
-                underrun_cb_last = cb_count;
+                underrun_silence = 3000; // 抑制接下来 3000 次回调 (~1分钟)
             }
-            was_underrun = true;
         } else {
-            was_underrun = false;
+            underrun_silence = 0; // 恢复正常，下次欠载立即报告
         }
+        if (underrun_silence > 0)
+            underrun_silence--;
     }
 }
 

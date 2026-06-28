@@ -20,7 +20,7 @@ void nv_load_settings(void);
 void nv_mark_dirty(void);
 
 /**
- * @brief 若配置已变更且距上次变更超过 30 秒，则写入 NV 持久化。
+ * @brief 若配置已变更且距上次变更超过 5 秒，则写入 NV 持久化。
  *        应在主循环中周期性调用（如每 5ms）。
  */
 void nv_flush_if_idle(void);

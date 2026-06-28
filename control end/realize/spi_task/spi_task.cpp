@@ -9,7 +9,7 @@ extern "C" {
 
 /* 控制端 SPI 配置在 NV 中使用的 Key ID (KEY_ID_REGION5: 0x5000~0x5FFF) */
 #define NV_KEY_SPI_SETTINGS 0x5001 /* 已在 app.json 注册 */
-#define NV_FLUSH_DELAY_MS 30000    /* 30 秒无操作后才真正写入 Flash */
+#define NV_FLUSH_DELAY_MS 5000     /* 5 秒无操作后才写入 Flash */
 
 static spi_settings_t g_settings = {
     SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
@@ -71,14 +71,7 @@ void nv_flush_if_idle(void)
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SPI_Slave] NV write failed: %d\r\n", (int)ret);
     } else {
-        osal_printk("[SPI_Slave] NV write OK (ret=%d), waiting 1s for flash commit...\r\n", (int)ret);
-        /* 等 1 秒确保 Flash 写入完成，再回读验证 */
-        osal_msleep(1000);
-        uint16_t verify_len = 0;
-        spi_settings_t verify = {};
-        errcode_t rret = uapi_nv_read(NV_KEY_SPI_SETTINGS, sizeof(verify), &verify_len, (uint8_t *)&verify);
-        osal_printk("[SPI_Slave] verify after 1s: ret=%d len=%u mode=%u vol=%u bri=%u\r\n", (int)rret,
-                    (unsigned)verify_len, (unsigned)verify.mode, (unsigned)verify.volume, (unsigned)verify.brightness);
+        osal_printk("[SPI_Slave] NV write OK\r\n");
     }
     g_nv_dirty = false;
     osal_printk("[SPI_Slave] settings flushed to NV\r\n");
