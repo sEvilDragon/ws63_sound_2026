@@ -69,6 +69,7 @@ void spi_settings_update_bass(uint8_t bass)
 void *spi_master_task(void *arg)
 {
     (void)arg;
+    osal_printk("[SPI_Master] task entered, constructing spi_master...\r\n");
     static sed_ws63::spi_master spi;
     osal_printk("[SPI_Master] settings task started\r\n");
 
@@ -76,12 +77,37 @@ void *spi_master_task(void *arg)
     uint8_t prev_mode = g_settings.mode;
     uint8_t prev_volume = g_settings.volume;
     uint8_t prev_bass = g_settings.bass;
+    int diag_cnt = 0;
     osal_printk("[SPI_Master] initial: mode=%s vol=%u bass=%u bri=%u\r\n",
                 mode_name(g_settings.mode), (unsigned)g_settings.volume,
                 (unsigned)g_settings.bass, (unsigned)g_settings.brightness);
 
     while (true) {
-        int ret = spi.transfer((const uint8_t *)&g_settings, SPI_SETTINGS_LEN,
+        audio_analyzer::compute();
+        const audio_result_t &audio = audio_analyzer::get_result();
+
+        uint8_t tx_buf[sed_ws63::spi_master::TRANSFER_LEN] = {0};
+        const uint8_t *settings_bytes = (const uint8_t *)&g_settings;
+        for (int i = 0; i < SPI_SETTINGS_LEN; i++) {
+            tx_buf[i] = settings_bytes[i];
+        }
+        tx_buf[SPI_AUDIO_OFFSET + 0] = audio.bands[0];
+        tx_buf[SPI_AUDIO_OFFSET + 1] = audio.bands[1];
+        tx_buf[SPI_AUDIO_OFFSET + 2] = audio.bands[2];
+        tx_buf[SPI_AUDIO_OFFSET + 3] = audio.bands[3];
+        tx_buf[SPI_AUDIO_OFFSET + 4] = audio.bands[4];
+        tx_buf[SPI_AUDIO_OFFSET + 5] = audio.overall;
+        tx_buf[SPI_AUDIO_OFFSET + 6] = audio.beat;
+
+        if (++diag_cnt % 20 == 1) {
+            osal_printk("[SPI_Master] audio: [%u %u %u %u %u] ov=%u bt=%u mode=%s\r\n",
+                        (unsigned)audio.bands[0], (unsigned)audio.bands[1], (unsigned)audio.bands[2],
+                        (unsigned)audio.bands[3], (unsigned)audio.bands[4],
+                        (unsigned)audio.overall, (unsigned)audio.beat,
+                        mode_name(g_settings.mode));
+        }
+
+        int ret = spi.transfer(tx_buf, sed_ws63::spi_master::TRANSFER_LEN,
                                rx_buf, sed_ws63::spi_master::TRANSFER_LEN);
 
         if (ret == 0) {
@@ -121,7 +147,7 @@ void *spi_master_task(void *arg)
             prev_bass = g_settings.bass;
         }
 
-        osal_msleep(500);
+        osal_msleep(50);
     }
     return nullptr;
 }

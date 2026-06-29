@@ -12,10 +12,11 @@ namespace sed_ws63 {
 /**
  * @brief SPI Slave —— 控制端 SPI_BUS_0 作为从机与接收端通讯
  *
- * 参照官方 spi_slave_demo.c:
- *  - 固定传输长度, tx_bytes == rx_bytes
- *  - sste = 0, wait_cycles = 0x10
- *  - 先 slave_read 再 slave_write
+ * DMA 模式 (CONFIG_SPI_SUPPORT_DMA=y):
+ *  - uapi_spi_slave_writeread() → spi_writeread_dma()
+ *  - TX/RX 在同一组 SCK 周期并行完成, 只交换 TRANSFER_LEN 字节
+ *  - 不会有额外的零值发送, 从机 RX FIFO 不会累积溢出
+ *  - 非 DMA 回退: hal_spi_write + hal_spi_read 轮询路径
  */
 class spi_slave {
 public:

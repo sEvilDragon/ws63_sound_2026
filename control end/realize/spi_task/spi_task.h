@@ -2,9 +2,18 @@
 
 #include "spi_settings.h"
 
+#define SPI_AUDIO_OFFSET  6
+
+typedef struct {
+    uint8_t bands[5];
+    uint8_t overall;
+    uint8_t beat;
+} audio_result_t;
+
 void *spi_slave_task(void *arg);
 
 const spi_settings_t *get_spi_settings();
+const audio_result_t *get_audio_result();
 
 /**
  * @brief 上电时从 NV 恢复上次保存的 SPI 配置。

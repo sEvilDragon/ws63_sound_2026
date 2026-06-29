@@ -1,6 +1,9 @@
 #pragma once
 
 #include "spi_settings.h"
+#include "audio_analyzer.hpp"
+
+#define SPI_AUDIO_OFFSET  6
 
 void *spi_master_task(void *arg);
 

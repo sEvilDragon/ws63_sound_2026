@@ -1,4 +1,5 @@
 #include "iis.hpp"
+#include "audio_analyzer.hpp"
 #include <cmath>
 
 volatile int iis::write_idx = 0;
@@ -32,7 +33,7 @@ const uint16_t iis::volume_gain_table[101] = {
 
 iis::iis()
 {
-    osal_msleep(4000); // µÈ´ıÏµÍ³ÎÈ¶¨£¬È·±£DMAºÍI2SÇı¶¯×¼±¸¾ÍĞ÷
+    osal_msleep(4000); // ï¿½È´ï¿½ÏµÍ³ï¿½È¶ï¿½ï¿½ï¿½È·ï¿½ï¿½DMAï¿½ï¿½I2Sï¿½ï¿½ï¿½ï¿½×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     pin_init();
     i2s_dma_init_1();
     i2s_init();
@@ -57,28 +58,26 @@ iis::~iis()
 
 void iis::pin_init()
 {
-    // ÅäÖÃÒı½Å¹¦ÄÜ
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Å¹ï¿½ï¿½ï¿½
     uapi_pin_set_mode(mcsl_pin, PIN_MODE_4);
     uapi_pin_set_mode(sclk_pin, PIN_MODE_4);
     uapi_pin_set_mode(lrclk_pin, PIN_MODE_4);
     uapi_pin_set_mode(dataout_pin, PIN_MODE_4);
 
-    // ÅäÖÃÒı½Å·½Ïò
+    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Å·ï¿½ï¿½ï¿½
     uapi_pin_set_ds(mcsl_pin, PIN_DS_4);
     uapi_pin_set_ds(sclk_pin, PIN_DS_4);
     uapi_pin_set_ds(lrclk_pin, PIN_DS_4);
     uapi_pin_set_ds(dataout_pin, PIN_DS_4);
 
-    // LRCLK/DINÒı½Å¹Ù·½ÒÆÖ²²ã¹Ø±ÕÉÏÏÂÀ­£¬ÕâÀï±£³ÖÒ»ÖÂ
+    // LRCLK/DINï¿½ï¿½ï¿½Å¹Ù·ï¿½ï¿½ï¿½Ö²ï¿½ï¿½Ø±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï±£ï¿½ï¿½Ò»ï¿½ï¿½
     uapi_pin_set_pull(lrclk_pin, PIN_PULL_TYPE_DISABLE);
     uapi_pin_set_pull(dataout_pin, PIN_PULL_TYPE_DISABLE);
 }
 
 void iis::i2s_dma_init_1()
 {
-    // Ê¹ÄÜDMA£¬¸Ã²Ù×÷Ô­ÏÈ·ÅÔÚiisÆô¶¯Ö®Ç°£¬ÕâÀïÍ¬ÑùÑ¡Ôñ·ÖÀë
-    uapi_dma_init();
-    uapi_dma_open();
+    /* uapi_dma_init/open å·²åœ¨ app_entry ä¸­ç»Ÿä¸€è°ƒç”¨, æ­¤å¤„æ— éœ€é‡å¤ */
 }
 
 void iis::i2s_init()
@@ -98,10 +97,10 @@ void iis::i2s_init()
 
     errcode_t ret1 = uapi_i2s_set_config(i2s_num, &i2s_config);
     if (ret1 != ERRCODE_SUCC) {
-        osal_printk("I2SÅäÖÃÉèÖÃÊ§°Ü1£¬´íÎóÂë£º%u\n", ret1);
+        osal_printk("I2Sï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½1ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë£º%u\n", ret1);
     }
 
-    // Ê¹ÄÜI2SÊ±ÖÓ£¨ÏÈ¿ªÊ±ÖÓ£¬ÔÙÅäDMA£©
+    // Ê¹ï¿½ï¿½I2SÊ±ï¿½Ó£ï¿½ï¿½È¿ï¿½Ê±ï¿½Ó£ï¿½ï¿½ï¿½ï¿½ï¿½DMAï¿½ï¿½
     uapi_i2s_set_crg_clock_enable(i2s_num, true);
     osal_msleep(10);
 }
@@ -110,7 +109,7 @@ void iis::set_rate_of_iis(i2s_sample_rate_t rate)
 {
     errcode_t ret = uapi_i2s_set_sample_rate(i2s_num, rate);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("I2S²ÉÑùÂÊÉèÖÃÊ§°Ü£¬´íÎóÂë£º%u\n", ret);
+        osal_printk("I2Sï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë£º%u\n", ret);
     }
 }
 
@@ -125,7 +124,7 @@ void iis::i2s_dma_init_2()
 
     errcode_t ret = uapi_i2s_dma_config(i2s_num, &dma_attr);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("I2S DMAÅäÖÃÉèÖÃÊ§°Ü£¬´íÎóÂë£º%u\n", ret);
+        osal_printk("I2S DMAï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë£º%u\n", ret);
     }
 }
 
@@ -134,12 +133,12 @@ void iis::sem_mutex_init()
     raw_buffers.fill(nullptr);
     dma_buffers.fill(nullptr);
 
-    // º£Ë¼Éæ¼°cache²Ù×÷£¬ĞèÒªÊÖ¶¯¶ÔÆëCache Line
+    // ï¿½ï¿½Ë¼ï¿½æ¼°cacheï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òªï¿½Ö¶ï¿½ï¿½ï¿½ï¿½ï¿½Cache Line
     for (int i = 0; i < buffer_num; i++) {
-        uint32_t buf_size = buffer_size * sizeof(uint16_t) + cache_size; // ¶îÍâ¿Õ¼äÓÃÓÚ¶ÔÆë
+        uint32_t buf_size = buffer_size * sizeof(uint16_t) + cache_size; // ï¿½ï¿½ï¿½ï¿½Õ¼ï¿½ï¿½ï¿½ï¿½Ú¶ï¿½ï¿½ï¿½
         raw_buffers[i] = osal_kmalloc(buf_size, OSAL_GFP_DMA);
 
-        // ·ÖÅäÊ§°ÜÔòÇåÀíÒÑ·ÖÅäµÄ×ÊÔ´²¢·µ»Ø
+        // ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         if (raw_buffers[i] == nullptr) {
             for (int j = 0; j < i; j++) {
                 osal_kfree(raw_buffers[j]);
@@ -149,15 +148,15 @@ void iis::sem_mutex_init()
             return;
         }
 
-        // ÊÖ¶¯¶ÔÆëÄÚ´æµØÖ·µ½Cache Line´óĞ¡
+        // ï¿½Ö¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½ï¿½Ö·ï¿½ï¿½Cache Lineï¿½ï¿½Ğ¡
         uintptr_t addr = (uintptr_t)raw_buffers[i];
-        // ¶ÔÆëµ½ÏÂÒ»¸öcache line±ß½ç
-        // ºóÃæµÄ·´ÂëÊµÏÖÁËÈ¥³ıÁËËùÓĞµÍcache_sizeÎ»µÄµØÖ·£¬´Ó¶øÊµÏÖÁËÏòÏÂ¶ÔÆë£»¼ÓÉÏcache_size - 1ÔòÊµÏÖÁËÏòÉÏ¶ÔÆë
+        // ï¿½ï¿½ï¿½ëµ½ï¿½ï¿½Ò»ï¿½ï¿½cache lineï¿½ß½ï¿½
+        // ï¿½ï¿½ï¿½ï¿½Ä·ï¿½ï¿½ï¿½Êµï¿½ï¿½ï¿½ï¿½È¥ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ğµï¿½cache_sizeÎ»ï¿½Äµï¿½Ö·ï¿½ï¿½ï¿½Ó¶ï¿½Êµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â¶ï¿½ï¿½ë£»ï¿½ï¿½ï¿½ï¿½cache_size - 1ï¿½ï¿½Êµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¶ï¿½ï¿½ï¿½
         uintptr_t aligned_addr = (addr + cache_size - 1) & ~(cache_size - 1);
 
         dma_buffers[i] = (uint16_t *)aligned_addr;
         for (int j = 0; j < buffer_size; j++) {
-            dma_buffers[i][j] = 0; // ³õÊ¼»¯»º³åÇøÊı¾İÎª0
+            dma_buffers[i][j] = 0; // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îª0
         }
     }
     osal_printk("[IIS] DMA buffers allocated: %d x %d samples\r\n", buffer_num, buffer_size);
@@ -173,35 +172,35 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         int old_read_idx = read_idx;
         uint32_t new_read_idx = (read_idx + 1) % buffer_num;
 
-        // ÏÈÇåÀí¸Õ·¢ËÍÍêµÄ»º³åÇø£¨Ö»²Ù×÷ DMA ÒÑÍê³É²Û£¬ÎŞ¾ºÌ¬£©
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ·ï¿½ï¿½ï¿½ï¿½ï¿½Ä»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö»ï¿½ï¿½ï¿½ï¿½ DMA ï¿½ï¿½ï¿½ï¿½É²Û£ï¿½ï¿½Ş¾ï¿½Ì¬ï¿½ï¿½
         data_clear_one(old_read_idx);
 
-        // ÁÙ½çÇø£º±£»¤ pending_frames / read_idx Óë data_write µÄ²¢·¢
+        // ï¿½Ù½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ pending_frames / read_idx ï¿½ï¿½ data_write ï¿½Ä²ï¿½ï¿½ï¿½
         uint32_t irq = osal_irq_lock();
         if (pending_frames > 0)
             pending_frames--;
         read_idx = new_read_idx;
         osal_irq_restore(irq);
 
-        // Ã¿ 6000 ´Î»Øµ÷´òÓ¡Ò»´Î£¨¡Ö2·ÖÖÓ£©£¬±ÜÃâË¢ÆÁ
+        // Ã¿ 6000 ï¿½Î»Øµï¿½ï¿½ï¿½Ó¡Ò»ï¿½Î£ï¿½ï¿½ï¿½2ï¿½ï¿½ï¿½Ó£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ë¢ï¿½ï¿½
         static int cb_count = 0;
         cb_count++;
         if (cb_count % 6000 == 1) {
-            // ´Ó write/read ²îÖµÊµÊ±¼ÆËã pending£¬±ÜÃâ¼ÆÊıÆ÷Æ¯ÒÆÎóµ¼
+            // ï¿½ï¿½ write/read ï¿½ï¿½ÖµÊµÊ±ï¿½ï¿½ï¿½ï¿½ pendingï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ¯ï¿½ï¿½ï¿½ï¿½
             int real_pending = (write_idx - (int)read_idx + (int)buffer_num) % (int)buffer_num;
             osal_printk("[IIS] DMA cb #%d, read=%d, write=%d, pending=%d\r\n", cb_count, read_idx, write_idx,
                         real_pending);
         }
 
-        // Ç·ÔØ¼ì²â£ºÓÃ¼òµ¥¼ÆÊıÕ¢ÃÅ£¬±ÜÃâ was_underrun Õñµ´µ¼ÖÂË¢ÆÁ
+        // Ç·ï¿½Ø¼ï¿½â£ºï¿½Ã¼òµ¥¼ï¿½ï¿½ï¿½Õ¢ï¿½Å£ï¿½ï¿½ï¿½ï¿½ï¿½ was_underrun ï¿½ñµ´µï¿½ï¿½ï¿½Ë¢ï¿½ï¿½
         static int underrun_silence = 0;
         if (is_ready && pending_frames <= min_buffer_num) {
             if (underrun_silence <= 0) {
                 osal_printk("[IIS] underrun, pending=%d, read=%d (TX stays on)\r\n", pending_frames, read_idx);
-                underrun_silence = 3000; // ÒÖÖÆ½ÓÏÂÀ´ 3000 ´Î»Øµ÷ (~1·ÖÖÓ)
+                underrun_silence = 3000; // ï¿½ï¿½ï¿½Æ½ï¿½ï¿½ï¿½ï¿½ï¿½ 3000 ï¿½Î»Øµï¿½ (~1ï¿½ï¿½ï¿½ï¿½)
             }
         } else {
-            underrun_silence = 0; // »Ö¸´Õı³££¬ÏÂ´ÎÇ·ÔØÁ¢¼´±¨¸æ
+            underrun_silence = 0; // ï¿½Ö¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â´ï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         }
         if (underrun_silence > 0)
             underrun_silence--;
@@ -212,9 +211,9 @@ void iis::dma_lli_init()
 {
     dma_channel = uapi_dma_get_lli_channel(0, HAL_DMA_HANDSHAKING_MAX_NUM);
 
-    // È·±£Í¨µÀºÅÓĞĞ§
+    // È·ï¿½ï¿½Í¨ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ğ§
     if (dma_channel >= DMA_CHANNEL_MAX_NUM) {
-        osal_printk("»ñÈ¡LLIÍ¨µÀÊ§°Ü\n");
+        osal_printk("ï¿½ï¿½È¡LLIÍ¨ï¿½ï¿½Ê§ï¿½ï¿½\n");
         return;
     }
 
@@ -238,8 +237,8 @@ void iis::dma_lli_init()
         dma_ch_config.src = (uint32_t)(uintptr_t)dma_buffers[i];
         errcode_t err = uapi_dma_configure_peripheral_transfer_lli(dma_channel, &dma_ch_config, i2s_send_callback);
         if (err != 0) {
-            // SED_LOG : DMA LLIÅäÖÃÊ§°Ü
-            osal_printk("DMA LLIÅäÖÃÊ§°Ü£¬´íÎóÂë: %u\n", err);
+            // SED_LOG : DMA LLIï¿½ï¿½ï¿½ï¿½Ê§ï¿½ï¿½
+            osal_printk("DMA LLIï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: %u\n", err);
         }
     }
 
@@ -247,14 +246,14 @@ void iis::dma_lli_init()
 
     errcode_t start_ret = uapi_dma_enable_lli(dma_channel, i2s_send_callback, (uintptr_t)nullptr);
     if (start_ret != ERRCODE_SUCC) {
-        osal_printk("DMA LLIÆô¶¯Ê§°Ü£¬´íÎóÂë: 0x%x\n", start_ret);
+        osal_printk("DMA LLIï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: 0x%x\n", start_ret);
     }
 
     osal_flush_cache();
 
-    // SED : Çé¿ö
+    // SED : ï¿½ï¿½ï¿½
     hal_sio_set_crg_clock_enable(i2s_num, true);
-    // TX ²»Á¢¼´¼¤»î£¬µÈ´ı data_write »ıÀÛ×ã¹»Ö¡ÊıºóÔÙ¿ªÆô£¬±ÜÃâ»º³åÇø²»×ãÊ±²¥·ÅÔëÉù
+    // TX ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½î£¬ï¿½È´ï¿½ data_write ï¿½ï¿½ï¿½ï¿½ï¿½ã¹»Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½Ù¿ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â»ºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     hal_sio_set_tx_enable(i2s_num, 0);
     osal_printk("[IIS] DMA LLI started, ch=%d, buffers=%d, TX initially off\r\n", dma_channel, buffer_num);
 }
@@ -269,8 +268,9 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 
     if (size % 2 != 0) {
         size--;
-        return;
     }
+
+    audio_analyzer::add_samples(data, size);
 
     reduce_buffer_if_needed(size);
 
@@ -369,20 +369,20 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 void iis::data_clear()
 {
     osal_printk("[IIS] data_clear: pending=%d, read=%d, write=%d\r\n", pending_frames, read_idx, write_idx);
-    // ²»ÔÙ¹Ø±Õ TX£ºDMA LLI Ò»µ©Æô¶¯¼´³ÖĞøÔËĞĞ£¬¹Ø TX Ö»¹ØÊä³öÒı½Å£¬
-    // DMA ÄÚ²¿ÇëÇóÈÔ¼ÌĞøÏûºÄ»º³åÇø£¬µ¼ÖÂ pending_frames ÓÀÔ¶ÎŞ·¨ÖØĞÂ»ıÀÛ£¬
-    // TX ÓÀ¾ÃÊ§È¥ÖØ¿ª»ú»á¡£¸ÄÎª±£³Ö TX ¿ªÆô£¬ÈÃ DMA ²¥·ÅÒÑÇåÁãµÄ¾²ÒôÖ¡¡£
+    // ï¿½ï¿½ï¿½Ù¹Ø±ï¿½ TXï¿½ï¿½DMA LLI Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ğ£ï¿½ï¿½ï¿½ TX Ö»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Å£ï¿½
+    // DMA ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ pending_frames ï¿½ï¿½Ô¶ï¿½Ş·ï¿½ï¿½ï¿½ï¿½Â»ï¿½ï¿½Û£ï¿½
+    // TX ï¿½ï¿½ï¿½ï¿½Ê§È¥ï¿½Ø¿ï¿½ï¿½ï¿½ï¿½á¡£ï¿½ï¿½Îªï¿½ï¿½ï¿½ï¿½ TX ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ DMA ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¾ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½
 
     for (int i = 0; i < buffer_num; i++) {
         memset(dma_buffers[i], 0, buffer_size * sizeof(uint16_t));
-        // DMA Ö±½Ó¶ÁÎïÀíÄÚ´æ£¬±ØĞë writeback ·ñÔò DMA ÈÔ¶Áµ½¾ÉÒôÆµÊı¾İ
+        // DMA Ö±ï¿½Ó¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´æ£¬ï¿½ï¿½ï¿½ï¿½ writeback ï¿½ï¿½ï¿½ï¿½ DMA ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æµï¿½ï¿½ï¿½ï¿½
         osal_dcache_region_clean(dma_buffers[i], buffer_size * sizeof(uint16_t));
     }
-    // ²»ÄÜ½« read_idx ¹éÁã£ºDMA LLI Ó²¼ş½Úµã²»»áÒòÈí¼şÖØÖÃ¶ø¹éÁã¡£
-    // ÈôÇ¿ÖÆ read_idx=0 ¶ø DMA Í£ÔÚ½Úµã N£¬ÖØÁ¬ºó DMA ´Ó N Íùºó²¥ÁãÖµ²Û£¬
-    // Ã¿²¥Ò»²Û»Øµ÷µİ¼õ pending_frames£¬ÔÚµ½´ïĞÂÊı¾İÇ°¾Í´¥·¢ TX ¹Ø±Õ ¡ú ÓÀ¾Ã¾²Òô¡£
-    // ÕıÈ·×ö·¨£º±£Áô read_idx ÓëÓ²¼şÍ¬²½£¬write_idx ¶ÔÆëµ½ read_idx£¬
-    // ĞÂÊı¾İ´Ó DMA µ±Ç°Î»ÖÃÆğÌîÈë£¬pending_frames ÓëÊµ¼Ê¿ÉÓÃ²ÛÒ»Ò»¶ÔÓ¦¡£
+    // ï¿½ï¿½ï¿½Ü½ï¿½ read_idx ï¿½ï¿½ï¿½ã£ºDMA LLI Ó²ï¿½ï¿½ï¿½Úµã²»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã¶ï¿½ï¿½ï¿½ï¿½ã¡£
+    // ï¿½ï¿½Ç¿ï¿½ï¿½ read_idx=0 ï¿½ï¿½ DMA Í£ï¿½Ú½Úµï¿½ Nï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ DMA ï¿½ï¿½ N ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½Û£ï¿½
+    // Ã¿ï¿½ï¿½Ò»ï¿½Û»Øµï¿½ï¿½İ¼ï¿½ pending_framesï¿½ï¿½ï¿½Úµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½Í´ï¿½ï¿½ï¿½ TX ï¿½Ø±ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½Ã¾ï¿½ï¿½ï¿½ï¿½ï¿½
+    // ï¿½ï¿½È·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ read_idx ï¿½ï¿½Ó²ï¿½ï¿½Í¬ï¿½ï¿½ï¿½ï¿½write_idx ï¿½ï¿½ï¿½ëµ½ read_idxï¿½ï¿½
+    // ï¿½ï¿½ï¿½ï¿½ï¿½İ´ï¿½ DMA ï¿½ï¿½Ç°Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë£¬pending_frames ï¿½ï¿½Êµï¿½Ê¿ï¿½ï¿½Ã²ï¿½Ò»Ò»ï¿½ï¿½Ó¦ï¿½ï¿½
     uint32_t irq = osal_irq_lock();
     write_idx = read_idx;
     write_offset = 0;
@@ -398,22 +398,22 @@ void iis::data_clear()
 void iis::data_clear_one(int index)
 {
     if (index < 0 || index >= (int)buffer_num) {
-        return; // Ë÷ÒıÔ½½ç£¬Ö±½Ó·µ»Ø
+        return; // ï¿½ï¿½ï¿½ï¿½Ô½ï¿½ç£¬Ö±ï¿½Ó·ï¿½ï¿½ï¿½
     }
-    // Ç·ÔØÊ±ÓÃ×îºó²ÉÑùÖµÌî³ä£¬½Ï´¿¾²Òô¸ü²»Ò×²úÉúÍ»Ø£±¬Òô¡£
+    // Ç·ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½ä£¬ï¿½Ï´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²ï¿½ï¿½ï¿½Í»Ø£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     for (uint32_t i = 0; i + 1 < buffer_size; i += 2) {
         dma_buffers[index][i] = last_left_sample;
         dma_buffers[index][i + 1] = last_right_sample;
     }
-    // DMA Ö±½Ó¶ÁÎïÀíÄÚ´æ£¬memset Ö»Ğ´ CPU cache£¬²» writeback Ôò DMA ¶Áµ½ÎïÀíÄÚ´æÀïµÄ¾ÉÒôÆµ£¬
-    // ²úÉúÃ¿´ÎÍêÈ«ÏàÍ¬µÄÖØ¸´ÔÓÒô¡£
+    // DMA Ö±ï¿½Ó¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´æ£¬memset Ö»Ğ´ CPU cacheï¿½ï¿½ï¿½ï¿½ writeback ï¿½ï¿½ DMA ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½ï¿½ï¿½Ä¾ï¿½ï¿½ï¿½Æµï¿½ï¿½
+    // ï¿½ï¿½ï¿½ï¿½Ã¿ï¿½ï¿½ï¿½ï¿½È«ï¿½ï¿½Í¬ï¿½ï¿½ï¿½Ø¸ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
     osal_dcache_region_clean(dma_buffers[index], buffer_size * sizeof(uint16_t));
 }
 
 void iis::fill_buffer_if_needed()
 {
     if (pending_frames < if_fill_num) {
-        // ÖØ¸´Ò»¶¨Ö¡Êı£¬¿¹ºâ¶¶¶¯
+        // ï¿½Ø¸ï¿½Ò»ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â¶¶ï¿½ï¿½
         static std::array<int16_t, if_small_num * 2> fill_data = {0};
         for (int i = 0; i < if_small_num; i++) {
             fill_data[i * 2] = last_left_sample;
@@ -426,8 +426,8 @@ void iis::fill_buffer_if_needed()
 void iis::reduce_buffer_if_needed(uint32_t &size)
 {
     if (pending_frames > if_reduce_num) {
-        // ´ı´¦ÀíÖ¡¹ı¶àÊ±£¬¶ªÆú²¿·ÖÊı¾İ£¬±ÜÃâ»ıÑ¹¹ı¶àÖ¡µ¼ÖÂ³¤Ê±¼ä¸ßÑÓ³Ù
-        uint32_t drop_size = if_small_num * 2; // Ã¿´Î¶ªÆú if_small_num Ö¡
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İ£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½ï¿½ï¿½Â³ï¿½Ê±ï¿½ï¿½ï¿½ï¿½Ó³ï¿½
+        uint32_t drop_size = if_small_num * 2; // Ã¿ï¿½Î¶ï¿½ï¿½ï¿½ if_small_num Ö¡
         if (size > drop_size) {
             size -= drop_size;
         }

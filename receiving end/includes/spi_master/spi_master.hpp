@@ -12,10 +12,11 @@ namespace sed_ws63 {
 /**
  * @brief SPI Master —— 接收端 SPI_BUS_1 作为主机与控制端通讯
  *
- * 参照官方 spi_master_demo.c:
- *  - 固定传输长度, tx_bytes == rx_bytes
- *  - sste = 0, wait_cycles = 0x10
- *  - 先 master_write 再 master_read
+ * DMA 模式 (CONFIG_SPI_SUPPORT_DMA=y):
+ *  - uapi_spi_master_writeread() → spi_writeread_dma()
+ *  - TX/RX 在同一组 SCK 周期并行完成, 只交换 TRANSFER_LEN 字节
+ *  - 不会多送零值到从机, 从机 RX FIFO 不会累积溢出
+ *  - 非 DMA 回退: hal_spi_write + hal_spi_read 轮询路径
  */
 class spi_master {
 public:

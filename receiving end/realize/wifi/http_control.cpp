@@ -355,9 +355,7 @@ static void handle_get_wifi(int sock)
     snprintf(body, sizeof(body),
              "{\"sta\":{\"ssid\":\"%s\",\"has_pwd\":%s},"
              "\"ap\":{\"ssid\":\"%s\",\"has_pwd\":%s}}",
-             (const char *)sta_cfg.ssid,
-             (sta_cfg.password[0] != '\0') ? "true" : "false",
-             (const char *)ap_cfg.ap_name,
+             (const char *)sta_cfg.ssid, (sta_cfg.password[0] != '\0') ? "true" : "false", (const char *)ap_cfg.ap_name,
              (ap_cfg.ap_password[0] != '\0') ? "true" : "false");
     send_json(sock, 200, 0, "ok", body);
 }

@@ -4,9 +4,11 @@ namespace sed_ws63 {
 
 spi_master::spi_master()
 {
+    osal_printk("[SPI_Master] ctor: pin_init...\r\n");
     pin_init();
+    osal_printk("[SPI_Master] ctor: spi_init...\r\n");
     spi_init();
-    osal_printk("[SPI_Master] SPI_BUS_1 初始化完成\r\n");
+    osal_printk("[SPI_Master] SPI_BUS_1 DMA 初始化完成\r\n");
 }
 
 void spi_master::pin_init()
@@ -40,6 +42,15 @@ void spi_master::spi_init()
     errcode_t ret = uapi_spi_init(BUS, &config, &ext_config);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SPI_Master] 初始化失败, ret=0x%x\r\n", ret);
+        return;
+    }
+
+    /* DMA 模式: 一次 writeread 完成双向传输, TX/RX 在同一组 SCK 周期
+     * 注意: uapi_dma_init/open 已在 app_entry 中统一调用, 此处只需 set_dma_mode */
+    spi_dma_config_t dma_cfg = {.src_width = 0, .dest_width = 0, .burst_length = 0, .priority = 0};
+    ret = uapi_spi_set_dma_mode(BUS, true, &dma_cfg);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[SPI_Master] DMA 模式设置失败, ret=0x%x, 回退到轮询模式\r\n", ret);
     }
 }
 
@@ -61,16 +72,15 @@ int spi_master::transfer(const uint8_t *tx_data, uint32_t tx_len, uint8_t *rx_da
         .rx_bytes = TRANSFER_LEN,
     };
 
-    // 参照官方 demo: 先 master_write 再 master_read
-    errcode_t ret = uapi_spi_master_write(BUS, &data, TIMEOUT);
+    /*
+     * DMA 模式: uapi_spi_master_writeread() 内部走 spi_writeread_dma(),
+     * TX/RX 在同一组 SCK 周期完成, 只发 16B 收 16B, 不会多送零值,
+     * 从机 RX FIFO 不会累积溢出。
+     * 非 DMA 回退: 走 hal_spi_write + hal_spi_read 轮询路径。
+     */
+    errcode_t ret = uapi_spi_master_writeread(BUS, &data, TIMEOUT);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Master] 发送失败, ret=0x%x\r\n", ret);
-        return -1;
-    }
-
-    ret = uapi_spi_master_read(BUS, &data, TIMEOUT);
-    if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Master] 接收失败, ret=0x%x\r\n", ret);
+        osal_printk("[SPI_Master] writeread 失败, ret=0x%x\r\n", ret);
         return -1;
     }
 

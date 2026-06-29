@@ -4,9 +4,11 @@ namespace sed_ws63 {
 
 spi_slave::spi_slave()
 {
+    osal_printk("[SPI_Slave] ctor: pin_init...\r\n");
     pin_init();
+    osal_printk("[SPI_Slave] ctor: spi_init...\r\n");
     spi_init();
-    osal_printk("[SPI_Slave] SPI_BUS_0 初始化完成\r\n");
+    osal_printk("[SPI_Slave] SPI_BUS_0 DMA 初始化完成\r\n");
 }
 
 void spi_slave::pin_init()
@@ -40,6 +42,18 @@ void spi_slave::spi_init()
     errcode_t ret = uapi_spi_init(BUS, &config, &ext_config);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SPI_Slave] 初始化失败, ret=0x%x\r\n", ret);
+        return;
+    }
+
+    /* DMA 模式: 一次 writeread 完成双向传输, TX/RX 在同一组 SCK 周期, 不会产生多余零值
+     * 注意: uapi_dma_init/open 已在 app_entry 中统一调用, 此处只需 set_dma_mode */
+    spi_dma_config_t dma_cfg = {.src_width = 0, // 8-bit, 匹配 HAL_SPI_FRAME_SIZE_8
+                                .dest_width = 0,
+                                .burst_length = 0,
+                                .priority = 0};
+    ret = uapi_spi_set_dma_mode(BUS, true, &dma_cfg);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[SPI_Slave] DMA 模式设置失败, ret=0x%x, 回退到轮询模式\r\n", ret);
     }
 }
 
@@ -61,10 +75,15 @@ int spi_slave::transfer(uint8_t *rx_data, uint32_t rx_len, const uint8_t *tx_dat
         .rx_bytes = TRANSFER_LEN,
     };
 
-    // 参照官方 demo: 先 slave_read 再 slave_write
-    errcode_t ret = uapi_spi_slave_read(BUS, &data, TIMEOUT);
+    /*
+     * DMA 模式: uapi_spi_slave_writeread() 内部走 spi_writeread_dma(),
+     * TX/RX 在同一组 SCK 周期并行完成, 只交换 16B, 无额外的零值发送,
+     * 从根本上消除 RX FIFO 累积溢出问题。
+     * 非 DMA 回退: 走 hal_spi_write + hal_spi_read 轮询路径。
+     */
+    errcode_t ret = uapi_spi_slave_writeread(BUS, &data, TIMEOUT);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Slave] 接收失败, ret=0x%x\r\n", ret);
+        osal_printk("[SPI_Slave] writeread 失败, ret=0x%x\r\n", ret);
         return -1;
     }
 
@@ -73,11 +92,6 @@ int spi_slave::transfer(uint8_t *rx_data, uint32_t rx_len, const uint8_t *tx_dat
         rx_data[i] = rx_buffer[i];
     }
 
-    ret = uapi_spi_slave_write(BUS, &data, TIMEOUT);
-    if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Slave] 发送失败, ret=0x%x\r\n", ret);
-        return -1;
-    }
     return 0;
 }
 

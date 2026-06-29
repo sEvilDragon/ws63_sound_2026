@@ -47,9 +47,7 @@ void sk9822_led::spi_init()
 
 void sk9822_led::spi_dma_init()
 {
-    uapi_dma_init();
-    uapi_dma_open();
-
+    /* 注意: uapi_dma_init/open 已在 app_entry 中统一调用, 此处只需 set_dma_mode */
     spi_dma_config_t dma_cfg = {0};
     dma_cfg.src_width = 0;    // 1 byte
     dma_cfg.dest_width = 0;   // 1 byte

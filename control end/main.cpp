@@ -7,9 +7,16 @@
 #include "ui_task.h"
 #include "sk9822_task.h"
 
+#include "dma.h"
+
 void app_entry(void)
 {
     osal_task *taskid;
+
+    /* DMA 必须只初始化一次, 否则 hal_dma_v151_open() 会重置所有通道状态,
+     * 导致 spi_slave 已分配的通道被强制 CLOSED, 后续被 sk9822 抢占 */
+    uapi_dma_init();
+    uapi_dma_open();
 
 #if defined(CONFIG_MIDDLEWARE_SUPPORT_NV)
     /* uapi_nv_init() 已在系统初始化中调用, 此处只需加载配置。
@@ -22,19 +29,21 @@ void app_entry(void)
 
     osal_kthread_lock();
 
-    // taskid = osal_kthread_create((osal_kthread_handler)spi_slave_task, NULL, "spi_slave_task", 2048);
-    // (void)taskid;
-
-    taskid = osal_kthread_create((osal_kthread_handler)ttp_task, NULL, "ttp_task", 2048);
+    taskid = osal_kthread_create((osal_kthread_handler)spi_slave_task, NULL, "spi_slave_task", 2048);
     (void)taskid;
+
+    // taskid = osal_kthread_create((osal_kthread_handler)ttp_task, NULL, "ttp_task", 2048);
+    // (void)taskid;
 
     taskid = osal_kthread_create((osal_kthread_handler)ui_task, NULL, "ui_task", 2048);
     (void)taskid;
 
-    taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 4096);
+    taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 2048);
     (void)taskid;
 
-    taskid = osal_kthread_create((osal_kthread_handler)sk9822_task, NULL, "sk9822_task", 4096*2);
+    // sk9822 DMA 与 spi_slave DMA 共存问题已修复:
+    // uapi_dma_init/open 统一在 app_entry 入口调用, 避免 hal_dma_v151_open 重置通道状态
+    taskid = osal_kthread_create((osal_kthread_handler)sk9822_task, NULL, "sk9822_task", 4096 * 2);
     (void)taskid;
 
     // taskid = osal_kthread_create((osal_kthread_handler)cs43131_task, NULL, "cs43131_task", 4096);

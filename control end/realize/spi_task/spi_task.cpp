@@ -19,6 +19,13 @@ const spi_settings_t *get_spi_settings()
     return &g_settings;
 }
 
+static audio_result_t g_audio = {};
+
+const audio_result_t *get_audio_result()
+{
+    return &g_audio;
+}
+
 /**
  * @brief 上电时从 NV 恢复上次保存的 SPI 配置。
  *        若 NV 中无数据（首次开机），保持硬编码默认值。
@@ -94,17 +101,38 @@ void *spi_slave_task(void *arg)
     osal_printk("[SPI_Slave] settings task started\r\n");
 
     uint8_t rx_buf[sed_ws63::spi_slave::TRANSFER_LEN];
+    int diag_cnt = 0;
 
     while (true) {
         spi_settings_t response = g_settings;
         response.cmd = SPI_CMD_QUERY;
 
-        spi.transfer(rx_buf, sed_ws63::spi_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
-        (void)rx_buf;
-        // control end is authoritative: ignore master data,
-        // only send our settings back (master reads on QUERY cycle)
+        int ret = spi.transfer(rx_buf, sed_ws63::spi_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
+        if (ret != 0) {
+            osal_msleep(10);
+            continue;
+        }
 
-        osal_msleep(500); // 与 Master 同步周期, 防止 FIFO 堆积
+        audio_result_t tmp;
+        tmp.bands[0] = rx_buf[SPI_AUDIO_OFFSET + 0];
+        tmp.bands[1] = rx_buf[SPI_AUDIO_OFFSET + 1];
+        tmp.bands[2] = rx_buf[SPI_AUDIO_OFFSET + 2];
+        tmp.bands[3] = rx_buf[SPI_AUDIO_OFFSET + 3];
+        tmp.bands[4] = rx_buf[SPI_AUDIO_OFFSET + 4];
+        tmp.overall = rx_buf[SPI_AUDIO_OFFSET + 5];
+        tmp.beat = rx_buf[SPI_AUDIO_OFFSET + 6];
+
+        unsigned long flags = osal_irq_lock();
+        g_audio = tmp;
+        osal_irq_restore(flags);
+
+        if (++diag_cnt % 20 == 1) {
+            osal_printk("[SPI_Slave] recv: [%u %u %u %u %u] ov=%u bt=%u\r\n", (unsigned)tmp.bands[0],
+                        (unsigned)tmp.bands[1], (unsigned)tmp.bands[2], (unsigned)tmp.bands[3], (unsigned)tmp.bands[4],
+                        (unsigned)tmp.overall, (unsigned)tmp.beat);
+        }
+
+        osal_msleep(5);
     }
     return nullptr;
 }
