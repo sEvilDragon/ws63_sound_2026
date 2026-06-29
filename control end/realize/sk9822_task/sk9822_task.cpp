@@ -74,11 +74,10 @@ void *sk9822_task(void *arg)
 
         // 每秒打印一次心跳, 确认任务存活
         if (tick % 33 == 1) {
-            osal_printk("[SK9822_TASK] ALIVE tick=%u ok=%d audio=[%u %u %u %u %u] ov=%u bt=%u\r\n",
-                        (unsigned)tick, update_ok,
-                        (unsigned)audio->bands[0], (unsigned)audio->bands[1], (unsigned)audio->bands[2],
-                        (unsigned)audio->bands[3], (unsigned)audio->bands[4],
-                        (unsigned)audio->overall, (unsigned)audio->beat);
+            osal_printk("[SK9822_TASK] ALIVE tick=%u ok=%d audio=[%u %u %u %u %u] ov=%u bt=%u\r\n", (unsigned)tick,
+                        update_ok, (unsigned)audio->bands[0], (unsigned)audio->bands[1], (unsigned)audio->bands[2],
+                        (unsigned)audio->bands[3], (unsigned)audio->bands[4], (unsigned)audio->overall,
+                        (unsigned)audio->beat);
         }
 
         uint16_t base_hue = (tick * 2) % 360;

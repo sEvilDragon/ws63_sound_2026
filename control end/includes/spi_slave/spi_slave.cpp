@@ -64,9 +64,8 @@ void spi_slave::spi_init()
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SLAVE] *** DMA 模式设置失败! ret=0x%X, 将走轮询路径 ***\r\n", (unsigned)ret);
     } else {
-        osal_printk("[SLAVE] DMA 模式启用成功 (src_w=%u dst_w=%u burst=%u pri=%u)\r\n",
-                    (unsigned)dma_cfg.src_width, (unsigned)dma_cfg.dest_width,
-                    (unsigned)dma_cfg.burst_length, (unsigned)dma_cfg.priority);
+        osal_printk("[SLAVE] DMA 模式启用成功 (src_w=%u dst_w=%u burst=%u pri=%u)\r\n", (unsigned)dma_cfg.src_width,
+                    (unsigned)dma_cfg.dest_width, (unsigned)dma_cfg.burst_length, (unsigned)dma_cfg.priority);
     }
 }
 
@@ -98,8 +97,8 @@ int spi_slave::transfer(uint8_t *rx_data, uint32_t rx_len, const uint8_t *tx_dat
     errcode_t ret = uapi_spi_slave_writeread(BUS, &data, TIMEOUT);
     if (ret != ERRCODE_SUCC) {
         // 详细打印错误码, 帮助定位是 DMA 配置失败 / sem 超时 / FIFO 溢出
-        osal_printk("[SLAVE] writeread FAIL: ret=0x%X (dec=%d) tx_bytes=%u rx_bytes=%u\r\n",
-                    (unsigned)ret, (int)ret, (unsigned)data.tx_bytes, (unsigned)data.rx_bytes);
+        osal_printk("[SLAVE] writeread FAIL: ret=0x%X (dec=%d) tx_bytes=%u rx_bytes=%u\r\n", (unsigned)ret, (int)ret,
+                    (unsigned)data.tx_bytes, (unsigned)data.rx_bytes);
         return -1;
     }
 

@@ -78,8 +78,7 @@ void sk9822_led::spi_send(const uint8_t *data, uint32_t len)
 
     // 前 5 次 + 每 50 次打印一次, 确认持续在工作
     if (send_cnt <= 5 || send_cnt % 50 == 0) {
-        osal_printk("[SK9822] send #%d: DMA en ret=0x%X, tx_bytes=%u\r\n",
-                    send_cnt, (unsigned)dma_ret, (unsigned)len);
+        osal_printk("[SK9822] send #%d: DMA en ret=0x%X, tx_bytes=%u\r\n", send_cnt, (unsigned)dma_ret, (unsigned)len);
     }
 
     errcode_t ret = uapi_spi_master_write(BUS, &xfer, TIMEOUT);
@@ -87,11 +86,11 @@ void sk9822_led::spi_send(const uint8_t *data, uint32_t len)
     errcode_t dma_dis_ret = uapi_spi_set_dma_mode(BUS, false, NULL);
 
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SK9822] *** send #%d FAIL: write ret=0x%X (dma_en=0x%X dma_dis=0x%X) ***\r\n",
-                    send_cnt, (unsigned)ret, (unsigned)dma_ret, (unsigned)dma_dis_ret);
+        osal_printk("[SK9822] *** send #%d FAIL: write ret=0x%X (dma_en=0x%X dma_dis=0x%X) ***\r\n", send_cnt,
+                    (unsigned)ret, (unsigned)dma_ret, (unsigned)dma_dis_ret);
     } else if (send_cnt <= 5 || send_cnt % 50 == 0) {
-        osal_printk("[SK9822] send #%d OK (dma_en=0x%X dma_dis=0x%X)\r\n",
-                    send_cnt, (unsigned)dma_ret, (unsigned)dma_dis_ret);
+        osal_printk("[SK9822] send #%d OK (dma_en=0x%X dma_dis=0x%X)\r\n", send_cnt, (unsigned)dma_ret,
+                    (unsigned)dma_dis_ret);
     }
 }
 
