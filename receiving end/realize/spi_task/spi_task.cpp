@@ -1,24 +1,26 @@
 #include "spi_task.h"
-#include "spi_master.hpp"
+#include "dws_master.hpp"
 
 static const char *mode_name(uint8_t mode)
 {
     switch (mode) {
-        case SPI_MODE_WIREED:   return "WIRED";
-        case SPI_MODE_SLE:      return "SLE";
-        case SPI_MODE_DLNA:     return "DLNA";
-        case SPI_MODE_SLE_MIC:  return "SLE_MIC";
-        case SPI_MODE_DLNA_NET: return "DLNA_NET";
-        default:                return "UNKNOWN";
+        case SPI_MODE_WIREED:
+            return "WIRED";
+        case SPI_MODE_SLE:
+            return "SLE";
+        case SPI_MODE_DLNA:
+            return "DLNA";
+        case SPI_MODE_SLE_MIC:
+            return "SLE_MIC";
+        case SPI_MODE_DLNA_NET:
+            return "DLNA_NET";
+        default:
+            return "UNKNOWN";
     }
 }
 
 static spi_settings_t g_settings = {
-    SPI_CMD_SYNC,
-    (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN),
-    SPI_MODE_WIREED,
-    25, 50, 0
-};
+    SPI_CMD_SYNC, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
 
 const spi_settings_t *get_spi_settings()
 {
@@ -69,24 +71,23 @@ void spi_settings_update_bass(uint8_t bass)
 void *spi_master_task(void *arg)
 {
     (void)arg;
-    osal_printk("[SPI_Master] task entered, constructing spi_master...\r\n");
-    static sed_ws63::spi_master spi;
-    osal_printk("[SPI_Master] settings task started\r\n");
+    osal_printk("[DWS_M] task entered, constructing dws_master...\r\n");
+    static sed_ws63::dws_master spi;
+    osal_printk("[DWS_M] settings task started\r\n");
 
-    uint8_t rx_buf[sed_ws63::spi_master::TRANSFER_LEN];
+    uint8_t rx_buf[sed_ws63::dws_master::TRANSFER_LEN];
     uint8_t prev_mode = g_settings.mode;
     uint8_t prev_volume = g_settings.volume;
     uint8_t prev_bass = g_settings.bass;
     int diag_cnt = 0;
-    osal_printk("[SPI_Master] initial: mode=%s vol=%u bass=%u bri=%u\r\n",
-                mode_name(g_settings.mode), (unsigned)g_settings.volume,
-                (unsigned)g_settings.bass, (unsigned)g_settings.brightness);
+    osal_printk("[DWS_M] initial: mode=%s vol=%u bass=%u bri=%u\r\n", mode_name(g_settings.mode),
+                (unsigned)g_settings.volume, (unsigned)g_settings.bass, (unsigned)g_settings.brightness);
 
     while (true) {
         audio_analyzer::compute();
         const audio_result_t &audio = audio_analyzer::get_result();
 
-        uint8_t tx_buf[sed_ws63::spi_master::TRANSFER_LEN] = {0};
+        uint8_t tx_buf[sed_ws63::dws_master::TRANSFER_LEN] = {0};
         const uint8_t *settings_bytes = (const uint8_t *)&g_settings;
         for (int i = 0; i < SPI_SETTINGS_LEN; i++) {
             tx_buf[i] = settings_bytes[i];
@@ -100,15 +101,13 @@ void *spi_master_task(void *arg)
         tx_buf[SPI_AUDIO_OFFSET + 6] = audio.beat;
 
         if (++diag_cnt % 20 == 1) {
-            osal_printk("[SPI_Master] audio: [%u %u %u %u %u] ov=%u bt=%u mode=%s\r\n",
-                        (unsigned)audio.bands[0], (unsigned)audio.bands[1], (unsigned)audio.bands[2],
-                        (unsigned)audio.bands[3], (unsigned)audio.bands[4],
-                        (unsigned)audio.overall, (unsigned)audio.beat,
+            osal_printk("[DWS_M] audio: [%u %u %u %u %u] ov=%u bt=%u mode=%s\r\n", (unsigned)audio.bands[0],
+                        (unsigned)audio.bands[1], (unsigned)audio.bands[2], (unsigned)audio.bands[3],
+                        (unsigned)audio.bands[4], (unsigned)audio.overall, (unsigned)audio.beat,
                         mode_name(g_settings.mode));
         }
 
-        int ret = spi.transfer(tx_buf, sed_ws63::spi_master::TRANSFER_LEN,
-                               rx_buf, sed_ws63::spi_master::TRANSFER_LEN);
+        int ret = spi.transfer(tx_buf, sed_ws63::dws_master::TRANSFER_LEN, rx_buf, sed_ws63::dws_master::TRANSFER_LEN);
 
         if (ret == 0) {
             spi_settings_t resp;
@@ -132,18 +131,15 @@ void *spi_master_task(void *arg)
         }
 
         if (g_settings.mode != prev_mode) {
-            osal_printk("[SPI_Master] MODE CHANGED: %s -> %s\r\n",
-                        mode_name(prev_mode), mode_name(g_settings.mode));
+            osal_printk("[DWS_M] MODE CHANGED: %s -> %s\r\n", mode_name(prev_mode), mode_name(g_settings.mode));
             prev_mode = g_settings.mode;
         }
         if (g_settings.volume != prev_volume) {
-            osal_printk("[SPI_Master] volume: %u -> %u\r\n",
-                        (unsigned)prev_volume, (unsigned)g_settings.volume);
+            osal_printk("[DWS_M] volume: %u -> %u\r\n", (unsigned)prev_volume, (unsigned)g_settings.volume);
             prev_volume = g_settings.volume;
         }
         if (g_settings.bass != prev_bass) {
-            osal_printk("[SPI_Master] bass: %u -> %u\r\n",
-                        (unsigned)prev_bass, (unsigned)g_settings.bass);
+            osal_printk("[DWS_M] bass: %u -> %u\r\n", (unsigned)prev_bass, (unsigned)g_settings.bass);
             prev_bass = g_settings.bass;
         }
 

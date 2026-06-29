@@ -1,5 +1,5 @@
 add_subdirectory_if_exist(led_test)
 add_subdirectory_if_exist(iic)
-add_subdirectory_if_exist(spi_slave)
+add_subdirectory_if_exist(dws_slave)
 add_subdirectory_if_exist(sk9822)
 set(SOURCES "${SOURCES}" PARENT_SCOPE)

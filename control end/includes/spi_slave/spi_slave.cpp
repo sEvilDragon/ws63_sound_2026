@@ -1,14 +1,20 @@
 #include "spi_slave.hpp"
 
+extern "C" {
+#include "dma_porting.h"
+#include "hal_dma.h"
+}
+
 namespace sed_ws63 {
 
 spi_slave::spi_slave()
 {
-    osal_printk("[SPI_Slave] ctor: pin_init...\r\n");
+    osal_printk("[SLAVE] ===== ctor START (BUS_0, DMA mode) =====\r\n");
+    osal_printk("[SLAVE] ctor: step1 pin_init...\r\n");
     pin_init();
-    osal_printk("[SPI_Slave] ctor: spi_init...\r\n");
+    osal_printk("[SLAVE] ctor: step2 spi_init...\r\n");
     spi_init();
-    osal_printk("[SPI_Slave] SPI_BUS_0 DMA 初始化完成\r\n");
+    osal_printk("[SLAVE] ===== ctor DONE =====\r\n");
 }
 
 void spi_slave::pin_init()
@@ -39,11 +45,13 @@ void spi_slave::spi_init()
 
     ext_config.sspi_param.wait_cycles = 0x10;
 
+    osal_printk("[SLAVE] calling uapi_spi_init(BUS_0, slave=true, clk=%u)...\r\n", (unsigned)SPI_CLK_FREQ);
     errcode_t ret = uapi_spi_init(BUS, &config, &ext_config);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Slave] 初始化失败, ret=0x%x\r\n", ret);
+        osal_printk("[SLAVE] *** FATAL: uapi_spi_init 失败! ret=0x%X ***\r\n", (unsigned)ret);
         return;
     }
+    osal_printk("[SLAVE] uapi_spi_init OK\r\n");
 
     /* DMA 模式: 一次 writeread 完成双向传输, TX/RX 在同一组 SCK 周期, 不会产生多余零值
      * 注意: uapi_dma_init/open 已在 app_entry 中统一调用, 此处只需 set_dma_mode */
@@ -51,9 +59,14 @@ void spi_slave::spi_init()
                                 .dest_width = 0,
                                 .burst_length = 0,
                                 .priority = 0};
+    osal_printk("[SLAVE] calling uapi_spi_set_dma_mode(BUS_0, en=true)...\r\n");
     ret = uapi_spi_set_dma_mode(BUS, true, &dma_cfg);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Slave] DMA 模式设置失败, ret=0x%x, 回退到轮询模式\r\n", ret);
+        osal_printk("[SLAVE] *** DMA 模式设置失败! ret=0x%X, 将走轮询路径 ***\r\n", (unsigned)ret);
+    } else {
+        osal_printk("[SLAVE] DMA 模式启用成功 (src_w=%u dst_w=%u burst=%u pri=%u)\r\n",
+                    (unsigned)dma_cfg.src_width, (unsigned)dma_cfg.dest_width,
+                    (unsigned)dma_cfg.burst_length, (unsigned)dma_cfg.priority);
     }
 }
 
@@ -76,14 +89,17 @@ int spi_slave::transfer(uint8_t *rx_data, uint32_t rx_len, const uint8_t *tx_dat
     };
 
     /*
-     * DMA 模式: uapi_spi_slave_writeread() 内部走 spi_writeread_dma(),
-     * TX/RX 在同一组 SCK 周期并行完成, 只交换 16B, 无额外的零值发送,
-     * 从根本上消除 RX FIFO 累积溢出问题。
-     * 非 DMA 回退: 走 hal_spi_write + hal_spi_read 轮询路径。
+     * WS63 的 HAL_SPI_DEVICE_MODE_SET_REG (0x44000250) 只有 1 个 bit 全局控制
+     * 所有 SPI 的主从模式。BUS_0 需 Slave, BUS_1 需 Master, 无法静态共存。
+     * 解决方案: 每次传输前动态切换到正确的模式。
+     * 传输极短(16B@2MHz=64μs), 碰撞概率极低, 即使碰撞也只丢一帧, 上层会重试。
      */
+    spi_porting_set_device_mode(BUS, SPI_MODE_SLAVE);
     errcode_t ret = uapi_spi_slave_writeread(BUS, &data, TIMEOUT);
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Slave] writeread 失败, ret=0x%x\r\n", ret);
+        // 详细打印错误码, 帮助定位是 DMA 配置失败 / sem 超时 / FIFO 溢出
+        osal_printk("[SLAVE] writeread FAIL: ret=0x%X (dec=%d) tx_bytes=%u rx_bytes=%u\r\n",
+                    (unsigned)ret, (int)ret, (unsigned)data.tx_bytes, (unsigned)data.rx_bytes);
         return -1;
     }
 

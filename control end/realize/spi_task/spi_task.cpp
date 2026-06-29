@@ -1,5 +1,5 @@
 #include "spi_task.h"
-#include "spi_slave.hpp"
+#include "dws_slave.hpp"
 
 extern "C" {
 #include "nv.h"
@@ -38,10 +38,10 @@ void nv_load_settings(void)
     if (ret == ERRCODE_SUCC && len == sizeof(saved)) {
         g_settings = saved;
         g_settings.cmd = SPI_CMD_QUERY; // cmd 永远从 QUERY 开始
-        osal_printk("[SPI_Slave] loaded settings from NV: mode=%u vol=%u bri=%u bass=%u\r\n", (unsigned)g_settings.mode,
+        osal_printk("[DWS_S] loaded settings from NV: mode=%u vol=%u bri=%u bass=%u\r\n", (unsigned)g_settings.mode,
                     (unsigned)g_settings.volume, (unsigned)g_settings.brightness, (unsigned)g_settings.bass);
     } else {
-        osal_printk("[SPI_Slave] no NV data: ret=%d len=%u (expected %u), using defaults\r\n", (int)ret, (unsigned)len,
+        osal_printk("[DWS_S] no NV data: ret=%d len=%u (expected %u), using defaults\r\n", (int)ret, (unsigned)len,
                     (unsigned)sizeof(saved));
     }
 }
@@ -76,12 +76,12 @@ void nv_flush_if_idle(void)
 
     errcode_t ret = uapi_nv_write(NV_KEY_SPI_SETTINGS, (const uint8_t *)&g_settings, sizeof(g_settings));
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SPI_Slave] NV write failed: %d\r\n", (int)ret);
+        osal_printk("[DWS_S] NV write failed: %d\r\n", (int)ret);
     } else {
-        osal_printk("[SPI_Slave] NV write OK\r\n");
+        osal_printk("[DWS_S] NV write OK\r\n");
     }
     g_nv_dirty = false;
-    osal_printk("[SPI_Slave] settings flushed to NV\r\n");
+    osal_printk("[DWS_S] settings flushed to NV\r\n");
 }
 
 /**
@@ -97,21 +97,43 @@ void nv_flush_now(void)
 void *spi_slave_task(void *arg)
 {
     (void)arg;
-    static sed_ws63::spi_slave spi;
-    osal_printk("[SPI_Slave] settings task started\r\n");
+    osal_printk("[DWS_S] >>> task started, constructing dws_slave...\r\n");
+    static sed_ws63::dws_slave spi;
+    osal_printk("[DWS_S] >>> dws_slave object constructed, entering main loop\r\n");
 
-    uint8_t rx_buf[sed_ws63::spi_slave::TRANSFER_LEN];
+    uint8_t rx_buf[sed_ws63::dws_slave::TRANSFER_LEN];
     int diag_cnt = 0;
+    int succ_cnt = 0;
+    int fail_cnt = 0;
+    int loop_cnt = 0;
 
     while (true) {
+        loop_cnt++;
         spi_settings_t response = g_settings;
         response.cmd = SPI_CMD_QUERY;
 
-        int ret = spi.transfer(rx_buf, sed_ws63::spi_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
+        // 前 10 次循环每次都打印, 帮助确认初始状态
+        if (loop_cnt <= 10) {
+            osal_printk("[DWS_S] loop=%d (first 10) entering transfer...\r\n", loop_cnt);
+        } else if (loop_cnt % 100 == 1) {
+            osal_printk("[DWS_S] loop=%d succ=%d fail=%d entering transfer...\r\n", loop_cnt, succ_cnt, fail_cnt);
+        }
+
+        int ret = spi.transfer(rx_buf, sed_ws63::dws_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
         if (ret != 0) {
+            fail_cnt++;
+            // 失败时立即打印(不抑制), 显示累计失败次数
+            osal_printk("[DWS_S] *** transfer FAIL #%d at loop=%d (total fail=%d, succ=%d) ***\r\n", fail_cnt, loop_cnt,
+                        fail_cnt, succ_cnt);
             osal_msleep(10);
             continue;
         }
+
+        // 首次成功时特别标记
+        if (succ_cnt == 0) {
+            osal_printk("[DWS_S] >>> FIRST successful transfer at loop=%d <<<\r\n", loop_cnt);
+        }
+        succ_cnt++;
 
         audio_result_t tmp;
         tmp.bands[0] = rx_buf[SPI_AUDIO_OFFSET + 0];
@@ -127,9 +149,9 @@ void *spi_slave_task(void *arg)
         osal_irq_restore(flags);
 
         if (++diag_cnt % 20 == 1) {
-            osal_printk("[SPI_Slave] recv: [%u %u %u %u %u] ov=%u bt=%u\r\n", (unsigned)tmp.bands[0],
-                        (unsigned)tmp.bands[1], (unsigned)tmp.bands[2], (unsigned)tmp.bands[3], (unsigned)tmp.bands[4],
-                        (unsigned)tmp.overall, (unsigned)tmp.beat);
+            osal_printk("[DWS_S] recv OK #%d: [%u %u %u %u %u] ov=%u bt=%u (succ=%d fail=%d)\r\n", diag_cnt,
+                        (unsigned)tmp.bands[0], (unsigned)tmp.bands[1], (unsigned)tmp.bands[2], (unsigned)tmp.bands[3],
+                        (unsigned)tmp.bands[4], (unsigned)tmp.overall, (unsigned)tmp.beat, succ_cnt, fail_cnt);
         }
 
         osal_msleep(5);

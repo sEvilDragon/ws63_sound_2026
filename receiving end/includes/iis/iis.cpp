@@ -172,7 +172,8 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         int old_read_idx = read_idx;
         uint32_t new_read_idx = (read_idx + 1) % buffer_num;
 
-        // �������շ�����Ļ�������ֻ���� DMA ����ɲۣ��޾�̬��
+        // �������շ�����Ļ�������ֻ���� DMA
+        // ����ɲۣ��޾�̬��
         data_clear_one(old_read_idx);
 
         // �ٽ��������� pending_frames / read_idx �� data_write �Ĳ���
@@ -253,7 +254,8 @@ void iis::dma_lli_init()
 
     // SED : ���
     hal_sio_set_crg_clock_enable(i2s_num, true);
-    // TX ����������ȴ� data_write �����㹻֡�����ٿ��������⻺��������ʱ��������
+    // TX ����������ȴ� data_write
+    // �����㹻֡�����ٿ��������⻺��������ʱ��������
     hal_sio_set_tx_enable(i2s_num, 0);
     osal_printk("[IIS] DMA LLI started, ch=%d, buffers=%d, TX initially off\r\n", dma_channel, buffer_num);
 }
@@ -370,8 +372,8 @@ void iis::data_clear()
 {
     osal_printk("[IIS] data_clear: pending=%d, read=%d, write=%d\r\n", pending_frames, read_idx, write_idx);
     // ���ٹر� TX��DMA LLI һ���������������У��� TX ֻ��������ţ�
-    // DMA �ڲ������Լ������Ļ����������� pending_frames ��Զ�޷����»��ۣ�
-    // TX ����ʧȥ�ؿ����ᡣ��Ϊ���� TX �������� DMA ����������ľ���֡��
+    // DMA �ڲ������Լ������Ļ����������� pending_frames
+    // ��Զ�޷����»��ۣ� TX ����ʧȥ�ؿ����ᡣ��Ϊ���� TX �������� DMA ����������ľ���֡��
 
     for (int i = 0; i < buffer_num; i++) {
         memset(dma_buffers[i], 0, buffer_size * sizeof(uint16_t));

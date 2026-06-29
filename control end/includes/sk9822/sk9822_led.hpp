@@ -2,6 +2,7 @@
 
 extern "C" {
 #include "spi.h"
+#include "spi_porting.h"
 #include "dma.h"
 #include "pinctrl.h"
 #include "soc_osal.h"

@@ -15,8 +15,11 @@ void app_entry(void)
 
     /* DMA 必须只初始化一次, 否则 hal_dma_v151_open() 会重置所有通道状态,
      * 导致 spi_slave 已分配的通道被强制 CLOSED, 后续被 sk9822 抢占 */
-    uapi_dma_init();
-    uapi_dma_open();
+    osal_printk("[CTRL] app_entry: calling uapi_dma_init()...\r\n");
+    errcode_t dma_ret = uapi_dma_init();
+    osal_printk("[CTRL] app_entry: uapi_dma_init() ret=0x%X\r\n", (unsigned)dma_ret);
+    dma_ret = uapi_dma_open();
+    osal_printk("[CTRL] app_entry: uapi_dma_open() ret=0x%X\r\n", (unsigned)dma_ret);
 
 #if defined(CONFIG_MIDDLEWARE_SUPPORT_NV)
     /* uapi_nv_init() 已在系统初始化中调用, 此处只需加载配置。
