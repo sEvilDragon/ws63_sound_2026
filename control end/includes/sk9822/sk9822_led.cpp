@@ -6,16 +6,10 @@ uint8_t sk9822_led::frame_buf[sk9822_led::FRAME_SIZE];
 
 sk9822_led::sk9822_led()
 {
-    osal_printk("[SK9822] ===== ctor START (BUS_1, DMA per-transfer) =====\r\n");
-    osal_printk("[SK9822] ctor: step1 pin_init...\r\n");
     pin_init();
-    osal_printk("[SK9822] ctor: step2 spi_init...\r\n");
     spi_init();
-    osal_printk("[SK9822] ctor: step3 spi_dma_init (empty)...\r\n");
     spi_dma_init();
-    osal_printk("[SK9822] ctor: step4 clear (no SPI)...\r\n");
     clear();
-    osal_printk("[SK9822] ===== ctor DONE, %d LEDs =====\r\n", NUM_LEDS);
 }
 
 void sk9822_led::pin_init()
@@ -44,12 +38,9 @@ void sk9822_led::spi_init()
 
     ext_config.sspi_param.wait_cycles = 0x10;
 
-    osal_printk("[SK9822] calling uapi_spi_init(BUS_1, master, freq=%uMHz)...\r\n", (unsigned)FREQ_MHZ);
     errcode_t ret = uapi_spi_init(BUS, &config, &ext_config);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SK9822] *** FATAL: SPI init failed! ret=0x%X ***\r\n", (unsigned)ret);
-    } else {
-        osal_printk("[SK9822] uapi_spi_init OK\r\n");
     }
 }
 
@@ -71,26 +62,16 @@ void sk9822_led::spi_send(const uint8_t *data, uint32_t len)
     xfer.tx_buff = (uint8_t *)data;
     xfer.tx_bytes = len;
 
-    /* 每次传输前切换到 Master 模式 (WS63 全局只有 1 个模式 bit, 分时复用) */
     spi_porting_set_device_mode(BUS, SPI_MODE_MASTER);
     spi_dma_config_t dma_cfg = {.src_width = 0, .dest_width = 0, .burst_length = 0, .priority = 0};
-    errcode_t dma_ret = uapi_spi_set_dma_mode(BUS, true, &dma_cfg);
-
-    // 前 5 次 + 每 50 次打印一次, 确认持续在工作
-    if (send_cnt <= 5 || send_cnt % 50 == 0) {
-        osal_printk("[SK9822] send #%d: DMA en ret=0x%X, tx_bytes=%u\r\n", send_cnt, (unsigned)dma_ret, (unsigned)len);
-    }
+    uapi_spi_set_dma_mode(BUS, true, &dma_cfg);
 
     errcode_t ret = uapi_spi_master_write(BUS, &xfer, TIMEOUT);
 
-    errcode_t dma_dis_ret = uapi_spi_set_dma_mode(BUS, false, NULL);
+    uapi_spi_set_dma_mode(BUS, false, NULL);
 
     if (ret != ERRCODE_SUCC) {
-        osal_printk("[SK9822] *** send #%d FAIL: write ret=0x%X (dma_en=0x%X dma_dis=0x%X) ***\r\n", send_cnt,
-                    (unsigned)ret, (unsigned)dma_ret, (unsigned)dma_dis_ret);
-    } else if (send_cnt <= 5 || send_cnt % 50 == 0) {
-        osal_printk("[SK9822] send #%d OK (dma_en=0x%X dma_dis=0x%X)\r\n", send_cnt, (unsigned)dma_ret,
-                    (unsigned)dma_dis_ret);
+        osal_printk("[SK9822] *** send #%d FAIL: 0x%X ***\r\n", send_cnt, (unsigned)ret);
     }
 }
 

@@ -13,7 +13,8 @@ float audio_analyzer::max_overall = 1.0f;
 
 void audio_analyzer::add_samples(const int16_t *data, uint32_t size)
 {
-    if (buf_full) return;
+    if (buf_full)
+        return;
     for (uint32_t i = 0; i < size; i += 2) {
         if (sample_count >= BLOCK_SIZE) {
             buf_full = true;
@@ -25,7 +26,8 @@ void audio_analyzer::add_samples(const int16_t *data, uint32_t size)
 
 void audio_analyzer::compute()
 {
-    if (!buf_full) return;
+    if (!buf_full)
+        return;
 
     uint8_t wi = 1 - result_idx;
     float total_energy = 0;
@@ -52,9 +54,14 @@ void audio_analyzer::compute()
         } else {
             max_band[b] *= 0.995f;
         }
+        /* 防止 AGC 将静音噪声放大到满幅: max_band 不低于此阈值 */
+        if (max_band[b] < 50000.0f) {
+            max_band[b] = 50000.0f;
+        }
 
         float normalized = band_energy[b] / max_band[b];
-        if (normalized > 1.0f) normalized = 1.0f;
+        if (normalized > 1.0f)
+            normalized = 1.0f;
         result[wi].bands[b] = (uint8_t)(normalized * normalized * 255.0f);
     }
 
@@ -63,9 +70,13 @@ void audio_analyzer::compute()
     } else {
         max_overall *= 0.995f;
     }
+    if (max_overall < 50000.0f * NUM_BANDS) {
+        max_overall = 50000.0f * NUM_BANDS;
+    }
 
     float norm_overall = total_energy / max_overall;
-    if (norm_overall > 1.0f) norm_overall = 1.0f;
+    if (norm_overall > 1.0f)
+        norm_overall = 1.0f;
     result[wi].overall = (uint8_t)(norm_overall * norm_overall * 255.0f);
 
     int32_t current_energy = (int32_t)total_energy;
@@ -79,6 +90,31 @@ void audio_analyzer::compute()
     energy_hist_idx = (energy_hist_idx + 1) % 6;
 
     result[wi].beat = (current_energy > avg * 3 / 2 && avg > 0) ? 1 : 0;
+
+    /* 噪声门: 绝对能量低于阈值时强制输出 0, 防止 AGC 把噪声底放大到满幅 */
+    if (total_energy < 20000.0f) {
+        for (int b = 0; b < NUM_BANDS; b++) {
+            result[wi].bands[b] = 0;
+        }
+        result[wi].overall = 0;
+        result[wi].beat = 0;
+    }
+
+    /* 每 40 帧打印一次原始能量, 用于校准噪声门 */
+    {
+        static uint32_t dbg_cnt = 0;
+        dbg_cnt++;
+        if (dbg_cnt % 40 == 0) {
+            osal_printk("[RAW] total_energy=%.0f max_ov=%.0f bands=[%.0f %.0f %.0f %.0f %.0f] max_b=[%.0f %.0f %.0f %.0f %.0f]\r\n",
+                (double)total_energy, (double)max_overall,
+                (double)band_energy[0], (double)band_energy[1],
+                (double)band_energy[2], (double)band_energy[3],
+                (double)band_energy[4],
+                (double)max_band[0], (double)max_band[1],
+                (double)max_band[2], (double)max_band[3],
+                (double)max_band[4]);
+        }
+    }
 
     result_idx = wi;
     sample_count = 0;

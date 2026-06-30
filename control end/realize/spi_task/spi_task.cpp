@@ -37,12 +37,7 @@ void nv_load_settings(void)
     errcode_t ret = uapi_nv_read(NV_KEY_SPI_SETTINGS, sizeof(saved), &len, (uint8_t *)&saved);
     if (ret == ERRCODE_SUCC && len == sizeof(saved)) {
         g_settings = saved;
-        g_settings.cmd = SPI_CMD_QUERY; // cmd 永远从 QUERY 开始
-        osal_printk("[DWS_S] loaded settings from NV: mode=%u vol=%u bri=%u bass=%u\r\n", (unsigned)g_settings.mode,
-                    (unsigned)g_settings.volume, (unsigned)g_settings.brightness, (unsigned)g_settings.bass);
-    } else {
-        osal_printk("[DWS_S] no NV data: ret=%d len=%u (expected %u), using defaults\r\n", (int)ret, (unsigned)len,
-                    (unsigned)sizeof(saved));
+        g_settings.cmd = SPI_CMD_QUERY;
     }
 }
 
@@ -77,11 +72,8 @@ void nv_flush_if_idle(void)
     errcode_t ret = uapi_nv_write(NV_KEY_SPI_SETTINGS, (const uint8_t *)&g_settings, sizeof(g_settings));
     if (ret != ERRCODE_SUCC) {
         osal_printk("[DWS_S] NV write failed: %d\r\n", (int)ret);
-    } else {
-        osal_printk("[DWS_S] NV write OK\r\n");
     }
     g_nv_dirty = false;
-    osal_printk("[DWS_S] settings flushed to NV\r\n");
 }
 
 /**
@@ -97,43 +89,39 @@ void nv_flush_now(void)
 void *spi_slave_task(void *arg)
 {
     (void)arg;
-    osal_printk("[DWS_S] >>> task started, constructing dws_slave...\r\n");
     static sed_ws63::dws_slave spi;
-    osal_printk("[DWS_S] >>> dws_slave object constructed, entering main loop\r\n");
 
     uint8_t rx_buf[sed_ws63::dws_slave::TRANSFER_LEN];
-    int diag_cnt = 0;
     int succ_cnt = 0;
     int fail_cnt = 0;
-    int loop_cnt = 0;
 
     while (true) {
-        loop_cnt++;
         spi_settings_t response = g_settings;
         response.cmd = SPI_CMD_QUERY;
-
-        // 前 10 次循环每次都打印, 帮助确认初始状态
-        if (loop_cnt <= 10) {
-            osal_printk("[DWS_S] loop=%d (first 10) entering transfer...\r\n", loop_cnt);
-        } else if (loop_cnt % 100 == 1) {
-            osal_printk("[DWS_S] loop=%d succ=%d fail=%d entering transfer...\r\n", loop_cnt, succ_cnt, fail_cnt);
-        }
 
         int ret = spi.transfer(rx_buf, sed_ws63::dws_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
         if (ret != 0) {
             fail_cnt++;
-            // 失败时立即打印(不抑制), 显示累计失败次数
-            osal_printk("[DWS_S] *** transfer FAIL #%d at loop=%d (total fail=%d, succ=%d) ***\r\n", fail_cnt, loop_cnt,
-                        fail_cnt, succ_cnt);
+            osal_printk("[DWS_S] *** transfer FAIL #%d (total fail=%d, succ=%d) ***\r\n", fail_cnt, fail_cnt, succ_cnt);
             osal_msleep(10);
             continue;
         }
 
-        // 首次成功时特别标记
-        if (succ_cnt == 0) {
-            osal_printk("[DWS_S] >>> FIRST successful transfer at loop=%d <<<\r\n", loop_cnt);
-        }
         succ_cnt++;
+
+        /* 处理接收端发来的设置 (前 SPI_SETTINGS_LEN 字节) */
+        spi_settings_t master_settings;
+        for (int i = 0; i < SPI_SETTINGS_LEN; i++) {
+            ((uint8_t *)&master_settings)[i] = rx_buf[i];
+        }
+        if (spi_validate_settings(&master_settings) && master_settings.cmd == SPI_CMD_SYNC) {
+            g_settings.hotspot_network = master_settings.hotspot_network;
+            g_settings.mode = master_settings.mode;
+            g_settings.volume = master_settings.volume;
+            g_settings.brightness = master_settings.brightness;
+            g_settings.bass = master_settings.bass;
+            nv_mark_dirty();
+        }
 
         audio_result_t tmp;
         tmp.bands[0] = rx_buf[SPI_AUDIO_OFFSET + 0];
@@ -142,17 +130,13 @@ void *spi_slave_task(void *arg)
         tmp.bands[3] = rx_buf[SPI_AUDIO_OFFSET + 3];
         tmp.bands[4] = rx_buf[SPI_AUDIO_OFFSET + 4];
         tmp.overall = rx_buf[SPI_AUDIO_OFFSET + 5];
-        tmp.beat = rx_buf[SPI_AUDIO_OFFSET + 6];
+        /* 防御: beat 只接受 0 或 1, 其他值视为 SPI 数据错位/噪声 */
+        uint8_t raw_beat = rx_buf[SPI_AUDIO_OFFSET + 6];
+        tmp.beat = (raw_beat == 0 || raw_beat == 1) ? raw_beat : 0;
 
         unsigned long flags = osal_irq_lock();
         g_audio = tmp;
         osal_irq_restore(flags);
-
-        if (++diag_cnt % 20 == 1) {
-            osal_printk("[DWS_S] recv OK #%d: [%u %u %u %u %u] ov=%u bt=%u (succ=%d fail=%d)\r\n", diag_cnt,
-                        (unsigned)tmp.bands[0], (unsigned)tmp.bands[1], (unsigned)tmp.bands[2], (unsigned)tmp.bands[3],
-                        (unsigned)tmp.bands[4], (unsigned)tmp.overall, (unsigned)tmp.beat, succ_cnt, fail_cnt);
-        }
 
         osal_msleep(5);
     }

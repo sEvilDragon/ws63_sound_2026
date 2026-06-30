@@ -4,10 +4,7 @@ namespace sed_ws63 {
 
 dws_master::dws_master()
 {
-    osal_printk("[DWS_M] ctor: pin_init...\r\n");
     pin_init();
-    osal_printk("[DWS_M] DWS Master 初始化完成 (CLK=GPIO_%02u DAT=GPIO_%02u)\r\n", (unsigned)CLK_PIN,
-                (unsigned)DAT_PIN);
 }
 
 void dws_master::pin_init()

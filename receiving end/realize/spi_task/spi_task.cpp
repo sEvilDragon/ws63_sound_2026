@@ -71,41 +71,43 @@ void spi_settings_update_bass(uint8_t bass)
 void *spi_master_task(void *arg)
 {
     (void)arg;
-    osal_printk("[DWS_M] task entered, constructing dws_master...\r\n");
     static sed_ws63::dws_master spi;
-    osal_printk("[DWS_M] settings task started\r\n");
 
     uint8_t rx_buf[sed_ws63::dws_master::TRANSFER_LEN];
     uint8_t prev_mode = g_settings.mode;
     uint8_t prev_volume = g_settings.volume;
     uint8_t prev_bass = g_settings.bass;
-    int diag_cnt = 0;
-    osal_printk("[DWS_M] initial: mode=%s vol=%u bass=%u bri=%u\r\n", mode_name(g_settings.mode),
-                (unsigned)g_settings.volume, (unsigned)g_settings.bass, (unsigned)g_settings.brightness);
+    uint32_t dbg_tick = 0;
 
     while (true) {
         audio_analyzer::compute();
         const audio_result_t &audio = audio_analyzer::get_result();
+
+        /* 每 40 帧 (~2s) 输出一次音频数据，定位噪声来源 */
+        dbg_tick++;
+        if (dbg_tick % 40 == 0) {
+            osal_printk("[AUDIO] bands=[%3u %3u %3u %3u %3u] ov=%3u beat=%u\r\n",
+                (unsigned)audio.bands[0], (unsigned)audio.bands[1],
+                (unsigned)audio.bands[2], (unsigned)audio.bands[3],
+                (unsigned)audio.bands[4], (unsigned)audio.overall,
+                (unsigned)audio.beat);
+        }
 
         uint8_t tx_buf[sed_ws63::dws_master::TRANSFER_LEN] = {0};
         const uint8_t *settings_bytes = (const uint8_t *)&g_settings;
         for (int i = 0; i < SPI_SETTINGS_LEN; i++) {
             tx_buf[i] = settings_bytes[i];
         }
+        /* 记录本帧实际发送的 cmd, 防止 transfer 期间被外部改掉后误清除 SYNC */
+        uint8_t tx_cmd_snapshot = g_settings.cmd;
         tx_buf[SPI_AUDIO_OFFSET + 0] = audio.bands[0];
         tx_buf[SPI_AUDIO_OFFSET + 1] = audio.bands[1];
         tx_buf[SPI_AUDIO_OFFSET + 2] = audio.bands[2];
         tx_buf[SPI_AUDIO_OFFSET + 3] = audio.bands[3];
         tx_buf[SPI_AUDIO_OFFSET + 4] = audio.bands[4];
         tx_buf[SPI_AUDIO_OFFSET + 5] = audio.overall;
-        tx_buf[SPI_AUDIO_OFFSET + 6] = audio.beat;
-
-        if (++diag_cnt % 20 == 1) {
-            osal_printk("[DWS_M] audio: [%u %u %u %u %u] ov=%u bt=%u mode=%s\r\n", (unsigned)audio.bands[0],
-                        (unsigned)audio.bands[1], (unsigned)audio.bands[2], (unsigned)audio.bands[3],
-                        (unsigned)audio.bands[4], (unsigned)audio.overall, (unsigned)audio.beat,
-                        mode_name(g_settings.mode));
-        }
+        /* beat 仅 0/1, 校验后发出以防对端收到错位数据 */
+        tx_buf[SPI_AUDIO_OFFSET + 6] = (audio.beat != 0) ? (uint8_t)1 : (uint8_t)0;
 
         int ret = spi.transfer(tx_buf, sed_ws63::dws_master::TRANSFER_LEN, rx_buf, sed_ws63::dws_master::TRANSFER_LEN);
 
@@ -126,7 +128,7 @@ void *spi_master_task(void *arg)
             }
         }
 
-        if (g_settings.cmd == SPI_CMD_SYNC) {
+        if (tx_cmd_snapshot == SPI_CMD_SYNC) {
             g_settings.cmd = SPI_CMD_QUERY;
         }
 

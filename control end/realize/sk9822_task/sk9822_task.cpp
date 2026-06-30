@@ -46,78 +46,88 @@ static void hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g,
     }
 }
 
-static uint8_t get_band_at_distance(const audio_result_t *audio, uint8_t norm_dist)
-{
-    uint8_t band_idx = (uint16_t)norm_dist * 5 / 256;
-    if (band_idx > 4)
-        band_idx = 4;
-    return audio->bands[band_idx];
-}
-
 void *sk9822_task(void *arg)
 {
     unused(arg);
 
-    osal_printk("[SK9822_TASK] >>> task started, constructing sk9822_led...\r\n");
+    osal_printk("[SK9822] init OK, %d LEDs\r\n", sed_ws63::sk9822_led::NUM_LEDS);
     sed_ws63::sk9822_led led;
-    osal_printk("[SK9822_TASK] >>> sk9822_led constructed, entering main loop\r\n");
 
     uint16_t tick = 0;
-    uint8_t beat_flash = 0;
-    int diag_cnt = 0;
-    int update_ok = 0;
+    float smoothed_ov = 0.0f;  /* 平滑能量 0~255 */
+    uint8_t beat_boost = 0;    /* 节拍脉冲计数 */
 
     while (true) {
         const audio_result_t *audio = get_audio_result();
-
         tick++;
 
-        // 每秒打印一次心跳, 确认任务存活
-        if (tick % 33 == 1) {
-            osal_printk("[SK9822_TASK] ALIVE tick=%u ok=%d audio=[%u %u %u %u %u] ov=%u bt=%u\r\n", (unsigned)tick,
-                        update_ok, (unsigned)audio->bands[0], (unsigned)audio->bands[1], (unsigned)audio->bands[2],
-                        (unsigned)audio->bands[3], (unsigned)audio->bands[4], (unsigned)audio->overall,
-                        (unsigned)audio->beat);
+        /* ===== 1. 快速平滑能量 (alpha=0.25) ===== */
+        smoothed_ov += ((float)audio->overall - smoothed_ov) * 0.25f;
+
+        /* ===== 2. 空闲呼吸 (三角波, ~3.5 秒周期) ===== */
+        uint16_t breath_tick = tick % 116; /* 116*30ms ≈ 3.5s */
+        float breath;
+        if (breath_tick < 58) {
+            breath = (float)breath_tick / 58.0f;       /* 0 → 1 */
+        } else {
+            breath = (float)(116 - breath_tick) / 58.0f; /* 1 → 0 */
+        }
+        breath = 0.25f + 0.75f * breath; /* 0.25 ~ 1.0 */
+
+        /* ===== 3. 音乐强度: 0=空闲, 1=满幅 ===== */
+        float music = smoothed_ov / 255.0f;
+        float intensity = breath * (0.35f + 0.65f * music);
+        /* 空闲时 intensity≈0.09~0.35, 满音乐时≈0.35~1.0 */
+
+        /* ===== 4. 节拍脉冲 ===== */
+        if (audio->beat && beat_boost == 0) {
+            beat_boost = 6;
+        }
+        if (beat_boost > 0) {
+            intensity *= 1.0f + (float)beat_boost * 0.12f; /* 最大 +72% */
+            beat_boost--;
         }
 
-        uint16_t base_hue = (tick * 2) % 360;
+        /* ===== 5. 高斯宽度: spread 越大 = 亮灯越多 ===== */
+        float spread = 0.6f + intensity * 4.8f; /* 0.6~5.4, 覆盖 0~4 距离 */
 
-        if (audio->beat && beat_flash == 0) {
-            beat_flash = 4;
-        }
+        /* ===== 6. 色相: 极慢旋转 (~2.8°/s, 128s 一圈) ===== */
+        uint16_t base_hue = (tick / 10) % 360;
 
         for (uint8_t i = 0; i < sed_ws63::sk9822_led::NUM_LEDS; i++) {
-            uint8_t dist = (i < 9) ? (uint8_t)(8 - i) : (uint8_t)(i - 9);
-            uint8_t norm_dist = (uint16_t)dist * 255 / 8;
+            /* 两排灯: 0~8 第一排, 9~17 第二排, 每排中心在位置 4 */
+            uint8_t pos = i % 9;
+            uint8_t dist_u = (pos > 4) ? (uint8_t)(pos - 4) : (uint8_t)(4 - pos);
+            float dist = (float)dist_u; /* 0.0 ~ 4.0 */
 
-            uint8_t energy = get_band_at_distance(audio, norm_dist);
+            /* ===== 亮度: 类高斯衰减 (二次曲线), 多灯同时变化 ===== */
+            float ratio = dist / spread;
+            float fb;
+            if (ratio >= 1.0f) {
+                fb = 0.0f;
+            } else {
+                /* 平滑钟形: (1 - r²)(1 - 0.3r) */
+                fb = (1.0f - ratio * ratio) * (1.0f - 0.3f * ratio);
+            }
+            uint8_t brightness = (uint8_t)(fb * 255.0f);
 
-            uint16_t hue = (base_hue + (uint16_t)dist * 20 + tick) % 360;
-
-            uint8_t brightness = energy;
-            if (brightness < 8)
-                brightness = 8;
-            if (beat_flash > 0) {
-                brightness = 255;
+            /* 最小微光: 空闲时中心也有可见呼吸 */
+            if (brightness < 4) {
+                brightness = 4;
             }
 
-            uint8_t sat = (uint16_t)(255 - energy) * 100 / 255 + 155;
-            if (beat_flash > 0)
-                sat = 0;
+            /* ===== 色相: 中心暖金(30°) → 边缘冷蓝(270°) ===== */
+            uint16_t hue = (base_hue + (uint16_t)(dist * 28.0f)) % 360;
+
+            /* ===== 饱和度: 偏鲜艳但柔和 ===== */
+            uint8_t sat = 210;
 
             uint8_t r, g, b;
             hsv_to_rgb(hue, sat, brightness, &r, &g, &b);
             led.set_pixel(i, r, g, b, 15);
         }
 
-        if (beat_flash > 0)
-            beat_flash--;
-
-        if (tick == 1) {
-            osal_printk("[SK9822_TASK] >>> first led.update() call, this triggers BUS_1 DMA <<<\r\n");
-        }
         led.update();
-        update_ok++;
         osal_msleep(30);
     }
     return NULL;

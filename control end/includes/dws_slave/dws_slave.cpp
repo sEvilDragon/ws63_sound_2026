@@ -4,9 +4,7 @@ namespace sed_ws63 {
 
 dws_slave::dws_slave()
 {
-    osal_printk("[DWS_S] ctor: pin_init...\r\n");
     pin_init();
-    osal_printk("[DWS_S] DWS Slave 初始化完成 (CLK=GPIO_%02u DAT=GPIO_%02u)\r\n", (unsigned)CLK_PIN, (unsigned)DAT_PIN);
 }
 
 void dws_slave::pin_init()
