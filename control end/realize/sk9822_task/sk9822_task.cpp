@@ -54,8 +54,8 @@ void *sk9822_task(void *arg)
     sed_ws63::sk9822_led led;
 
     uint16_t tick = 0;
-    float smoothed_ov = 0.0f;  /* 平滑能量 0~255 */
-    uint8_t beat_boost = 0;    /* 节拍脉冲计数 */
+    float smoothed_ov = 0.0f; /* 平滑能量 0~255 */
+    uint8_t beat_boost = 0;   /* 节拍脉冲计数 */
 
     while (true) {
         const audio_result_t *audio = get_audio_result();
@@ -68,7 +68,7 @@ void *sk9822_task(void *arg)
         uint16_t breath_tick = tick % 116; /* 116*30ms ≈ 3.5s */
         float breath;
         if (breath_tick < 58) {
-            breath = (float)breath_tick / 58.0f;       /* 0 → 1 */
+            breath = (float)breath_tick / 58.0f; /* 0 → 1 */
         } else {
             breath = (float)(116 - breath_tick) / 58.0f; /* 1 → 0 */
         }

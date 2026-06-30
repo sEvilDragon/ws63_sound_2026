@@ -86,11 +86,9 @@ void *spi_master_task(void *arg)
         /* 每 40 帧 (~2s) 输出一次音频数据，定位噪声来源 */
         dbg_tick++;
         if (dbg_tick % 40 == 0) {
-            osal_printk("[AUDIO] bands=[%3u %3u %3u %3u %3u] ov=%3u beat=%u\r\n",
-                (unsigned)audio.bands[0], (unsigned)audio.bands[1],
-                (unsigned)audio.bands[2], (unsigned)audio.bands[3],
-                (unsigned)audio.bands[4], (unsigned)audio.overall,
-                (unsigned)audio.beat);
+            osal_printk("[AUDIO] bands=[%3u %3u %3u %3u %3u] ov=%3u beat=%u\r\n", (unsigned)audio.bands[0],
+                        (unsigned)audio.bands[1], (unsigned)audio.bands[2], (unsigned)audio.bands[3],
+                        (unsigned)audio.bands[4], (unsigned)audio.overall, (unsigned)audio.beat);
         }
 
         uint8_t tx_buf[sed_ws63::dws_master::TRANSFER_LEN] = {0};
