@@ -100,17 +100,14 @@ void audio_analyzer::compute()
         result[wi].beat = 0;
     }
 
-    /* 每 40 帧打印一次原始能量, 用于校准噪声门 */
+    /* 每 80 帧打印一次原始能量 (精简版, 避免格式化溢出) */
     {
         static uint32_t dbg_cnt = 0;
         dbg_cnt++;
-        if (dbg_cnt % 40 == 0) {
-            osal_printk(
-                "[RAW] total_energy=%.0f max_ov=%.0f bands=[%.0f %.0f %.0f %.0f %.0f] max_b=[%.0f %.0f %.0f %.0f "
-                "%.0f]\r\n",
-                (double)total_energy, (double)max_overall, (double)band_energy[0], (double)band_energy[1],
-                (double)band_energy[2], (double)band_energy[3], (double)band_energy[4], (double)max_band[0],
-                (double)max_band[1], (double)max_band[2], (double)max_band[3], (double)max_band[4]);
+        if (dbg_cnt % 80 == 0) {
+            osal_printk("[RAW] total=%.0f bands=[%.0f %.0f %.0f %.0f %.0f]\r\n", (double)total_energy,
+                        (double)band_energy[0], (double)band_energy[1], (double)band_energy[2], (double)band_energy[3],
+                        (double)band_energy[4]);
         }
     }
 

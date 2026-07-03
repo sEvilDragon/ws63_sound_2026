@@ -44,7 +44,7 @@ public:
     static std::array<void *, 100> raw_buffers;    // 用于 kfree
     static std::array<int16_t *, 100> dma_buffers; // 用于实际读写
     static constexpr uint32_t buffer_size = 960;   // 传输数据大小
-    static constexpr uint32_t buffer_num = 40;     // 传输缓冲区数量
+    static constexpr uint32_t buffer_num = 35;     // 传输缓冲区数量
     static constexpr uint16_t cache_size = 32;     // Cache Line大小
 
     static const uint16_t volume_gain_table[101];

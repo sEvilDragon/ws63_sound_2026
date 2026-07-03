@@ -20,7 +20,7 @@ static const char *mode_name(uint8_t mode)
 }
 
 static spi_settings_t g_settings = {
-    SPI_CMD_SYNC, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
+    SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
 
 const spi_settings_t *get_spi_settings()
 {
@@ -83,9 +83,9 @@ void *spi_master_task(void *arg)
         audio_analyzer::compute();
         const audio_result_t &audio = audio_analyzer::get_result();
 
-        /* 每 40 帧 (~2s) 输出一次音频数据，定位噪声来源 */
+        /* 每 80 帧 (~4s) 输出一次音频数据 */
         dbg_tick++;
-        if (dbg_tick % 40 == 0) {
+        if (dbg_tick % 80 == 0) {
             osal_printk("[AUDIO] bands=[%3u %3u %3u %3u %3u] ov=%3u beat=%u\r\n", (unsigned)audio.bands[0],
                         (unsigned)audio.bands[1], (unsigned)audio.bands[2], (unsigned)audio.bands[3],
                         (unsigned)audio.bands[4], (unsigned)audio.overall, (unsigned)audio.beat);
@@ -115,14 +115,16 @@ void *spi_master_task(void *arg)
                 ((uint8_t *)&resp)[i] = rx_buf[i];
             }
 
-            if (spi_validate_settings(&resp)) {
-                if (g_settings.cmd == SPI_CMD_QUERY) {
-                    g_settings.hotspot_network = resp.hotspot_network;
-                    g_settings.mode = resp.mode;
-                    g_settings.volume = resp.volume;
-                    g_settings.brightness = resp.brightness;
-                    g_settings.bass = resp.bass;
-                }
+            /* 仅在首次成功通信时从 slave 同步一次 NV 配置, 之后 master 为权威源 */
+            static bool boot_sync_done = false;
+            if (!boot_sync_done && spi_validate_settings(&resp)) {
+                g_settings.hotspot_network = resp.hotspot_network;
+                g_settings.mode = resp.mode;
+                g_settings.volume = resp.volume;
+                g_settings.brightness = resp.brightness;
+                g_settings.bass = resp.bass;
+                g_settings.cmd = SPI_CMD_QUERY;
+                boot_sync_done = true;
             }
         }
 
