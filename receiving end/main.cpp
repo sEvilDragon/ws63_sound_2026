@@ -30,13 +30,17 @@ void app_entry(void)
      * 必须在 osal_kthread_lock() 之前调用，因为 NV 操作内部
      * 使用信号量，依赖调度器运行。 */
     nv_recv_load_all();
+    bool spi_settings_loaded = (spi_settings_load_from_nv() != 0);
 #else
     osal_printk("[RECV] NV NOT ENABLED in build config!\r\n");
+    bool spi_settings_loaded = false;
 #endif
 
     osal_kthread_lock();
 
-    spi_settings_update_mode(SPI_MODE_SLE);
+    if (!spi_settings_loaded) {
+        spi_settings_update_mode(SPI_MODE_SLE);
+    }
 
     taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 1024);
     osal_printk("[RECV] led_test_task created: %p\r\n", taskid);

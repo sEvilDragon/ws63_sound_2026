@@ -14,6 +14,8 @@ extern "C" {
 static spi_settings_t g_settings = {
     SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
 
+static bool g_slave_sync_pending = false;
+
 const spi_settings_t *get_spi_settings()
 {
     return &g_settings;
@@ -35,14 +37,36 @@ void nv_load_settings(void)
     uint16_t len = 0;
     spi_settings_t saved;
     errcode_t ret = uapi_nv_read(NV_KEY_SPI_SETTINGS, sizeof(saved), &len, (uint8_t *)&saved);
-    if (ret == ERRCODE_SUCC && len == sizeof(saved)) {
+    if (ret == ERRCODE_SUCC && len == sizeof(saved) && spi_validate_settings(&saved)) {
         g_settings = saved;
         g_settings.cmd = SPI_CMD_QUERY;
+        osal_printk("[DWS_S] NV settings loaded: mode=%u vol=%u bri=%u bass=%u\r\n", (unsigned)g_settings.mode,
+                    (unsigned)g_settings.volume, (unsigned)g_settings.brightness, (unsigned)g_settings.bass);
+    } else {
+        osal_printk("[DWS_S] NV settings unavailable: ret=%d len=%u\r\n", (int)ret, (unsigned)len);
     }
 }
 
 static bool g_nv_dirty = false;
 static uint64_t g_nv_last_change_tick = 0;
+
+static bool spi_settings_payload_equal(const spi_settings_t *a, const spi_settings_t *b)
+{
+    return a->hotspot_network == b->hotspot_network &&
+           a->mode == b->mode &&
+           a->volume == b->volume &&
+           a->brightness == b->brightness &&
+           a->bass == b->bass;
+}
+
+static void nv_mark_dirty_internal(bool local_change)
+{
+    g_nv_dirty = true;
+    g_nv_last_change_tick = uapi_systick_get_ms();
+    if (local_change) {
+        g_slave_sync_pending = true;
+    }
+}
 
 /**
  * @brief 将当前 SPI 配置写入 NV 持久化。
@@ -50,8 +74,7 @@ static uint64_t g_nv_last_change_tick = 0;
  */
 void nv_mark_dirty(void)
 {
-    g_nv_dirty = true;
-    g_nv_last_change_tick = uapi_systick_get_ms();
+    nv_mark_dirty_internal(true);
 }
 
 /**
@@ -97,7 +120,7 @@ void *spi_slave_task(void *arg)
 
     while (true) {
         spi_settings_t response = g_settings;
-        response.cmd = SPI_CMD_QUERY;
+        response.cmd = g_slave_sync_pending ? SPI_CMD_SYNC : SPI_CMD_QUERY;
 
         int ret = spi.transfer(rx_buf, sed_ws63::dws_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
         if (ret != 0) {
@@ -115,12 +138,16 @@ void *spi_slave_task(void *arg)
             ((uint8_t *)&master_settings)[i] = rx_buf[i];
         }
         if (spi_validate_settings(&master_settings) && master_settings.cmd == SPI_CMD_SYNC) {
-            g_settings.hotspot_network = master_settings.hotspot_network;
-            g_settings.mode = master_settings.mode;
-            g_settings.volume = master_settings.volume;
-            g_settings.brightness = master_settings.brightness;
-            g_settings.bass = master_settings.bass;
-            nv_mark_dirty();
+            bool changed = !spi_settings_payload_equal(&g_settings, &master_settings);
+            if (changed) {
+                g_settings.hotspot_network = master_settings.hotspot_network;
+                g_settings.mode = master_settings.mode;
+                g_settings.volume = master_settings.volume;
+                g_settings.brightness = master_settings.brightness;
+                g_settings.bass = master_settings.bass;
+                nv_mark_dirty_internal(false);
+            }
+            g_slave_sync_pending = false;
         }
 
         audio_result_t tmp;

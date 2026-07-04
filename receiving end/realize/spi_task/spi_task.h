@@ -14,3 +14,6 @@ void spi_settings_update_brightness(uint8_t brightness);
 void spi_settings_update_bass(uint8_t bass);
 
 const spi_settings_t *get_spi_settings();
+
+int spi_settings_load_from_nv(void);
+void spi_settings_nv_flush_if_idle(void);

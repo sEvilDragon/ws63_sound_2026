@@ -1,6 +1,14 @@
 #include "spi_task.h"
 #include "dws_master.hpp"
 
+extern "C" {
+#include "nv.h"
+#include "systick.h"
+}
+
+#define NV_KEY_SPI_SETTINGS 0x5001
+#define NV_FLUSH_DELAY_MS 5000
+
 static const char *mode_name(uint8_t mode)
 {
     switch (mode) {
@@ -22,6 +30,9 @@ static const char *mode_name(uint8_t mode)
 static spi_settings_t g_settings = {
     SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
 
+static bool g_nv_dirty = false;
+static uint64_t g_nv_last_change_tick = 0;
+
 static bool spi_settings_payload_equal(const spi_settings_t *a, const spi_settings_t *b)
 {
     return a->hotspot_network == b->hotspot_network &&
@@ -36,12 +47,74 @@ const spi_settings_t *get_spi_settings()
     return &g_settings;
 }
 
+static void spi_settings_mark_dirty(void)
+{
+    g_nv_dirty = true;
+    g_nv_last_change_tick = uapi_systick_get_ms();
+}
+
+static void spi_settings_apply_payload(const spi_settings_t *src)
+{
+    if (src == nullptr || !spi_validate_settings(src)) {
+        return;
+    }
+
+    if (spi_settings_payload_equal(&g_settings, src)) {
+        return;
+    }
+
+    g_settings.hotspot_network = src->hotspot_network;
+    g_settings.mode = src->mode;
+    g_settings.volume = src->volume;
+    g_settings.brightness = src->brightness;
+    g_settings.bass = src->bass;
+    spi_settings_mark_dirty();
+}
+
+int spi_settings_load_from_nv(void)
+{
+    uint16_t len = 0;
+    spi_settings_t saved;
+    errcode_t ret = uapi_nv_read(NV_KEY_SPI_SETTINGS, sizeof(saved), &len, (uint8_t *)&saved);
+    if (ret == ERRCODE_SUCC && len == sizeof(saved) && spi_validate_settings(&saved)) {
+        g_settings = saved;
+        g_settings.cmd = SPI_CMD_QUERY;
+        osal_printk("[DWS_M] NV settings loaded: mode=%s vol=%u bri=%u bass=%u\r\n", mode_name(g_settings.mode),
+                    (unsigned)g_settings.volume, (unsigned)g_settings.brightness, (unsigned)g_settings.bass);
+        return 1;
+    }
+
+    osal_printk("[DWS_M] NV settings unavailable: ret=%d len=%u\r\n", (int)ret, (unsigned)len);
+    return 0;
+}
+
+void spi_settings_nv_flush_if_idle(void)
+{
+    if (!g_nv_dirty) {
+        return;
+    }
+
+    uint64_t now = uapi_systick_get_ms();
+    if (now - g_nv_last_change_tick < NV_FLUSH_DELAY_MS) {
+        return;
+    }
+
+    spi_settings_t saved = g_settings;
+    saved.cmd = SPI_CMD_QUERY;
+    errcode_t ret = uapi_nv_write(NV_KEY_SPI_SETTINGS, (const uint8_t *)&saved, sizeof(saved));
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[DWS_M] NV write failed: %d\r\n", (int)ret);
+    }
+    g_nv_dirty = false;
+}
+
 void spi_settings_update_hotspot_network(uint8_t hotspot, uint8_t network)
 {
     uint8_t packed = spi_make_hotspot_network(hotspot, network);
     if (spi_validate_hotspot_network(packed)) {
         g_settings.hotspot_network = packed;
         g_settings.cmd = SPI_CMD_SYNC;
+        spi_settings_mark_dirty();
     }
 }
 
@@ -50,6 +123,7 @@ void spi_settings_update_mode(uint8_t mode)
     if (spi_validate_mode(mode)) {
         g_settings.mode = mode;
         g_settings.cmd = SPI_CMD_SYNC;
+        spi_settings_mark_dirty();
     }
 }
 
@@ -58,6 +132,7 @@ void spi_settings_update_volume(uint8_t volume)
     if (spi_validate_percent(volume)) {
         g_settings.volume = volume;
         g_settings.cmd = SPI_CMD_SYNC;
+        spi_settings_mark_dirty();
     }
 }
 
@@ -66,6 +141,7 @@ void spi_settings_update_brightness(uint8_t brightness)
     if (spi_validate_percent(brightness)) {
         g_settings.brightness = brightness;
         g_settings.cmd = SPI_CMD_SYNC;
+        spi_settings_mark_dirty();
     }
 }
 
@@ -74,6 +150,7 @@ void spi_settings_update_bass(uint8_t bass)
     if (spi_validate_percent(bass)) {
         g_settings.bass = bass;
         g_settings.cmd = SPI_CMD_SYNC;
+        spi_settings_mark_dirty();
     }
 }
 
@@ -124,16 +201,18 @@ void *spi_master_task(void *arg)
                 ((uint8_t *)&resp)[i] = rx_buf[i];
             }
 
-            /* 仅在首次成功通信时从 slave 同步一次 NV 配置, 之后 master 为权威源 */
+            /* 首次通信从控制端同步一次; 运行中控制端本地变更通过回包 SYNC 推送。 */
             static bool boot_sync_done = false;
             if (!boot_sync_done && tx_settings_snapshot.cmd != SPI_CMD_SYNC && spi_validate_settings(&resp)) {
-                g_settings.hotspot_network = resp.hotspot_network;
-                g_settings.mode = resp.mode;
-                g_settings.volume = resp.volume;
-                g_settings.brightness = resp.brightness;
-                g_settings.bass = resp.bass;
+                spi_settings_apply_payload(&resp);
                 g_settings.cmd = SPI_CMD_QUERY;
                 boot_sync_done = true;
+            }
+
+            if (tx_settings_snapshot.cmd != SPI_CMD_SYNC && boot_sync_done && resp.cmd == SPI_CMD_SYNC &&
+                spi_validate_settings(&resp)) {
+                spi_settings_apply_payload(&resp);
+                g_settings.cmd = SPI_CMD_SYNC;
             }
 
             if (tx_settings_snapshot.cmd == SPI_CMD_SYNC && spi_settings_payload_equal(&resp, &tx_settings_snapshot) &&
@@ -156,6 +235,7 @@ void *spi_master_task(void *arg)
             prev_bass = g_settings.bass;
         }
 
+        spi_settings_nv_flush_if_idle();
         osal_msleep(50);
     }
     return nullptr;
