@@ -3,6 +3,278 @@
 #include "spi_task.h"
 #include <math.h>
 
+static constexpr uint8_t VISUAL_COLS = 9;
+static constexpr uint16_t FRAME_MS = 30;
+static constexpr uint16_t VOLUME_OVERLAY_MS = 1000;
+static constexpr uint16_t MODE_WAVE_MS = 720;
+static constexpr uint16_t SLIDE_OVERLAY_MS = 600;
+
+enum class overlay_type_t : uint8_t {
+    NONE = 0,
+    VOLUME,
+    MODE_WAVE,
+    SLIDE,
+};
+
+enum class slide_dir_t : uint8_t {
+    LEFT_TO_RIGHT = 0,
+    RIGHT_TO_LEFT,
+};
+
+struct overlay_state_t {
+    overlay_type_t type;
+    uint16_t age_ms;
+    uint16_t duration_ms;
+    uint8_t value;
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    slide_dir_t dir;
+};
+
+static uint8_t overlay_priority(overlay_type_t type)
+{
+    switch (type) {
+        case overlay_type_t::MODE_WAVE:
+            return 3;
+        case overlay_type_t::SLIDE:
+            return 2;
+        case overlay_type_t::VOLUME:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static void start_overlay(overlay_state_t *overlay, const overlay_state_t &next)
+{
+    if (overlay_priority(next.type) >= overlay_priority(overlay->type)) {
+        *overlay = next;
+    }
+}
+
+static uint8_t visual_col_from_index(uint8_t i)
+{
+    return (i < VISUAL_COLS) ? i : (uint8_t)(17 - i);
+}
+
+static void set_visual_column(sed_ws63::sk9822_led &led, uint8_t col, uint8_t r, uint8_t g, uint8_t b,
+                              uint8_t brightness)
+{
+    if (col >= VISUAL_COLS) {
+        return;
+    }
+    led.set_pixel(col, r, g, b, brightness);
+    led.set_pixel((uint8_t)(17 - col), r, g, b, brightness);
+}
+
+static uint8_t clamp_u8(float v)
+{
+    if (v <= 0.0f) {
+        return 0;
+    }
+    if (v >= 255.0f) {
+        return 255;
+    }
+    return (uint8_t)v;
+}
+
+static uint8_t white_level_from_brightness(uint8_t brightness_percent)
+{
+    if (brightness_percent == 0) {
+        return 0;
+    }
+    if (brightness_percent > 100) {
+        brightness_percent = 100;
+    }
+    return (uint8_t)(24 + (uint16_t)brightness_percent * 156 / 100);
+}
+
+static void scale_overlay_color(uint8_t src_r, uint8_t src_g, uint8_t src_b, float strength,
+                                uint8_t brightness_percent, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    if (strength <= 0.0f) {
+        *r = 0;
+        *g = 0;
+        *b = 0;
+        return;
+    }
+    if (strength > 1.0f) {
+        strength = 1.0f;
+    }
+
+    float white_cap = 1.0f;
+    if (src_r > 200 && src_g > 200 && src_b > 200) {
+        white_cap = (float)white_level_from_brightness(brightness_percent) / 255.0f;
+    }
+
+    *r = clamp_u8((float)src_r * strength * white_cap);
+    *g = clamp_u8((float)src_g * strength * white_cap);
+    *b = clamp_u8((float)src_b * strength * white_cap);
+}
+
+static void mode_color(uint8_t mode, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    switch (mode) {
+        case SPI_MODE_SLE:
+        case SPI_MODE_SLE_MIC:
+            *r = 0;
+            *g = 255;
+            *b = 0;
+            break;
+        case SPI_MODE_DLNA:
+        case SPI_MODE_DLNA_NET:
+            *r = 255;
+            *g = 0;
+            *b = 0;
+            break;
+        case SPI_MODE_WIREED:
+        default:
+            *r = 255;
+            *g = 255;
+            *b = 255;
+            break;
+    }
+}
+
+static void start_volume_overlay(overlay_state_t *overlay, uint8_t volume)
+{
+    overlay_state_t next = {overlay_type_t::VOLUME, 0, VOLUME_OVERLAY_MS, volume, 255, 255, 255,
+                            slide_dir_t::LEFT_TO_RIGHT};
+    start_overlay(overlay, next);
+}
+
+static void start_mode_overlay(overlay_state_t *overlay, uint8_t mode)
+{
+    overlay_state_t next = {overlay_type_t::MODE_WAVE, 0, MODE_WAVE_MS, 0, 255, 255, 255,
+                            slide_dir_t::LEFT_TO_RIGHT};
+    mode_color(mode, &next.r, &next.g, &next.b);
+    start_overlay(overlay, next);
+}
+
+static void start_slide_overlay(overlay_state_t *overlay, uint8_t r, uint8_t g, uint8_t b, slide_dir_t dir)
+{
+    overlay_state_t next = {overlay_type_t::SLIDE, 0, SLIDE_OVERLAY_MS, 0, r, g, b, dir};
+    start_overlay(overlay, next);
+}
+
+static void render_volume_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+                                  uint8_t brightness_percent)
+{
+    uint8_t lit_cols = overlay.value == 0 ? 0 : (uint8_t)(((uint16_t)overlay.value * VISUAL_COLS + 99) / 100);
+    if (lit_cols > VISUAL_COLS) {
+        lit_cols = VISUAL_COLS;
+    }
+
+    uint8_t white = white_level_from_brightness(brightness_percent);
+    for (uint8_t col = 0; col < VISUAL_COLS; col++) {
+        if (col < lit_cols) {
+            set_visual_column(led, col, white, white, white, brightness);
+        } else {
+            set_visual_column(led, col, 0, 0, 0, brightness);
+        }
+    }
+}
+
+static void render_mode_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+                                uint8_t brightness_percent)
+{
+    float progress = (float)overlay.age_ms / (float)overlay.duration_ms;
+    if (progress < 0.0f) {
+        progress = 0.0f;
+    }
+    if (progress > 1.0f) {
+        progress = 1.0f;
+    }
+
+    float eased = progress * progress * (3.0f - 2.0f * progress);
+    float radius = eased * 4.55f;
+    float width = 0.72f + sinf(progress * 3.14159265f) * 0.95f;
+    float fade = 0.82f - progress * 0.22f;
+    if (fade < 0.35f) {
+        fade = 0.35f;
+    }
+
+    for (uint8_t col = 0; col < VISUAL_COLS; col++) {
+        float dist = fabsf((float)col - 4.0f);
+        float edge = fabsf(dist - radius);
+        if (edge < width) {
+            float strength = (1.0f - edge / width) * fade;
+            uint8_t r, g, b;
+            scale_overlay_color(overlay.r, overlay.g, overlay.b, strength, brightness_percent, &r, &g, &b);
+            set_visual_column(led, col, r, g, b, brightness);
+        } else if (progress < 0.38f && dist < 0.65f) {
+            float center_strength = (0.38f - progress) / 0.38f * 0.42f;
+            uint8_t r, g, b;
+            scale_overlay_color(overlay.r, overlay.g, overlay.b, center_strength, brightness_percent, &r, &g, &b);
+            set_visual_column(led, col, r, g, b, brightness);
+        }
+    }
+}
+
+static void render_slide_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+                                 uint8_t brightness_percent)
+{
+    float progress = (float)(overlay.age_ms + FRAME_MS) / (float)overlay.duration_ms;
+    if (progress < 0.0f) {
+        progress = 0.0f;
+    }
+    if (progress > 1.0f) {
+        progress = 1.0f;
+    }
+
+    float span = (float)VISUAL_COLS + 1.6f;
+    float pos = (overlay.dir == slide_dir_t::LEFT_TO_RIGHT) ? (-0.8f + progress * span)
+                                                            : ((float)VISUAL_COLS - 0.2f - progress * span);
+    const float width = 1.35f;
+
+    for (uint8_t col = 0; col < VISUAL_COLS; col++) {
+        float dist = fabsf((float)col - pos);
+        if (dist < width) {
+            float strength = 1.0f - dist / width;
+            uint8_t r, g, b;
+            scale_overlay_color(overlay.r, overlay.g, overlay.b, strength, brightness_percent, &r, &g, &b);
+            set_visual_column(led, col, r, g, b, brightness);
+        }
+    }
+}
+
+static void render_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+                           uint8_t brightness_percent)
+{
+    if (overlay.type == overlay_type_t::NONE) {
+        return;
+    }
+
+    switch (overlay.type) {
+        case overlay_type_t::VOLUME:
+            render_volume_overlay(led, overlay, brightness, brightness_percent);
+            break;
+        case overlay_type_t::MODE_WAVE:
+            render_mode_overlay(led, overlay, brightness, brightness_percent);
+            break;
+        case overlay_type_t::SLIDE:
+            render_slide_overlay(led, overlay, brightness, brightness_percent);
+            break;
+        default:
+            break;
+    }
+}
+
+static void advance_overlay(overlay_state_t *overlay)
+{
+    if (overlay->type == overlay_type_t::NONE) {
+        return;
+    }
+
+    if (overlay->age_ms + FRAME_MS >= overlay->duration_ms) {
+        overlay->type = overlay_type_t::NONE;
+        overlay->age_ms = 0;
+        return;
+    }
+    overlay->age_ms += FRAME_MS;
+}
+
 static void hsv_to_rgb(uint16_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b)
 {
     h %= 360;
@@ -60,6 +332,8 @@ void *sk9822_task(void *arg)
     uint8_t beat_boost = 0;   /* 节拍脉冲计数 */
     float base_hue = 0.0f;   /* 增量累加色相, 避免速度变化时跳变 */
     uint16_t prev_hue0 = 0;  /* 诊断: 上一帧 LED0 色相 */
+    overlay_state_t overlay = {overlay_type_t::NONE, 0, 0, 0, 0, 0, 0, slide_dir_t::LEFT_TO_RIGHT};
+    spi_settings_t prev_settings = *get_spi_settings();
 
     while (true) {
         const audio_result_t *audio = get_audio_result();
@@ -105,8 +379,34 @@ void *sk9822_task(void *arg)
             base_hue -= 360.0f;
         uint16_t hue_int = (uint16_t)base_hue;
 
-        const spi_settings_t *settings = get_spi_settings();
-        uint8_t led_brightness = settings->brightness == 0 ? 0 : (uint8_t)(3 + settings->brightness * 28 / 100);
+        spi_settings_t cur_settings = *get_spi_settings();
+
+        uint8_t prev_hotspot = spi_get_hotspot(prev_settings.hotspot_network);
+        uint8_t cur_hotspot = spi_get_hotspot(cur_settings.hotspot_network);
+        uint8_t prev_network = spi_get_network(prev_settings.hotspot_network);
+        uint8_t cur_network = spi_get_network(cur_settings.hotspot_network);
+
+        bool volume_changed = cur_settings.volume != prev_settings.volume;
+        bool mode_changed = cur_settings.mode != prev_settings.mode;
+        bool hotspot_changed = cur_hotspot != prev_hotspot;
+        bool network_changed = cur_network != prev_network;
+
+        if (volume_changed) {
+            start_volume_overlay(&overlay, cur_settings.volume);
+        }
+        if (mode_changed) {
+            start_mode_overlay(&overlay, cur_settings.mode);
+        }
+        if (!mode_changed && hotspot_changed) {
+            slide_dir_t dir = (cur_hotspot == SPI_HOTSPOT_ON) ? slide_dir_t::LEFT_TO_RIGHT : slide_dir_t::RIGHT_TO_LEFT;
+            start_slide_overlay(&overlay, 255, 220, 0, dir);
+        } else if (!mode_changed && network_changed) {
+            slide_dir_t dir = (cur_network == SPI_NETWORK_CONN) ? slide_dir_t::LEFT_TO_RIGHT : slide_dir_t::RIGHT_TO_LEFT;
+            start_slide_overlay(&overlay, 0, 80, 255, dir);
+        }
+        prev_settings = cur_settings;
+
+        uint8_t led_brightness = cur_settings.brightness == 0 ? 0 : (uint8_t)(3 + cur_settings.brightness * 28 / 100);
 
         /* 音乐层: 弹簧式伸缩 + 左右相位摇晃; 静音时 fx_level=0, 不参与显示 */
         float spring = sinf((float)tick * 0.55f) * fx_level;        /* 伸缩相位 */
@@ -123,7 +423,7 @@ void *sk9822_task(void *arg)
             hsv_to_rgb(hue, sat_base, bright_base, &base_r, &base_g, &base_b);
 
             /* 物理排列: 第一排 1..9, 第二排 18..10, 第二排反向映射得到视觉列 */
-            uint8_t pos = (i < 9) ? i : (uint8_t)(17 - i); /* 视觉位置 0..8, 左到右 */
+            uint8_t pos = visual_col_from_index(i); /* 视觉位置 0..8, 左到右 */
             bool upper_row = (i < 9);
 
             /* 两排略错相: 仍围绕中心, 但不完全镜像 */
@@ -175,7 +475,9 @@ void *sk9822_task(void *arg)
             led.set_pixel(i, r, g, b, led_brightness);
         }
 
+        render_overlay(led, overlay, led_brightness, cur_settings.brightness);
         led.update();
+        advance_overlay(&overlay);
 
         /* 诊断: 检测 LED0 色相跳变 (正常增量 3~15°, 超过 20° 即异常) */
         {
