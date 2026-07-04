@@ -22,6 +22,15 @@ static const char *mode_name(uint8_t mode)
 static spi_settings_t g_settings = {
     SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
 
+static bool spi_settings_payload_equal(const spi_settings_t *a, const spi_settings_t *b)
+{
+    return a->hotspot_network == b->hotspot_network &&
+           a->mode == b->mode &&
+           a->volume == b->volume &&
+           a->brightness == b->brightness &&
+           a->bass == b->bass;
+}
+
 const spi_settings_t *get_spi_settings()
 {
     return &g_settings;
@@ -96,8 +105,8 @@ void *spi_master_task(void *arg)
         for (int i = 0; i < SPI_SETTINGS_LEN; i++) {
             tx_buf[i] = settings_bytes[i];
         }
-        /* 记录本帧实际发送的 cmd, 防止 transfer 期间被外部改掉后误清除 SYNC */
-        uint8_t tx_cmd_snapshot = g_settings.cmd;
+        /* 记录本帧实际发送的设置, 防止 transfer 期间被外部改掉后误清除 SYNC */
+        spi_settings_t tx_settings_snapshot = g_settings;
         tx_buf[SPI_AUDIO_OFFSET + 0] = audio.bands[0];
         tx_buf[SPI_AUDIO_OFFSET + 1] = audio.bands[1];
         tx_buf[SPI_AUDIO_OFFSET + 2] = audio.bands[2];
@@ -117,7 +126,7 @@ void *spi_master_task(void *arg)
 
             /* 仅在首次成功通信时从 slave 同步一次 NV 配置, 之后 master 为权威源 */
             static bool boot_sync_done = false;
-            if (!boot_sync_done && spi_validate_settings(&resp)) {
+            if (!boot_sync_done && tx_settings_snapshot.cmd != SPI_CMD_SYNC && spi_validate_settings(&resp)) {
                 g_settings.hotspot_network = resp.hotspot_network;
                 g_settings.mode = resp.mode;
                 g_settings.volume = resp.volume;
@@ -126,10 +135,12 @@ void *spi_master_task(void *arg)
                 g_settings.cmd = SPI_CMD_QUERY;
                 boot_sync_done = true;
             }
-        }
 
-        if (tx_cmd_snapshot == SPI_CMD_SYNC) {
-            g_settings.cmd = SPI_CMD_QUERY;
+            if (tx_settings_snapshot.cmd == SPI_CMD_SYNC && spi_settings_payload_equal(&resp, &tx_settings_snapshot) &&
+                spi_settings_payload_equal(&g_settings, &tx_settings_snapshot)) {
+                g_settings.cmd = SPI_CMD_QUERY;
+                boot_sync_done = true;
+            }
         }
 
         if (g_settings.mode != prev_mode) {

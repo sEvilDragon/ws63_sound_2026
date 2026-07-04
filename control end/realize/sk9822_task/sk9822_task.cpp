@@ -6,7 +6,7 @@
 static constexpr uint8_t VISUAL_COLS = 9;
 static constexpr uint16_t FRAME_MS = 30;
 static constexpr uint16_t VOLUME_OVERLAY_MS = 1000;
-static constexpr uint16_t MODE_WAVE_MS = 720;
+static constexpr uint16_t MODE_WAVE_MS = 570;
 static constexpr uint16_t SLIDE_OVERLAY_MS = 600;
 
 enum class overlay_type_t : uint8_t {
@@ -58,14 +58,38 @@ static uint8_t visual_col_from_index(uint8_t i)
     return (i < VISUAL_COLS) ? i : (uint8_t)(17 - i);
 }
 
-static void set_visual_column(sed_ws63::sk9822_led &led, uint8_t col, uint8_t r, uint8_t g, uint8_t b,
-                              uint8_t brightness)
+static uint8_t screen_channel(uint8_t base, uint8_t overlay)
+{
+    return (uint8_t)((uint16_t)base + (uint16_t)overlay * (255 - base) / 255);
+}
+
+static void set_visual_column(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, uint8_t col, uint8_t r, uint8_t g,
+                              uint8_t b)
 {
     if (col >= VISUAL_COLS) {
         return;
     }
-    led.set_pixel(col, r, g, b, brightness);
-    led.set_pixel((uint8_t)(17 - col), r, g, b, brightness);
+    r_buf[col] = r;
+    g_buf[col] = g;
+    b_buf[col] = b;
+    r_buf[17 - col] = r;
+    g_buf[17 - col] = g;
+    b_buf[17 - col] = b;
+}
+
+static void blend_visual_column(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, uint8_t col, uint8_t r, uint8_t g,
+                                uint8_t b)
+{
+    if (col >= VISUAL_COLS) {
+        return;
+    }
+    uint8_t mirror = (uint8_t)(17 - col);
+    r_buf[col] = screen_channel(r_buf[col], r);
+    g_buf[col] = screen_channel(g_buf[col], g);
+    b_buf[col] = screen_channel(b_buf[col], b);
+    r_buf[mirror] = screen_channel(r_buf[mirror], r);
+    g_buf[mirror] = screen_channel(g_buf[mirror], g);
+    b_buf[mirror] = screen_channel(b_buf[mirror], b);
 }
 
 static uint8_t clamp_u8(float v)
@@ -158,7 +182,7 @@ static void start_slide_overlay(overlay_state_t *overlay, uint8_t r, uint8_t g, 
     start_overlay(overlay, next);
 }
 
-static void render_volume_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+static void render_volume_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, const overlay_state_t &overlay,
                                   uint8_t brightness_percent)
 {
     uint8_t lit_cols = overlay.value == 0 ? 0 : (uint8_t)(((uint16_t)overlay.value * VISUAL_COLS + 99) / 100);
@@ -169,14 +193,14 @@ static void render_volume_overlay(sed_ws63::sk9822_led &led, const overlay_state
     uint8_t white = white_level_from_brightness(brightness_percent);
     for (uint8_t col = 0; col < VISUAL_COLS; col++) {
         if (col < lit_cols) {
-            set_visual_column(led, col, white, white, white, brightness);
+            set_visual_column(r_buf, g_buf, b_buf, col, white, white, white);
         } else {
-            set_visual_column(led, col, 0, 0, 0, brightness);
+            set_visual_column(r_buf, g_buf, b_buf, col, 0, 0, 0);
         }
     }
 }
 
-static void render_mode_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+static void render_mode_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, const overlay_state_t &overlay,
                                 uint8_t brightness_percent)
 {
     float progress = (float)overlay.age_ms / (float)overlay.duration_ms;
@@ -187,32 +211,50 @@ static void render_mode_overlay(sed_ws63::sk9822_led &led, const overlay_state_t
         progress = 1.0f;
     }
 
-    float eased = progress * progress * (3.0f - 2.0f * progress);
-    float radius = eased * 4.55f;
-    float width = 0.72f + sinf(progress * 3.14159265f) * 0.95f;
-    float fade = 0.82f - progress * 0.22f;
+    float inv = 1.0f - progress;
+    float eased = 1.0f - inv * inv * inv;
+    float radius = eased * 4.65f;
+    float head_width = 0.46f + progress * 0.38f;
+    float trail_len = 1.15f + sinf(progress * 3.14159265f) * 1.05f;
+    float fade = 0.88f - progress * 0.20f;
     if (fade < 0.35f) {
         fade = 0.35f;
     }
 
     for (uint8_t col = 0; col < VISUAL_COLS; col++) {
         float dist = fabsf((float)col - 4.0f);
-        float edge = fabsf(dist - radius);
-        if (edge < width) {
-            float strength = (1.0f - edge / width) * fade;
+        float head_edge = fabsf(dist - radius);
+        float strength = 0.0f;
+
+        if (head_edge < head_width) {
+            float k = 1.0f - head_edge / head_width;
+            strength = k * k * fade;
+        }
+
+        float behind = radius - dist;
+        if (behind > 0.0f && behind < trail_len) {
+            float trail = (1.0f - behind / trail_len) * (0.45f + progress * 0.18f);
+            if (trail > strength) {
+                strength = trail;
+            }
+        }
+
+        if (progress < 0.28f && dist < 0.75f) {
+            float center_strength = (0.28f - progress) / 0.28f * 0.38f;
+            if (center_strength > strength) {
+                strength = center_strength;
+            }
+        }
+
+        if (strength > 0.0f) {
             uint8_t r, g, b;
             scale_overlay_color(overlay.r, overlay.g, overlay.b, strength, brightness_percent, &r, &g, &b);
-            set_visual_column(led, col, r, g, b, brightness);
-        } else if (progress < 0.38f && dist < 0.65f) {
-            float center_strength = (0.38f - progress) / 0.38f * 0.42f;
-            uint8_t r, g, b;
-            scale_overlay_color(overlay.r, overlay.g, overlay.b, center_strength, brightness_percent, &r, &g, &b);
-            set_visual_column(led, col, r, g, b, brightness);
+            blend_visual_column(r_buf, g_buf, b_buf, col, r, g, b);
         }
     }
 }
 
-static void render_slide_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+static void render_slide_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, const overlay_state_t &overlay,
                                  uint8_t brightness_percent)
 {
     float progress = (float)(overlay.age_ms + FRAME_MS) / (float)overlay.duration_ms;
@@ -234,12 +276,12 @@ static void render_slide_overlay(sed_ws63::sk9822_led &led, const overlay_state_
             float strength = 1.0f - dist / width;
             uint8_t r, g, b;
             scale_overlay_color(overlay.r, overlay.g, overlay.b, strength, brightness_percent, &r, &g, &b);
-            set_visual_column(led, col, r, g, b, brightness);
+            blend_visual_column(r_buf, g_buf, b_buf, col, r, g, b);
         }
     }
 }
 
-static void render_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &overlay, uint8_t brightness,
+static void render_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, const overlay_state_t &overlay,
                            uint8_t brightness_percent)
 {
     if (overlay.type == overlay_type_t::NONE) {
@@ -248,13 +290,13 @@ static void render_overlay(sed_ws63::sk9822_led &led, const overlay_state_t &ove
 
     switch (overlay.type) {
         case overlay_type_t::VOLUME:
-            render_volume_overlay(led, overlay, brightness, brightness_percent);
+            render_volume_overlay(r_buf, g_buf, b_buf, overlay, brightness_percent);
             break;
         case overlay_type_t::MODE_WAVE:
-            render_mode_overlay(led, overlay, brightness, brightness_percent);
+            render_mode_overlay(r_buf, g_buf, b_buf, overlay, brightness_percent);
             break;
         case overlay_type_t::SLIDE:
-            render_slide_overlay(led, overlay, brightness, brightness_percent);
+            render_slide_overlay(r_buf, g_buf, b_buf, overlay, brightness_percent);
             break;
         default:
             break;
@@ -404,6 +446,11 @@ void *sk9822_task(void *arg)
             slide_dir_t dir = (cur_network == SPI_NETWORK_CONN) ? slide_dir_t::LEFT_TO_RIGHT : slide_dir_t::RIGHT_TO_LEFT;
             start_slide_overlay(&overlay, 0, 80, 255, dir);
         }
+        if (volume_changed || mode_changed || hotspot_changed || network_changed) {
+            osal_printk("[SK9822] event mode=%u vol=%u bri=%u hn=0x%02x\r\n", (unsigned)cur_settings.mode,
+                        (unsigned)cur_settings.volume, (unsigned)cur_settings.brightness,
+                        (unsigned)cur_settings.hotspot_network);
+        }
         prev_settings = cur_settings;
 
         uint8_t led_brightness = cur_settings.brightness == 0 ? 0 : (uint8_t)(3 + cur_settings.brightness * 28 / 100);
@@ -413,6 +460,10 @@ void *sk9822_task(void *arg)
         float spring_scale = 1.0f + spring * 0.48f * beat_factor;  /* 音乐越强, 伸缩幅度越大 */
         float phase_wobble = sinf((float)tick * 0.23f) * fx_level * 0.82f;
         float hue_wobble = sinf((float)tick * 0.19f + fx_level * 3.0f) * 30.0f * fx_level;
+
+        uint8_t frame_r[sed_ws63::sk9822_led::NUM_LEDS];
+        uint8_t frame_g[sed_ws63::sk9822_led::NUM_LEDS];
+        uint8_t frame_b[sed_ws63::sk9822_led::NUM_LEDS];
 
         for (uint8_t i = 0; i < sed_ws63::sk9822_led::NUM_LEDS; i++) {
             /* 基础层按物理链路 0..17 环形流动: 第一排 1..9, 第二排 18..10 正好绕一圈 */
@@ -468,14 +519,15 @@ void *sk9822_task(void *arg)
             if (fg > 255.0f) fg = 255.0f;
             if (fb > 255.0f) fb = 255.0f;
 
-            uint8_t r = (uint8_t)fr;
-            uint8_t g = (uint8_t)fg;
-            uint8_t b = (uint8_t)fb;
-
-            led.set_pixel(i, r, g, b, led_brightness);
+            frame_r[i] = (uint8_t)fr;
+            frame_g[i] = (uint8_t)fg;
+            frame_b[i] = (uint8_t)fb;
         }
 
-        render_overlay(led, overlay, led_brightness, cur_settings.brightness);
+        render_overlay(frame_r, frame_g, frame_b, overlay, cur_settings.brightness);
+        for (uint8_t i = 0; i < sed_ws63::sk9822_led::NUM_LEDS; i++) {
+            led.set_pixel(i, frame_r[i], frame_g[i], frame_b[i], led_brightness);
+        }
         led.update();
         advance_overlay(&overlay);
 
