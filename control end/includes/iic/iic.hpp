@@ -20,6 +20,7 @@ public:
     ~iic_master() = default;
     bool iic_master_write(uint8_t *data, uint8_t len, uint16_t addr);
     bool iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *data_res, uint8_t len_res, uint16_t addr);
+    bool iic_master_read_only(uint8_t *data_res, uint8_t len_res, uint16_t addr);
 
 private:
     // iic相关激活函数

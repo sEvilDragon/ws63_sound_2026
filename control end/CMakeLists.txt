@@ -12,6 +12,7 @@ set(PUBLIC_HEADER "${PUBLIC_HEADER}"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/spi_task"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/ttp229"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/ui_task"
+    "${CMAKE_CURRENT_SOURCE_DIR}/realize/voice_task"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/sk9822_task"
     PARENT_SCOPE
 )

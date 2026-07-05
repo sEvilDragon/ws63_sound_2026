@@ -57,4 +57,18 @@ bool iic_master::iic_master_read(uint8_t *data_tar, uint8_t len_tra, uint8_t *da
     return true;
 }
 
+
+bool iic_master::iic_master_read_only(uint8_t *data_res, uint8_t len_res, uint16_t addr)
+{
+    i2c_data_t data_{};
+    data_.receive_buf = data_res;
+    data_.receive_len = len_res;
+    errcode_t err = uapi_i2c_master_read(I2C_BUS_1, addr, &data_);
+    if (err != 0) {
+        osal_printk("I2C read error: %d\n", err);
+        return false;
+    }
+    return true;
+}
+
 } // namespace sed_ws63

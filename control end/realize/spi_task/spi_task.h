@@ -15,6 +15,14 @@ void *spi_slave_task(void *arg);
 const spi_settings_t *get_spi_settings();
 const audio_result_t *get_audio_result();
 
+void spi_settings_update_hotspot_network(uint8_t hotspot, uint8_t network);
+void spi_settings_update_mode(uint8_t mode);
+void spi_settings_update_volume(uint8_t volume);
+void spi_settings_update_brightness(uint8_t brightness);
+void spi_settings_update_bass(uint8_t bass);
+void spi_settings_update_tone(uint8_t tone);
+void spi_settings_update_night(uint8_t enabled);
+
 /**
  * @brief 上电时从 NV 恢复上次保存的 SPI 配置。
  *        应在 uapi_nv_init() 之后、任何 UI 操作之前调用。

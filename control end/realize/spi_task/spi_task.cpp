@@ -75,6 +75,7 @@ static bool spi_settings_control_payload_equal(const spi_settings_t *a, const sp
            a->flags == b->flags;
 }
 
+
 static void nv_mark_dirty_internal(bool local_change)
 {
     g_nv_dirty = true;
@@ -91,6 +92,72 @@ static void nv_mark_dirty_internal(bool local_change)
 void nv_mark_dirty(void)
 {
     nv_mark_dirty_internal(true);
+}
+
+void spi_settings_update_hotspot_network(uint8_t hotspot, uint8_t network)
+{
+    uint8_t packed = spi_make_hotspot_network(hotspot, network);
+    if (!spi_validate_hotspot_network(packed) || g_settings.hotspot_network == packed) {
+        return;
+    }
+    g_settings.hotspot_network = packed;
+    nv_mark_dirty();
+}
+
+void spi_settings_update_mode(uint8_t mode)
+{
+    if (!spi_validate_mode(mode) || g_settings.mode == mode) {
+        return;
+    }
+    g_settings.mode = mode;
+    nv_mark_dirty();
+}
+
+void spi_settings_update_volume(uint8_t volume)
+{
+    if (!spi_validate_percent(volume) || g_settings.volume == volume) {
+        return;
+    }
+    g_settings.volume = volume;
+    nv_mark_dirty();
+}
+
+void spi_settings_update_brightness(uint8_t brightness)
+{
+    if (!spi_validate_percent(brightness) || g_settings.brightness == brightness) {
+        return;
+    }
+    g_settings.brightness = brightness;
+    nv_mark_dirty();
+}
+
+void spi_settings_update_bass(uint8_t bass)
+{
+    if (!spi_validate_percent(bass) || g_settings.bass == bass) {
+        return;
+    }
+    g_settings.bass = bass;
+    nv_mark_dirty();
+}
+
+void spi_settings_update_tone(uint8_t tone)
+{
+    if (!spi_validate_tone(tone) || g_settings.tone == tone) {
+        return;
+    }
+    g_settings.tone = tone;
+    nv_mark_dirty();
+}
+
+void spi_settings_update_night(uint8_t enabled)
+{
+    uint8_t flags = enabled ? (uint8_t)(g_settings.flags | SPI_FLAG_NIGHT)
+                            : (uint8_t)(g_settings.flags & (uint8_t)~SPI_FLAG_NIGHT);
+    if (g_settings.flags == flags) {
+        return;
+    }
+    g_settings.flags = flags;
+    nv_mark_dirty();
 }
 
 /**

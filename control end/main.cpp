@@ -6,6 +6,7 @@
 #include "ttp_task.h"
 #include "ui_task.h"
 #include "sk9822_task.h"
+#include "voice_task.h"
 
 #include "dma.h"
 
@@ -39,6 +40,9 @@ void app_entry(void)
     // (void)taskid;
 
     taskid = osal_kthread_create((osal_kthread_handler)ui_task, NULL, "ui_task", 2048);
+    (void)taskid;
+
+    taskid = osal_kthread_create((osal_kthread_handler)voice_task, NULL, "voice_task", 2048);
     (void)taskid;
 
     taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 2048);
