@@ -226,6 +226,7 @@ static void handle_config_mode(void)
         if (delta != 0) {
             if (g_ui.target == UI_TARGET_MODE) {
                 // mode 只有 3 个选项, 仍然用绝对位置映射
+                int mode_idx = (t->slider_pos / TTP_SLIDER_SCALE) % 3;
                 uint8_t new_mode = MODE_LIST[mode_idx];
                 spi_settings_t *s = (spi_settings_t *)get_spi_settings();
                 if (s->mode != new_mode) {

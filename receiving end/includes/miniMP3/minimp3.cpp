@@ -965,6 +965,7 @@ struct stream_ex_io_ctx {
     // start_offset 是相对于 Range 起始位置的偏移，seek_base 记录 Range 起始
     // 绝对字节位置，用于将第二次 seek 的偏移转换为绝对位置。
     uint64_t seek_base = 0;
+    uint64_t logical_base = 0; // Absolute byte offset that minimp3's relative offsets are based on.
 };
 
 // 从 HTTP 响应头中提取 Content-Length，返回 0 表示未找到或解析失败。
@@ -1079,6 +1080,9 @@ static size_t stream_ex_read_cb(void *buf, size_t size, void *user_data)
     static constexpr uint32_t k_read_timeout_ms = 8000;
 
     while (total < size) {
+        if (minimp3::should_interrupt_stream()) {
+            break;
+        }
         bool timed_out = false;
         int ret = stream_recv_some(ctx->transport, static_cast<uint8_t *>(buf) + total, static_cast<int>(size - total),
                                    &timed_out);
@@ -1297,12 +1301,13 @@ bool minimp3::is_playing = false;
 bool minimp3::is_url_ready = false;
 bool minimp3::is_paused = false;
 bool minimp3::s_has_range = false;
-bool minimp3::s_interrupt_stream = false;
+volatile bool minimp3::s_interrupt_stream = false;
 volatile uint32_t minimp3::s_stream_epoch = 1;
 uint64_t minimp3::s_range_start_byte = 0;
 uint64_t minimp3::s_resume_target_byte = 0;
 uint64_t minimp3::s_content_length = 0;
 uint32_t minimp3::s_duration_seconds = 0;
+uint64_t minimp3::s_mp3_start_offset = 0;
 uint64_t minimp3::s_bytes_streamed = 0;
 uint32_t minimp3::s_avg_bitrate_bps = 0;
 minimp3::iis_set_rate minimp3::iis_set_rate_func = nullptr;
@@ -1334,6 +1339,11 @@ void minimp3::bump_stream_epoch()
         s_stream_epoch++;
     }
     osal_irq_restore(irq);
+}
+
+bool minimp3::should_interrupt_stream()
+{
+    return s_interrupt_stream || s_exit_requested;
 }
 
 void minimp3::prepare_url(const char *url)
@@ -1390,15 +1400,13 @@ void minimp3::http_set_url(const char *url, bool start_playback)
         s_has_range = false;
         s_range_start_byte = 0;
         s_resume_target_byte = 0;
-        s_interrupt_stream = false;
+        s_interrupt_stream = true;
+        s_mp3_start_offset = 0;
         s_content_length = 0;
         s_duration_seconds = 0;
         s_bytes_streamed = 0;
         s_avg_bitrate_bps = 0;
-        if (is_playing) {
-            s_interrupt_stream = true;
-            minimp3::bump_stream_epoch();
-        }
+        minimp3::bump_stream_epoch();
     } else if (!is_playing && !is_url_ready) {
         // 同 URL 但暂停/停止恢复时，确保允许重新启动
         is_url_ready = true;
@@ -1428,7 +1436,7 @@ void minimp3::http_stop()
     s_has_range = false;
     s_range_start_byte = 0;
     s_resume_target_byte = 0;
-    s_interrupt_stream = false;
+    s_interrupt_stream = true;
     minimp3::bump_stream_epoch();
 }
 
@@ -1443,7 +1451,8 @@ void minimp3::http_clear_url()
     s_has_range = false;
     s_range_start_byte = 0;
     s_resume_target_byte = 0;
-    s_interrupt_stream = false;
+    s_interrupt_stream = true;
+    s_mp3_start_offset = 0;
     s_content_length = 0;
     s_duration_seconds = 0;
     s_bytes_streamed = 0;
@@ -1496,20 +1505,19 @@ bool minimp3::get_is_paused()
 
 void minimp3::seek_to_seconds(uint32_t seconds)
 {
-    uint64_t byte_offset = 0;
-    if (s_content_length > 0 && s_duration_seconds > 0) {
+    uint64_t byte_offset = s_mp3_start_offset;
+    if (s_content_length > s_mp3_start_offset && s_duration_seconds > 0) {
+        const uint64_t audio_bytes = s_content_length - s_mp3_start_offset;
         if (seconds >= s_duration_seconds) {
-            byte_offset = (s_content_length > 16U) ? (s_content_length - 16U) : 0U;
+            byte_offset = (s_content_length > 16U) ? (s_content_length - 16U) : s_mp3_start_offset;
         } else {
-            byte_offset = (uint64_t)seconds * s_content_length / (uint64_t)s_duration_seconds;
+            byte_offset = s_mp3_start_offset + (uint64_t)seconds * audio_bytes / (uint64_t)s_duration_seconds;
         }
     } else if (s_avg_bitrate_bps > 0) {
-        // 方案2: 按帧/平均比特率估算 (CBR 准确, VBR 近似)
-        byte_offset = (uint64_t)seconds * (s_avg_bitrate_bps / 8U);
+        byte_offset = s_mp3_start_offset + (uint64_t)seconds * (s_avg_bitrate_bps / 8U);
     } else {
-        // 兜底: 假设 128kbps CBR，在 s_content_length/s_avg_bitrate 均未就绪时用于粗跳
         static constexpr uint32_t k_fallback_bitrate_bps = 128000U;
-        byte_offset = (uint64_t)seconds * (k_fallback_bitrate_bps / 8U);
+        byte_offset = s_mp3_start_offset + (uint64_t)seconds * (k_fallback_bitrate_bps / 8U);
         MP3_LOG("seek_to_seconds: using fallback 128kbps (cl=%llu dur=%u bps=%u)\n",
                     static_cast<unsigned long long>(s_content_length), static_cast<unsigned>(s_duration_seconds),
                     static_cast<unsigned>(s_avg_bitrate_bps));
@@ -1520,6 +1528,7 @@ void minimp3::seek_to_seconds(uint32_t seconds)
     s_has_range = true;
     is_paused = false;
     is_playing = true;
+    s_interrupt_stream = true;
     minimp3::bump_stream_epoch();
     MP3_LOG("seek_to_seconds: %us -> target_byte=%llu range_start=%llu (cl=%llu dur=%us bps=%u)\n",
                 (unsigned)seconds, (unsigned long long)byte_offset, (unsigned long long)s_range_start_byte,
@@ -1554,6 +1563,7 @@ void minimp3::stream_mp3_to_iis()
     // PCM buffer for IIS output — 静态分配，避免堆碎片化导致分配失败
     static constexpr size_t k_pcm_batch_samples = 1152 * 2;
     static int16_t s_pcm_buf[k_pcm_batch_samples];
+    uint32_t active_epoch = s_stream_epoch;
     int16_t *pcm_buf = s_pcm_buf;
 
     while (true) {
@@ -1600,11 +1610,7 @@ void minimp3::stream_mp3_to_iis()
             free_stream_transport(io_ctx.transport);
             io_ctx.connected = false;
             io_ctx.stream_pos = 0;
-            // 等 LWIP / mbedTLS 超时释放 TCP PCB 内部资源，
-            // 避免下一次 malloc(18KB) 堆碎片失败。
-            if (open_retry_count == 0) {
-                osal_msleep(300);
-            }
+            iis::data_clear();
 
             // 内存压力检查：连续多次打开失败，等待更长时间以回收系统资源
             if (open_retry_count >= k_max_open_retries) {
@@ -1631,6 +1637,7 @@ void minimp3::stream_mp3_to_iis()
             io_ctx.seek_on_open = 0;
             io_ctx.seek_on_open_active = false;
             io_ctx.seek_base = 0;
+            io_ctx.logical_base = s_has_range ? s_range_start_byte : 0;
 
             // 处理 pending seek（来自 seek_to_seconds 或 resume）
             // 通过 seek_on_open，使 stream_ex_seek_cb 在 seek(0) 时使用 Range 请求
@@ -1642,6 +1649,8 @@ void minimp3::stream_mp3_to_iis()
             }
 
             // Fast open – byte-level seeking only, NO sample index (avoids full-file scan)
+            active_epoch = s_stream_epoch;
+            s_interrupt_stream = false;
             int ret = mp3dec_ex_open_cb(&dec, &io, MP3D_DO_NOT_SCAN);
             io_ctx.seek_on_open_active = false; // 清除标志
             if (ret != 0) {
@@ -1652,6 +1661,10 @@ void minimp3::stream_mp3_to_iis()
                 free_stream_transport(io_ctx.transport);
                 io_ctx.connected = false;
                 io_ctx.stream_pos = 0;
+                if (s_interrupt_stream || s_stream_epoch != active_epoch) {
+                    open_retry_count = 0;
+                    continue;
+                }
                 open_retry_count++;
                 uint32_t delay = k_open_retry_base_ms * (1U << (open_retry_count > 4 ? 4 : open_retry_count));
                 if (ret == MP3D_E_MEMORY) {
@@ -1662,11 +1675,23 @@ void minimp3::stream_mp3_to_iis()
                 osal_msleep(delay);
                 continue;
             }
+            if (s_interrupt_stream || s_stream_epoch != active_epoch) {
+                mp3dec_ex_close(&dec);
+                free_stream_transport(io_ctx.transport);
+                io_ctx.connected = false;
+                io_ctx.stream_pos = 0;
+                open_retry_count = 0;
+                continue;
+            }
             // 打开成功，重置重试计数
             open_retry_count = 0;
             dec_open = true;
             is_url_ready = false;
-            io_ctx.mp3_start_offset = dec.start_offset; // 记录文件中 MP3 音频起始偏移
+            io_ctx.mp3_start_offset = dec.start_offset;
+            if (io_ctx.logical_base == 0) {
+                s_mp3_start_offset = dec.start_offset;
+            }
+            // 记录文件中 MP3 音频起始偏移
 
             // 从 open_cb 已解码的第一帧头获取初始比特率（精确到帧），确保 seek 时 byte_offset 可用
             if (dec.info.bitrate_kbps > 0 && s_avg_bitrate_bps == 0) {
@@ -1689,12 +1714,11 @@ void minimp3::stream_mp3_to_iis()
                 MP3_LOG("minimp3_ex: seeked, Range start=%llu target=%llu\n",
                             static_cast<unsigned long long>(s_range_start_byte),
                             static_cast<unsigned long long>(s_resume_target_byte));
-                s_bytes_streamed = s_range_start_byte;
+                s_bytes_streamed = io_ctx.logical_base + dec.offset;
                 s_has_range = false;
-                s_resume_target_byte = 0;
                 s_range_start_byte = 0;
             } else {
-                s_bytes_streamed = 0; // 从头开始计数
+                s_bytes_streamed = io_ctx.logical_base + dec.offset; // 从头开始计数
             }
 
             // Apply detected sampling rate
@@ -1739,6 +1763,10 @@ void minimp3::stream_mp3_to_iis()
         mp3d_sample_t *frame_samples = nullptr;
         size_t n = mp3dec_ex_read_frame(&dec, &frame_samples, &frame_info, k_pcm_batch_samples);
 
+        if (s_interrupt_stream || s_stream_epoch != active_epoch) {
+            continue;
+        }
+
         // ===== Update position / bitrate trackers =====
         // 即使 n==0（跳过了非音频帧/to_skip），n=0 但 frame_bytes>0。
         // 始终更新位置追踪和比特率。
@@ -1746,7 +1774,7 @@ void minimp3::stream_mp3_to_iis()
             s_avg_bitrate_bps = static_cast<uint32_t>(frame_info.bitrate_kbps) * 1000U;
         }
         if (frame_info.frame_bytes > 0) {
-            s_bytes_streamed += static_cast<uint64_t>(frame_info.frame_bytes);
+            s_bytes_streamed = io_ctx.logical_base + dec.offset;
         }
 
         if (n == 0) {
@@ -1784,6 +1812,16 @@ void minimp3::stream_mp3_to_iis()
             const int old_hz = dec.info.hz;
             iis_set_rate_func(frame_info.hz);
             MP3_LOG("minimp3_ex: rate switch %d -> %d Hz\n", old_hz, frame_info.hz);
+        }
+
+        if (s_interrupt_stream || s_stream_epoch != active_epoch) {
+            continue;
+        }
+        if (s_resume_target_byte > 0) {
+            if (s_bytes_streamed < s_resume_target_byte) {
+                continue;
+            }
+            s_resume_target_byte = 0;
         }
 
         // ===== Push PCM to IIS =====

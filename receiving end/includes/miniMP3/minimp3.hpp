@@ -60,7 +60,7 @@ private:
     static bool is_url_ready;
     static bool is_paused;                   // 是否处于暂停状态
     static bool s_has_range;                 // 下次连接是否携带 Range 头
-    static bool s_interrupt_stream;          // 请求中断当前内层流循环（用于seek打断）
+    static volatile bool s_interrupt_stream;          // 请求中断当前内层流循环（用于seek打断）
     static volatile uint32_t s_stream_epoch; // 控制代际，避免旧流在pause/seek后继续喂PCM
     static uint64_t s_range_start_byte;      // Range 起始字节偏移
     static uint64_t s_resume_target_byte;    // 逻辑恢复点，Range 可从更早位置预卷启动
