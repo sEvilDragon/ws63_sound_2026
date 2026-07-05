@@ -20,7 +20,16 @@ extern "C" {
 #define SPI_MODE_SLE_MIC     0x55
 #define SPI_MODE_DLNA_NET    0xAA
 
-#define SPI_SETTINGS_LEN  6
+#define SPI_TONE_FLAT        0
+#define SPI_TONE_VOCAL       1
+#define SPI_TONE_BASS_BOOST  2
+#define SPI_TONE_POP         3
+#define SPI_TONE_ROCK        4
+
+#define SPI_FLAG_NIGHT       0x01
+
+#define SPI_SETTINGS_LEN  8
+#define SPI_SETTINGS_LEGACY_LEN 6
 
 typedef struct {
     uint8_t cmd;
@@ -29,6 +38,8 @@ typedef struct {
     uint8_t volume;
     uint8_t brightness;
     uint8_t bass;
+    uint8_t tone;
+    uint8_t flags;
 } spi_settings_t;
 
 static inline int spi_validate_cmd(uint8_t v)
@@ -55,6 +66,17 @@ static inline int spi_validate_percent(uint8_t v)
     return (v <= 100);
 }
 
+static inline int spi_validate_tone(uint8_t v)
+{
+    return (v == SPI_TONE_FLAT || v == SPI_TONE_VOCAL || v == SPI_TONE_BASS_BOOST ||
+            v == SPI_TONE_POP || v == SPI_TONE_ROCK);
+}
+
+static inline int spi_validate_flags(uint8_t v)
+{
+    return ((v & (uint8_t)~SPI_FLAG_NIGHT) == 0);
+}
+
 static inline int spi_validate_settings(const spi_settings_t *s)
 {
     if (!s) return 0;
@@ -63,7 +85,9 @@ static inline int spi_validate_settings(const spi_settings_t *s)
            spi_validate_mode(s->mode) &&
            spi_validate_percent(s->volume) &&
            spi_validate_percent(s->brightness) &&
-           spi_validate_percent(s->bass);
+           spi_validate_percent(s->bass) &&
+           spi_validate_tone(s->tone) &&
+           spi_validate_flags(s->flags);
 }
 
 static inline uint8_t spi_make_hotspot_network(uint8_t hotspot, uint8_t network)
@@ -79,6 +103,19 @@ static inline uint8_t spi_get_hotspot(uint8_t v)
 static inline uint8_t spi_get_network(uint8_t v)
 {
     return v & 0x0F;
+}
+
+static inline int spi_settings_is_night(const spi_settings_t *s)
+{
+    return (s != 0 && (s->flags & SPI_FLAG_NIGHT) != 0);
+}
+
+static inline uint8_t spi_settings_effective_brightness(const spi_settings_t *s)
+{
+    if (!s) {
+        return 0;
+    }
+    return spi_settings_is_night(s) && s->brightness > 15 ? 15 : s->brightness;
 }
 
 #ifdef __cplusplus

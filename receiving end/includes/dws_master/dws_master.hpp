@@ -40,6 +40,7 @@ public:
     int transfer(const uint8_t *tx_data, uint32_t tx_len, uint8_t *rx_data, uint32_t rx_len);
 
     static constexpr uint32_t TRANSFER_LEN = 16;
+    static constexpr uint32_t REPLY_LEN = 8;
 
 private:
     void pin_init();

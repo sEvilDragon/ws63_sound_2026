@@ -1,4 +1,4 @@
-﻿// WS63 LiteOS: 无 mmap/munmap/stdio，只用回调 API
+// WS63 LiteOS: 无 mmap/munmap/stdio，只用回调 API
 #define MINIMP3_NO_STDIO
 // IO 缓冲区 18KB，防止嵌入式堆分配失败
 // 系统总堆约 340KB，大部分被 TLS/套接字/HTTP 头部所占用
@@ -21,6 +21,19 @@ int munmap(void *addr, unsigned long length)
 }
 
 #include "minimp3.hpp"
+
+#ifndef MINIMP3_VERBOSE
+#define MINIMP3_VERBOSE 0
+#endif
+
+#if MINIMP3_VERBOSE
+#define MP3_LOG(fmt, ...) osal_printk(fmt, ##__VA_ARGS__)
+#else
+#define MP3_LOG(fmt, ...) \
+    do {                    \
+        (void)0;            \
+    } while (0)
+#endif
 
 // 【静态预分配 IO 缓冲区】替代动态分配，防止堆碎片导致分配失败
 // mp3dec_ex_open_cb 内部调用 malloc(MINIMP3_IO_SIZE)，极易碎片化失败。
@@ -355,7 +368,7 @@ bool open_tls_stream_transport(stream_transport &transport, const stream_url_des
     do {
         ret = mbedtls_ssl_handshake(&transport.tls_ssl);
         if (ret == 0) {
-            osal_printk("HTTPS握手成功: host=%s\n", url.host.data());
+            MP3_LOG("HTTPS握手成功: host=%s\n", url.host.data());
             return true;
         }
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret != MBEDTLS_ERR_SSL_TIMEOUT) {
@@ -736,7 +749,7 @@ void log_payload_preview(const char *tag, const uint8_t *data, int len, int max_
             asc[asc_pos] = '\0';
         }
     }
-    osal_printk("%s: len=%d guess=%s hex=%s ascii=%s\n", tag, len, classify_payload_prefix(data, len), hex.data(),
+    MP3_LOG("%s: len=%d guess=%s hex=%s ascii=%s\n", tag, len, classify_payload_prefix(data, len), hex.data(),
                 asc.data());
 }
 
@@ -1108,7 +1121,7 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
         position = ctx->seek_on_open;
         ctx->seek_on_open = 0;
         if (position > 0) {
-            osal_printk("ex-seek: seek_on_open redirect to Range bytes=%llu-\n",
+            MP3_LOG("ex-seek: seek_on_open redirect to Range bytes=%llu-\n",
                         static_cast<unsigned long long>(position));
             goto do_reconnect;
         }
@@ -1121,7 +1134,7 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
     // 使用 position < seek_base 作为判断：start_offset 永远远小于 seek_base。
     // 而 mp3dec_iterate_cb 内部的 ID3 seek 会被正确转换为绝对位置而不触发 seek_base。
     if (ctx->seek_base > 0 && position < ctx->seek_base) {
-        osal_printk("ex-seek: post-Range seek adjust: %llu + base %llu = %llu\n",
+        MP3_LOG("ex-seek: post-Range seek adjust: %llu + base %llu = %llu\n",
                     static_cast<unsigned long long>(position), static_cast<unsigned long long>(ctx->seek_base),
                     static_cast<unsigned long long>(position + ctx->seek_base));
         position += ctx->seek_base;
@@ -1136,7 +1149,7 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
         }
         // 超过阈值说明距离太远，Range 请求更可靠
         if (to_skip > k_max_drain_bytes) {
-            osal_printk("ex-seek: drain %llu exceeds limit %llu, reconnecting\n",
+            MP3_LOG("ex-seek: drain %llu exceeds limit %llu, reconnecting\n",
                         static_cast<unsigned long long>(to_skip), static_cast<unsigned long long>(k_max_drain_bytes));
             goto do_reconnect;
         }
@@ -1149,14 +1162,14 @@ static int stream_ex_seek_cb(uint64_t position, void *user_data)
             size_t got = stream_ex_read_cb(drain_buf, chunk, user_data);
             if (got == 0) {
                 // 连接断开则走重连路径
-                osal_printk("ex-seek: drain lost connection at %llu, reconnecting\n",
+                MP3_LOG("ex-seek: drain lost connection at %llu, reconnecting\n",
                             static_cast<unsigned long long>(ctx->stream_pos));
                 goto do_reconnect;
             }
             to_skip -= got;
             // stream_ex_read_cb 已更新 ctx->stream_pos
             if (stream_elapsed_ms(drain_start) > k_drain_timeout_ms) {
-                osal_printk("ex-seek: drain timeout, reconnecting\n");
+                MP3_LOG("ex-seek: drain timeout, reconnecting\n");
                 goto do_reconnect;
             }
         }
@@ -1185,7 +1198,7 @@ do_reconnect:
                  "Connection: close\r\n"
                  "Icy-MetaData: 0\r\n\r\n",
                  ctx->url.path.data(), ctx->url.host.data(), static_cast<unsigned long long>(position));
-        osal_printk("ex-seek: Range bytes=%llu-\n", static_cast<unsigned long long>(position));
+        MP3_LOG("ex-seek: Range bytes=%llu-\n", static_cast<unsigned long long>(position));
     } else {
         snprintf(request.data(), request.size(),
                  "GET %s HTTP/1.1\r\n"
@@ -1250,14 +1263,14 @@ do_reconnect:
         uint64_t cr_total = parse_content_range_total(header.data());
         if (cr_total > 0) {
             ctx->content_length = cr_total;
-            osal_printk("ex-seek: Content-Range total=%llu\n", static_cast<unsigned long long>(cr_total));
+            MP3_LOG("ex-seek: Content-Range total=%llu\n", static_cast<unsigned long long>(cr_total));
         } else if (position == 0) {
             // 仅在非 Range 请求(从头 GET)时使用 Content-Length。
             // Range 请求的 Content-Length 只是 range 块大小，不能作为文件总长度
             uint64_t cl = parse_content_length_from_header(header.data());
             if (cl > 0) {
                 ctx->content_length = cl;
-                osal_printk("ex-seek: Content-Length=%llu\n", static_cast<unsigned long long>(cl));
+                MP3_LOG("ex-seek: Content-Length=%llu\n", static_cast<unsigned long long>(cl));
             }
         }
     }
@@ -1267,7 +1280,7 @@ do_reconnect:
     if (status_end != nullptr) {
         char saved = *status_end;
         *status_end = '\0';
-        osal_printk("ex-seek HTTP: %s\n", header.data());
+        MP3_LOG("ex-seek HTTP: %s\n", header.data());
         *status_end = saved;
     }
 
@@ -1452,7 +1465,7 @@ void minimp3::pause_playback()
     is_paused = true;
     is_playing = false;
     s_interrupt_stream = true;
-    osal_printk("pause_playback: paused at byte %llu, Range start=%llu\n", (unsigned long long)s_resume_target_byte,
+    MP3_LOG("pause_playback: paused at byte %llu, Range start=%llu\n", (unsigned long long)s_resume_target_byte,
                 (unsigned long long)s_range_start_byte);
     minimp3::bump_stream_epoch();
 }
@@ -1460,7 +1473,7 @@ void minimp3::pause_playback()
 void minimp3::resume_playback()
 {
     if (!is_paused) {
-        osal_printk("resume_playback: not paused, ignored\n");
+        MP3_LOG("resume_playback: not paused, ignored\n");
         return;
     }
     if (current_url[0] == '\0') {
@@ -1468,7 +1481,7 @@ void minimp3::resume_playback()
         is_paused = false;
         return;
     }
-    osal_printk("resume_playback: resuming from byte %llu\n", static_cast<unsigned long long>(s_resume_target_byte));
+    MP3_LOG("resume_playback: resuming from byte %llu\n", static_cast<unsigned long long>(s_resume_target_byte));
     // 暂停时 TCP 连接已关闭。s_has_range 仍设置，主循环通过 REOPEN
     // 走 Range 请求恢复。IO 缓冲区为静态预分配，不会失败。
     is_paused = false;
@@ -1497,7 +1510,7 @@ void minimp3::seek_to_seconds(uint32_t seconds)
         // 兜底: 假设 128kbps CBR，在 s_content_length/s_avg_bitrate 均未就绪时用于粗跳
         static constexpr uint32_t k_fallback_bitrate_bps = 128000U;
         byte_offset = (uint64_t)seconds * (k_fallback_bitrate_bps / 8U);
-        osal_printk("seek_to_seconds: using fallback 128kbps (cl=%llu dur=%u bps=%u)\n",
+        MP3_LOG("seek_to_seconds: using fallback 128kbps (cl=%llu dur=%u bps=%u)\n",
                     static_cast<unsigned long long>(s_content_length), static_cast<unsigned>(s_duration_seconds),
                     static_cast<unsigned>(s_avg_bitrate_bps));
     }
@@ -1508,7 +1521,7 @@ void minimp3::seek_to_seconds(uint32_t seconds)
     is_paused = false;
     is_playing = true;
     minimp3::bump_stream_epoch();
-    osal_printk("seek_to_seconds: %us -> target_byte=%llu range_start=%llu (cl=%llu dur=%us bps=%u)\n",
+    MP3_LOG("seek_to_seconds: %us -> target_byte=%llu range_start=%llu (cl=%llu dur=%us bps=%u)\n",
                 (unsigned)seconds, (unsigned long long)byte_offset, (unsigned long long)s_range_start_byte,
                 (unsigned long long)s_content_length, (unsigned)s_duration_seconds, (unsigned)s_avg_bitrate_bps);
 }
@@ -1624,7 +1637,7 @@ void minimp3::stream_mp3_to_iis()
             if (s_has_range && s_resume_target_byte > 0) {
                 io_ctx.seek_on_open = s_range_start_byte;
                 io_ctx.seek_on_open_active = true;
-                osal_printk("minimp3_ex: seek_on_open Range bytes=%llu-\n",
+                MP3_LOG("minimp3_ex: seek_on_open Range bytes=%llu-\n",
                             static_cast<unsigned long long>(s_range_start_byte));
             }
 
@@ -1664,7 +1677,7 @@ void minimp3::stream_mp3_to_iis()
             // Content-Range 提供完整大小优先，非 Range 请求的 Content-Length 也可接受。
             if (io_ctx.content_length > 0) {
                 s_content_length = io_ctx.content_length;
-                osal_printk("minimp3_ex: Content-Length=%llu\n", static_cast<unsigned long long>(s_content_length));
+                MP3_LOG("minimp3_ex: Content-Length=%llu\n", static_cast<unsigned long long>(s_content_length));
             }
 
             // 处理 pending seek（来自 seek_to_seconds 等操作）
@@ -1673,7 +1686,7 @@ void minimp3::stream_mp3_to_iis()
             // 注意：无论 s_resume_target_byte 是否为 0，都重置 s_has_range，
             // 避免下一循环重复触发 mid-playback seek 的重新连接逻辑。
             if (s_has_range) {
-                osal_printk("minimp3_ex: seeked, Range start=%llu target=%llu\n",
+                MP3_LOG("minimp3_ex: seeked, Range start=%llu target=%llu\n",
                             static_cast<unsigned long long>(s_range_start_byte),
                             static_cast<unsigned long long>(s_resume_target_byte));
                 s_bytes_streamed = s_range_start_byte;
@@ -1687,22 +1700,22 @@ void minimp3::stream_mp3_to_iis()
             // Apply detected sampling rate
             if (dec.info.hz > 0 && iis_set_rate_func) {
                 iis_set_rate_func(dec.info.hz);
-                osal_printk("minimp3_ex: rate locked %d Hz, layer=%d ch=%d start_off=%llu\n", dec.info.hz,
+                MP3_LOG("minimp3_ex: rate locked %d Hz, layer=%d ch=%d start_off=%llu\n", dec.info.hz,
                             dec.info.layer, dec.info.channels,
                             static_cast<unsigned long long>(io_ctx.mp3_start_offset));
             }
             if (dec.detected_samples > 0 && dec.info.hz > 0) {
                 s_duration_seconds = static_cast<uint32_t>(dec.detected_samples / dec.info.hz);
-                osal_printk("minimp3_ex: duration %u s (from VBR tag)\n", static_cast<unsigned>(s_duration_seconds));
+                MP3_LOG("minimp3_ex: duration %u s (from VBR tag)\n", static_cast<unsigned>(s_duration_seconds));
             }
             if (dec.vbr_tag_found) {
-                osal_printk("minimp3_ex: VBR tag detected\n");
+                MP3_LOG("minimp3_ex: VBR tag detected\n");
             }
         }
 
         // ===== Pending seek during playback (e.g. DLNA seek / resume) =====
         if (s_has_range && dec_open) {
-            osal_printk("minimp3_ex: mid-playback seek to byte %llu\n",
+            MP3_LOG("minimp3_ex: mid-playback seek to byte %llu\n",
                         static_cast<unsigned long long>(s_resume_target_byte));
             // 清空 IIS，防止旧数据在切换到新位置时残留；单 data_write
             // 同线程无竞争。
@@ -1746,7 +1759,7 @@ void minimp3::stream_mp3_to_iis()
             if (dec.last_error != 0) {
                 osal_printk("minimp3_ex: decode error %d, stopping\n", dec.last_error);
             } else {
-                osal_printk("minimp3_ex: stream EOF at byte %llu, stopping playback\n",
+                MP3_LOG("minimp3_ex: stream EOF at byte %llu, stopping playback\n",
                             static_cast<unsigned long long>(io_ctx.stream_pos));
             }
             mp3dec_ex_close(&dec);
@@ -1770,7 +1783,7 @@ void minimp3::stream_mp3_to_iis()
         if (frame_info.hz > 0 && frame_info.hz != dec.info.hz && iis_set_rate_func) {
             const int old_hz = dec.info.hz;
             iis_set_rate_func(frame_info.hz);
-            osal_printk("minimp3_ex: rate switch %d -> %d Hz\n", old_hz, frame_info.hz);
+            MP3_LOG("minimp3_ex: rate switch %d -> %d Hz\n", old_hz, frame_info.hz);
         }
 
         // ===== Push PCM to IIS =====

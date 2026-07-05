@@ -12,7 +12,8 @@ extern "C" {
 #define NV_FLUSH_DELAY_MS 5000     /* 5 秒无操作后才写入 Flash */
 
 static spi_settings_t g_settings = {
-    SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0};
+    SPI_CMD_QUERY, (uint8_t)((SPI_HOTSPOT_OFF << 4) | SPI_NETWORK_CONN), SPI_MODE_WIREED, 25, 50, 0,
+    SPI_TONE_FLAT, 0};
 
 static bool g_slave_sync_pending = false;
 
@@ -35,13 +36,16 @@ const audio_result_t *get_audio_result()
 void nv_load_settings(void)
 {
     uint16_t len = 0;
-    spi_settings_t saved;
+    spi_settings_t saved = g_settings;
     errcode_t ret = uapi_nv_read(NV_KEY_SPI_SETTINGS, sizeof(saved), &len, (uint8_t *)&saved);
-    if (ret == ERRCODE_SUCC && len == sizeof(saved) && spi_validate_settings(&saved)) {
+    if (ret == ERRCODE_SUCC && (len == sizeof(saved) || len == SPI_SETTINGS_LEGACY_LEN) &&
+        spi_validate_settings(&saved)) {
         g_settings = saved;
         g_settings.cmd = SPI_CMD_QUERY;
-        osal_printk("[DWS_S] NV settings loaded: mode=%u vol=%u bri=%u bass=%u\r\n", (unsigned)g_settings.mode,
-                    (unsigned)g_settings.volume, (unsigned)g_settings.brightness, (unsigned)g_settings.bass);
+        g_settings.tone = SPI_TONE_FLAT;
+        osal_printk("[DWS_S] NV settings loaded: mode=%u vol=%u bri=%u bass=%u flags=0x%02x len=%u\r\n",
+                    (unsigned)g_settings.mode, (unsigned)g_settings.volume, (unsigned)g_settings.brightness,
+                    (unsigned)g_settings.bass, (unsigned)g_settings.flags, (unsigned)len);
     } else {
         osal_printk("[DWS_S] NV settings unavailable: ret=%d len=%u\r\n", (int)ret, (unsigned)len);
     }
@@ -56,7 +60,19 @@ static bool spi_settings_payload_equal(const spi_settings_t *a, const spi_settin
            a->mode == b->mode &&
            a->volume == b->volume &&
            a->brightness == b->brightness &&
-           a->bass == b->bass;
+           a->bass == b->bass &&
+           a->tone == b->tone &&
+           a->flags == b->flags;
+}
+
+static bool spi_settings_control_payload_equal(const spi_settings_t *a, const spi_settings_t *b)
+{
+    return a->hotspot_network == b->hotspot_network &&
+           a->mode == b->mode &&
+           a->volume == b->volume &&
+           a->brightness == b->brightness &&
+           a->bass == b->bass &&
+           a->flags == b->flags;
 }
 
 static void nv_mark_dirty_internal(bool local_change)
@@ -92,7 +108,10 @@ void nv_flush_if_idle(void)
         return; // 还在频繁操作，不写
     }
 
-    errcode_t ret = uapi_nv_write(NV_KEY_SPI_SETTINGS, (const uint8_t *)&g_settings, sizeof(g_settings));
+    spi_settings_t saved = g_settings;
+    saved.cmd = SPI_CMD_QUERY;
+    saved.tone = SPI_TONE_FLAT;
+    errcode_t ret = uapi_nv_write(NV_KEY_SPI_SETTINGS, (const uint8_t *)&saved, sizeof(saved));
     if (ret != ERRCODE_SUCC) {
         osal_printk("[DWS_S] NV write failed: %d\r\n", (int)ret);
     }
@@ -125,7 +144,9 @@ void *spi_slave_task(void *arg)
         int ret = spi.transfer(rx_buf, sed_ws63::dws_slave::TRANSFER_LEN, (const uint8_t *)&response, SPI_SETTINGS_LEN);
         if (ret != 0) {
             fail_cnt++;
-            osal_printk("[DWS_S] *** transfer FAIL #%d (total fail=%d, succ=%d) ***\r\n", fail_cnt, fail_cnt, succ_cnt);
+            if (fail_cnt % 200 == 1) {
+                osal_printk("[DWS_S] transfer fail #%d (succ=%d)\r\n", fail_cnt, succ_cnt);
+            }
             osal_msleep(10);
             continue;
         }
@@ -139,13 +160,18 @@ void *spi_slave_task(void *arg)
         }
         if (spi_validate_settings(&master_settings) && master_settings.cmd == SPI_CMD_SYNC) {
             bool changed = !spi_settings_payload_equal(&g_settings, &master_settings);
+            bool control_changed = !spi_settings_control_payload_equal(&g_settings, &master_settings);
             if (changed) {
                 g_settings.hotspot_network = master_settings.hotspot_network;
                 g_settings.mode = master_settings.mode;
                 g_settings.volume = master_settings.volume;
                 g_settings.brightness = master_settings.brightness;
                 g_settings.bass = master_settings.bass;
-                nv_mark_dirty_internal(false);
+                g_settings.tone = master_settings.tone;
+                g_settings.flags = master_settings.flags;
+                if (control_changed) {
+                    nv_mark_dirty_internal(false);
+                }
             }
             g_slave_sync_pending = false;
         }

@@ -4,11 +4,8 @@ namespace sed_ws63 {
 
 spi_master::spi_master()
 {
-    osal_printk("[SPI_Master] ctor: pin_init...\r\n");
     pin_init();
-    osal_printk("[SPI_Master] ctor: spi_init...\r\n");
     spi_init();
-    osal_printk("[SPI_Master] SPI_BUS_1 DMA 初始化完成\r\n");
 }
 
 void spi_master::pin_init()

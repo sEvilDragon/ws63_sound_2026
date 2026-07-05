@@ -92,7 +92,7 @@ int dws_master::transfer(const uint8_t *tx_data, uint32_t tx_len, uint8_t *rx_da
     osal_udelay(TURNAROUND_US);
 
     /* ===== Phase 2: Slave → Master, 接收 6 字节 (48 bits) MSB-first ===== */
-    for (uint32_t byte_idx = 0; byte_idx < 6; byte_idx++) {
+    for (uint32_t byte_idx = 0; byte_idx < REPLY_LEN; byte_idx++) {
         uint8_t byte = 0;
         for (int bit = 7; bit >= 0; bit--) {
             if (recv_bit()) {

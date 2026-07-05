@@ -20,8 +20,7 @@ void nv_recv_load_all(void)
     (void)memset_s(&sta_cfg, sizeof(sta_cfg), 0, sizeof(sta_cfg));
     ret = uapi_nv_read(NV_KEY_WIFI_STA, sizeof(sta_cfg), &len, (uint8_t *)&sta_cfg);
     if (ret == ERRCODE_SUCC && len == sizeof(sta_cfg)) {
-        osal_printk(NV_PRINT_PREFIX "STA cfg: ssid=%s pwd=%s\r\n", (const char *)sta_cfg.ssid,
-                    (const char *)sta_cfg.password);
+        osal_printk(NV_PRINT_PREFIX "STA cfg: ssid=%s has_pwd=%u\r\n", (const char *)sta_cfg.ssid, (unsigned)(sta_cfg.password[0] != '\0'));
     } else {
         osal_printk(NV_PRINT_PREFIX "STA cfg: no data (ret=%d len=%u), using defaults\r\n", (int)ret, (unsigned)len);
     }
@@ -31,8 +30,7 @@ void nv_recv_load_all(void)
     (void)memset_s(&ap_cfg, sizeof(ap_cfg), 0, sizeof(ap_cfg));
     ret = uapi_nv_read(NV_KEY_SOFTAP, sizeof(ap_cfg), &len, (uint8_t *)&ap_cfg);
     if (ret == ERRCODE_SUCC && len == sizeof(ap_cfg)) {
-        osal_printk(NV_PRINT_PREFIX "SoftAP cfg: name=%s pwd=%s\r\n", (const char *)ap_cfg.ap_name,
-                    (const char *)ap_cfg.ap_password);
+        osal_printk(NV_PRINT_PREFIX "SoftAP cfg: name=%s has_pwd=%u\r\n", (const char *)ap_cfg.ap_name, (unsigned)(ap_cfg.ap_password[0] != '\0'));
     } else {
         osal_printk(NV_PRINT_PREFIX "SoftAP cfg: no data (ret=%d len=%u), using defaults\r\n", (int)ret, (unsigned)len);
     }

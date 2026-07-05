@@ -23,6 +23,10 @@ static constexpr size_t k_recv_buf_size = 1024;
 static constexpr size_t k_resp_body_size = 512;
 static constexpr int k_client_timeout_sec = 3;
 
+static char s_http_send_buf[512];
+static char s_http_body_buf[k_resp_body_size];
+static char s_http_recv_buf[k_recv_buf_size];
+
 // 停止标志（由 wifi_task 通过 http_control_request_stop() 设置）
 static volatile bool s_stop_requested = false;
 
@@ -45,12 +49,35 @@ static const char *mode_name_str(uint8_t mode)
     }
 }
 
+static uint8_t tone_from_name(const char *tone)
+{
+    if (tone == nullptr) {
+        return 0xFF;
+    }
+    if (strcmp(tone, "FLAT") == 0 || strcmp(tone, "flat") == 0) {
+        return SPI_TONE_FLAT;
+    }
+    if (strcmp(tone, "VOCAL") == 0 || strcmp(tone, "vocal") == 0) {
+        return SPI_TONE_VOCAL;
+    }
+    if (strcmp(tone, "BASS_BOOST") == 0 || strcmp(tone, "bass_boost") == 0 ||
+        strcmp(tone, "BASS") == 0 || strcmp(tone, "bass") == 0) {
+        return SPI_TONE_BASS_BOOST;
+    }
+    if (strcmp(tone, "POP") == 0 || strcmp(tone, "pop") == 0) {
+        return SPI_TONE_POP;
+    }
+    if (strcmp(tone, "ROCK") == 0 || strcmp(tone, "rock") == 0) {
+        return SPI_TONE_ROCK;
+    }
+    return 0xFF;
+}
+
 // 发送 HTTP JSON 响应并关闭连接
 static void send_json(int sock, int http_code, int biz_code, const char *msg, const char *data_json)
 {
-    char buf[512];
     const char *body = data_json ? data_json : "{}";
-    int len = snprintf(buf, sizeof(buf),
+    int len = snprintf(s_http_send_buf, sizeof(s_http_send_buf),
                        "HTTP/1.1 %d %s\r\n"
                        "Content-Type: application/json\r\n"
                        "Connection: close\r\n"
@@ -59,7 +86,8 @@ static void send_json(int sock, int http_code, int biz_code, const char *msg, co
                        "{\"code\":%d,\"msg\":\"%s\",\"data\":%s}",
                        http_code, (http_code == 200) ? "OK" : "Error", biz_code, msg, body);
     if (len > 0) {
-        lwip_send(sock, buf, (size_t)len, 0);
+        size_t send_len = (len < (int)sizeof(s_http_send_buf)) ? (size_t)len : (sizeof(s_http_send_buf) - 1);
+        lwip_send(sock, s_http_send_buf, send_len, 0);
     }
 }
 
@@ -209,6 +237,28 @@ static bool json_get_str(const char *body, const char *key, char *out, size_t ou
     return ok;
 }
 
+static bool json_get_bool(const char *body, const char *key, bool *out)
+{
+    if (!body)
+        return false;
+    cJSON *json = cJSON_Parse(body);
+    if (!json)
+        return false;
+    cJSON *item = cJSON_GetObjectItem(json, key);
+    bool ok = false;
+    if (item != nullptr) {
+        if (cJSON_IsBool(item)) {
+            *out = cJSON_IsTrue(item);
+            ok = true;
+        } else if (cJSON_IsNumber(item)) {
+            *out = (item->valueint != 0);
+            ok = true;
+        }
+    }
+    cJSON_Delete(json);
+    return ok;
+}
+
 // ======================== 路由处理 ========================
 
 // GET /api/v1/status
@@ -223,16 +273,17 @@ static void handle_status(int sock)
     uint8_t hotspot = spi_get_hotspot(s->hotspot_network);
     uint8_t network = spi_get_network(s->hotspot_network);
 
-    char body[k_resp_body_size];
-    snprintf(body, sizeof(body),
+    snprintf(s_http_body_buf, sizeof(s_http_body_buf),
              "{\"mode\":%u,\"mode_name\":\"%s\","
              "\"volume\":%u,\"bass\":%u,\"brightness\":%u,"
+             "\"tone\":%u,\"tone_name\":\"%s\",\"night\":%s,"
              "\"hotspot\":\"%s\",\"network\":\"%s\","
              "\"wifi_ssid\":\"%s\",\"softap_ssid\":\"%s\",\"device_ip\":\"%s\"}",
              s->mode, mode_name_str(s->mode), s->volume, s->bass, s->brightness,
+             s->tone, spi_tone_name(s->tone), spi_settings_is_night(s) ? "true" : "false",
              (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF", (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
              sta_ssid, ap_ssid, ip);
-    send_json(sock, 200, 0, "ok", body);
+    send_json(sock, 200, 0, "ok", s_http_body_buf);
 }
 
 // POST /api/v1/mode  { "mode": 127 }
@@ -288,6 +339,48 @@ static void handle_set_brightness(int sock, const char *body)
     spi_settings_update_brightness((uint8_t)bri);
     char resp[32];
     snprintf(resp, sizeof(resp), "{\"brightness\":%d}", bri);
+    send_json(sock, 200, 0, "ok", resp);
+}
+
+// POST /api/v1/tone  { "tone": 2 } or { "tone": "BASS_BOOST" }
+static void handle_set_tone(int sock, const char *body)
+{
+    int tone = -1;
+    char tone_name[24] = {0};
+    bool ok = false;
+    if (json_get_int(body, "tone", &tone) && spi_validate_tone((uint8_t)tone)) {
+        ok = true;
+    } else if (json_get_str(body, "tone", tone_name, sizeof(tone_name))) {
+        uint8_t parsed = tone_from_name(tone_name);
+        if (spi_validate_tone(parsed)) {
+            tone = parsed;
+            ok = true;
+        }
+    }
+
+    if (!ok) {
+        send_json(sock, 400, 400, "invalid tone, allowed: 0~4 or FLAT/VOCAL/BASS_BOOST/POP/ROCK", nullptr);
+        return;
+    }
+
+    spi_settings_update_tone((uint8_t)tone);
+    char resp[64];
+    snprintf(resp, sizeof(resp), "{\"tone\":%d,\"tone_name\":\"%s\"}", tone, spi_tone_name((uint8_t)tone));
+    send_json(sock, 200, 0, "ok", resp);
+}
+
+// POST /api/v1/night  { "night": true }
+static void handle_set_night(int sock, const char *body)
+{
+    bool night = false;
+    if (!json_get_bool(body, "night", &night)) {
+        send_json(sock, 400, 400, "missing or invalid night boolean", nullptr);
+        return;
+    }
+
+    spi_settings_update_night(night ? 1 : 0);
+    char resp[32];
+    snprintf(resp, sizeof(resp), "{\"night\":%s}", night ? "true" : "false");
     send_json(sock, 200, 0, "ok", resp);
 }
 
@@ -351,13 +444,12 @@ static void handle_get_wifi(int sock)
     nv_recv_read_sta(&sta_cfg);
     nv_recv_read_ap(&ap_cfg);
 
-    char body[k_resp_body_size];
-    snprintf(body, sizeof(body),
+    snprintf(s_http_body_buf, sizeof(s_http_body_buf),
              "{\"sta\":{\"ssid\":\"%s\",\"has_pwd\":%s},"
              "\"ap\":{\"ssid\":\"%s\",\"has_pwd\":%s}}",
              (const char *)sta_cfg.ssid, (sta_cfg.password[0] != '\0') ? "true" : "false", (const char *)ap_cfg.ap_name,
              (ap_cfg.ap_password[0] != '\0') ? "true" : "false");
-    send_json(sock, 200, 0, "ok", body);
+    send_json(sock, 200, 0, "ok", s_http_body_buf);
 }
 
 // POST /api/v1/wifi/sta  — 支持部分更新：{ "ssid":"..." } 或 { "password":"..." } 或两者
@@ -447,7 +539,6 @@ static void handle_set_ap(int sock, const char *body)
 // ======================== 请求分发 ========================
 static void dispatch(int sock, const char *method, const char *path, const char *body)
 {
-    osal_printk("[HTTP] %s %s\r\n", method, path);
 
     if (strcmp(method, "OPTIONS") == 0) {
         handle_cors(sock);
@@ -484,6 +575,14 @@ static void dispatch(int sock, const char *method, const char *path, const char 
         }
         if (strcmp(path, "/api/v1/brightness") == 0) {
             handle_set_brightness(sock, body);
+            return;
+        }
+        if (strcmp(path, "/api/v1/tone") == 0) {
+            handle_set_tone(sock, body);
+            return;
+        }
+        if (strcmp(path, "/api/v1/night") == 0) {
+            handle_set_night(sock, body);
             return;
         }
         if (strcmp(path, "/api/v1/hotspot") == 0) {
@@ -566,15 +665,14 @@ void *http_control_task(void *arg)
             continue; // 超时或临时错误，继续循环
         }
 
-        char recv_buf[k_recv_buf_size];
-        memset(recv_buf, 0, sizeof(recv_buf));
+        memset(s_http_recv_buf, 0, sizeof(s_http_recv_buf));
         size_t recv_len = 0;
 
-        if (recv_http_request(client_sock, recv_buf, sizeof(recv_buf), &recv_len)) {
+        if (recv_http_request(client_sock, s_http_recv_buf, sizeof(s_http_recv_buf), &recv_len)) {
             char method[8] = {0};
             char path[64] = {0};
-            if (parse_first_line(recv_buf, method, sizeof(method), path, sizeof(path))) {
-                dispatch(client_sock, method, path, get_body(recv_buf));
+            if (parse_first_line(s_http_recv_buf, method, sizeof(method), path, sizeof(path))) {
+                dispatch(client_sock, method, path, get_body(s_http_recv_buf));
             } else {
                 const char *err = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
                 lwip_send(client_sock, err, strlen(err), 0);

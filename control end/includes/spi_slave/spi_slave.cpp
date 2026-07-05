@@ -9,12 +9,8 @@ namespace sed_ws63 {
 
 spi_slave::spi_slave()
 {
-    osal_printk("[SLAVE] ===== ctor START (BUS_0, DMA mode) =====\r\n");
-    osal_printk("[SLAVE] ctor: step1 pin_init...\r\n");
     pin_init();
-    osal_printk("[SLAVE] ctor: step2 spi_init...\r\n");
     spi_init();
-    osal_printk("[SLAVE] ===== ctor DONE =====\r\n");
 }
 
 void spi_slave::pin_init()
@@ -45,13 +41,11 @@ void spi_slave::spi_init()
 
     ext_config.sspi_param.wait_cycles = 0x10;
 
-    osal_printk("[SLAVE] calling uapi_spi_init(BUS_0, slave=true, clk=%u)...\r\n", (unsigned)SPI_CLK_FREQ);
     errcode_t ret = uapi_spi_init(BUS, &config, &ext_config);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SLAVE] *** FATAL: uapi_spi_init 失败! ret=0x%X ***\r\n", (unsigned)ret);
         return;
     }
-    osal_printk("[SLAVE] uapi_spi_init OK\r\n");
 
     /* DMA 模式: 一次 writeread 完成双向传输, TX/RX 在同一组 SCK 周期, 不会产生多余零值
      * 注意: uapi_dma_init/open 已在 app_entry 中统一调用, 此处只需 set_dma_mode */
@@ -59,12 +53,10 @@ void spi_slave::spi_init()
                                 .dest_width = 0,
                                 .burst_length = 0,
                                 .priority = 0};
-    osal_printk("[SLAVE] calling uapi_spi_set_dma_mode(BUS_0, en=true)...\r\n");
     ret = uapi_spi_set_dma_mode(BUS, true, &dma_cfg);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SLAVE] *** DMA 模式设置失败! ret=0x%X, 将走轮询路径 ***\r\n", (unsigned)ret);
     } else {
-        osal_printk("[SLAVE] DMA 模式启用成功 (src_w=%u dst_w=%u burst=%u pri=%u)\r\n", (unsigned)dma_cfg.src_width,
                     (unsigned)dma_cfg.dest_width, (unsigned)dma_cfg.burst_length, (unsigned)dma_cfg.priority);
     }
 }

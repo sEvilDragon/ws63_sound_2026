@@ -15,18 +15,13 @@ static constexpr int k_queue_target_low = 6;
 static constexpr int k_queue_emergency_low = 2;
 static constexpr int k_wait_slice_ms = 2;
 static constexpr int k_max_wait_loops = 160;
+static constexpr uint32_t k_minimp3_task_stack_size = 0xA000;
 
 void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
 {
     if (data == nullptr || size == 0)
         return;
 
-    static bool first_call = true;
-    if (first_call) {
-        first_call = false;
-        osal_printk("[DLNA] first PCM push, size=%u, pending=%d, is_ready=%d\r\n", size, iis::pending_frames,
-                    iis::is_ready);
-    }
 
     int queue_level = static_cast<int>(iis::pending_frames);
 
@@ -41,7 +36,8 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
         osal_msleep(1);
     }
 
-    iis::data_write(data, size, get_spi_settings()->volume, get_spi_settings()->bass);
+    const spi_settings_t *s = get_spi_settings();
+    iis::data_write(data, size, spi_settings_effective_volume(s), spi_settings_effective_bass(s));
 
     queue_level = static_cast<int>(iis::pending_frames);
     if (queue_level <= k_queue_emergency_low) {
@@ -399,7 +395,7 @@ void *wifi_task(void *arg)
             dlan::reset_stop();
             minimp3::reset_exit();
             dlna_handle = osal_kthread_create((osal_kthread_handler)dlna_task, NULL, "dlna_task", 8192);
-            mp3_handle = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", 8192 * 4);
+            mp3_handle = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", k_minimp3_task_stack_size);
             dlna_running = true;
             osal_printk("[WiFi] DLNA started\r\n");
         }

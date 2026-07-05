@@ -30,6 +30,7 @@ public:
     static void stream_mp3_to_iis();
     static void request_exit();
     static void reset_exit();
+    static bool should_interrupt_stream();
     static volatile bool s_exit_requested;
 
     // 暂停/恢复/跳转接口（供DLNA层调用）

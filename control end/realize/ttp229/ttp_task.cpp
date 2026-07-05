@@ -50,7 +50,6 @@ void ttp229::init_serial()
     if (read_serial(&sample)) {
         m_healthy = true;
     }
-    osal_printk("TTP:%d\r\n", m_healthy ? 1 : 0);
 }
 
 bool ttp229::read_serial(uint16_t *state_out)

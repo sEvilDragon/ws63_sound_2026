@@ -41,7 +41,6 @@ iis::iis()
     set_rate_of_iis(i2s_sample_rate);
     sem_mutex_init();
     dma_lli_init();
-    osal_printk("[IIS] init complete, buffers=%d, TX initially off\r\n", buffer_num);
 }
 
 iis::~iis()
@@ -159,7 +158,6 @@ void iis::sem_mutex_init()
             dma_buffers[i][j] = 0; // ��ʼ������������Ϊ0
         }
     }
-    osal_printk("[IIS] DMA buffers allocated: %d x %d samples\r\n", buffer_num, buffer_size);
 }
 
 void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
@@ -183,28 +181,6 @@ void iis::i2s_send_callback(uint8_t intr, uint8_t channel, uintptr_t arg)
         read_idx = new_read_idx;
         osal_irq_restore(irq);
 
-        // ÿ 6000 �λص���ӡһ�Σ���2���ӣ�������ˢ��
-        static int cb_count = 0;
-        cb_count++;
-        if (cb_count % 6000 == 1) {
-            // �� write/read ��ֵʵʱ���� pending�����������Ư����
-            int real_pending = (write_idx - (int)read_idx + (int)buffer_num) % (int)buffer_num;
-            osal_printk("[IIS] DMA cb #%d, read=%d, write=%d, pending=%d\r\n", cb_count, read_idx, write_idx,
-                        real_pending);
-        }
-
-        // Ƿ�ؼ�⣺�ü򵥼���բ�ţ����� was_underrun �񵴵���ˢ��
-        static int underrun_silence = 0;
-        if (is_ready && pending_frames <= min_buffer_num) {
-            if (underrun_silence <= 0) {
-                osal_printk("[IIS] underrun, pending=%d, read=%d (TX stays on)\r\n", pending_frames, read_idx);
-                underrun_silence = 3000; // ���ƽ����� 3000 �λص� (~1����)
-            }
-        } else {
-            underrun_silence = 0; // �ָ��������´�Ƿ����������
-        }
-        if (underrun_silence > 0)
-            underrun_silence--;
     }
 }
 
@@ -257,17 +233,10 @@ void iis::dma_lli_init()
     // TX ����������ȴ� data_write
     // �����㹻֡�����ٿ��������⻺��������ʱ��������
     hal_sio_set_tx_enable(i2s_num, 0);
-    osal_printk("[IIS] DMA LLI started, ch=%d, buffers=%d, TX initially off\r\n", dma_channel, buffer_num);
 }
 
 void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t bass)
 {
-    static int dw_count = 0;
-    if (++dw_count % 200 == 1) {
-        osal_printk("[IIS] data_write #%d, size=%u, pending=%d, write_idx=%d, offset=%d, ready=%d\r\n", dw_count, size,
-                    pending_frames, write_idx, write_offset, is_ready);
-    }
-
     if (size % 2 != 0) {
         size--;
     }
@@ -294,10 +263,6 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 
     while (size > 0) {
         if (write_offset == 0 && pending_frames >= (int)buffer_num) {
-            static int drop_count = 0;
-            if (++drop_count % 50 == 1) {
-                osal_printk("[IIS] buffer full, dropping data (x%d)\r\n", drop_count);
-            }
             return;
         }
 
@@ -361,7 +326,6 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
             if (!is_ready && pending_frames >= prebuffer_num) {
                 is_ready = true;
                 hal_sio_set_tx_enable(i2s_num, 1);
-                osal_printk("[IIS] TX ENABLED, pending_frames=%d, write_idx=%d\r\n", pending_frames, write_idx);
             }
             osal_irq_restore(irq);
         }
@@ -370,7 +334,6 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 
 void iis::data_clear()
 {
-    osal_printk("[IIS] data_clear: pending=%d, read=%d, write=%d\r\n", pending_frames, read_idx, write_idx);
     // ���ٹر� TX��DMA LLI һ���������������У��� TX ֻ��������ţ�
     // DMA �ڲ������Լ������Ļ����������� pending_frames
     // ��Զ�޷����»��ۣ� TX ����ʧȥ�ؿ����ᡣ��Ϊ���� TX �������� DMA ����������ľ���֡��

@@ -53,7 +53,6 @@ static void cycle_mode(int dir)
         idx = 0;
     idx = (idx + dir + 3) % 3;
     s->mode = MODE_LIST[idx];
-    osal_printk("[UI] mode -> %s (%u)\r\n", mode_name(s->mode), (unsigned)s->mode);
     nv_mark_dirty();
 }
 
@@ -83,7 +82,6 @@ static void set_value_with_log(ui_config_target_t target, int new_val)
 
     if ((int)*p != new_val) {
         *p = (uint8_t)new_val;
-        osal_printk("[UI] %s -> %d\r\n", name, new_val);
         nv_mark_dirty();
     }
 }
@@ -110,7 +108,6 @@ static void toggle_hotspot(void)
     uint8_t nw = spi_get_network(s->hotspot_network);
     uint8_t new_hs = (hs == SPI_HOTSPOT_ON) ? SPI_HOTSPOT_OFF : SPI_HOTSPOT_ON;
     s->hotspot_network = spi_make_hotspot_network(new_hs, nw);
-    osal_printk("[UI] hotspot -> %s\r\n", new_hs == SPI_HOTSPOT_ON ? "ON" : "OFF");
     nv_mark_dirty();
 }
 
@@ -229,13 +226,10 @@ static void handle_config_mode(void)
         if (delta != 0) {
             if (g_ui.target == UI_TARGET_MODE) {
                 // mode 只有 3 个选项, 仍然用绝对位置映射
-                int mode_idx = (t->slider_pos / TTP_SLIDER_SCALE) % 3;
                 uint8_t new_mode = MODE_LIST[mode_idx];
                 spi_settings_t *s = (spi_settings_t *)get_spi_settings();
                 if (s->mode != new_mode) {
                     s->mode = new_mode;
-                    osal_printk("[UI] mode -> %s (%u) (slider pos %d.%02d)\r\n", mode_name(s->mode), (unsigned)s->mode,
-                                t->slider_pos / TTP_SLIDER_SCALE, t->slider_pos % TTP_SLIDER_SCALE);
                     nv_mark_dirty();
                 }
             } else {
@@ -294,7 +288,6 @@ static void ui_tick(void)
         // B 在 MAIN 模式无功能, 仅在 CONFIG 下切 target
         if (g_ui.mode == UI_CONFIG) {
             g_ui.target = (ui_config_target_t)(((int)g_ui.target + 1) % UI_TARGET_COUNT);
-            osal_printk("[UI] config target -> %s\r\n", target_name(g_ui.target));
             reset_long_press();
             reset_slider();
             reset_swipe();
@@ -306,10 +299,8 @@ static void ui_tick(void)
         if (g_ui.mode == UI_MAIN) {
             g_ui.mode = UI_CONFIG;
             g_ui.target = UI_TARGET_MODE;
-            osal_printk("[UI] -> CONFIG mode (target=%s)\r\n", target_name(g_ui.target));
         } else {
             g_ui.mode = UI_MAIN;
-            osal_printk("[UI] -> MAIN mode\r\n");
         }
         reset_long_press();
         reset_slider();

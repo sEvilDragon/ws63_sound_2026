@@ -373,7 +373,6 @@ void *sk9822_task(void *arg)
     float fx_level = 0.0f;    /* 音乐灯效强度, 慢释放避免效果一闪就没 */
     uint8_t beat_boost = 0;   /* 节拍脉冲计数 */
     float base_hue = 0.0f;   /* 增量累加色相, 避免速度变化时跳变 */
-    uint16_t prev_hue0 = 0;  /* 诊断: 上一帧 LED0 色相 */
     overlay_state_t overlay = {overlay_type_t::NONE, 0, 0, 0, 0, 0, 0, slide_dir_t::LEFT_TO_RIGHT};
     spi_settings_t prev_settings = *get_spi_settings();
 
@@ -446,14 +445,10 @@ void *sk9822_task(void *arg)
             slide_dir_t dir = (cur_network == SPI_NETWORK_CONN) ? slide_dir_t::LEFT_TO_RIGHT : slide_dir_t::RIGHT_TO_LEFT;
             start_slide_overlay(&overlay, 0, 80, 255, dir);
         }
-        if (volume_changed || mode_changed || hotspot_changed || network_changed) {
-            osal_printk("[SK9822] event mode=%u vol=%u bri=%u hn=0x%02x\r\n", (unsigned)cur_settings.mode,
-                        (unsigned)cur_settings.volume, (unsigned)cur_settings.brightness,
-                        (unsigned)cur_settings.hotspot_network);
-        }
         prev_settings = cur_settings;
 
-        uint8_t led_brightness = cur_settings.brightness == 0 ? 0 : (uint8_t)(3 + cur_settings.brightness * 28 / 100);
+        uint8_t effective_brightness = spi_settings_effective_brightness(&cur_settings);
+        uint8_t led_brightness = effective_brightness == 0 ? 0 : (uint8_t)(3 + effective_brightness * 28 / 100);
 
         /* 音乐层: 弹簧式伸缩 + 左右相位摇晃; 静音时 fx_level=0, 不参与显示 */
         float spring = sinf((float)tick * 0.55f) * fx_level;        /* 伸缩相位 */
@@ -524,26 +519,13 @@ void *sk9822_task(void *arg)
             frame_b[i] = (uint8_t)fb;
         }
 
-        render_overlay(frame_r, frame_g, frame_b, overlay, cur_settings.brightness);
+        render_overlay(frame_r, frame_g, frame_b, overlay, effective_brightness);
         for (uint8_t i = 0; i < sed_ws63::sk9822_led::NUM_LEDS; i++) {
             led.set_pixel(i, frame_r[i], frame_g[i], frame_b[i], led_brightness);
         }
         led.update();
         advance_overlay(&overlay);
 
-        /* 诊断: 检测 LED0 色相跳变 (正常增量 3~15°, 超过 20° 即异常) */
-        {
-            int16_t dh = (int16_t)hue_int - (int16_t)prev_hue0;
-            if (dh < -180) dh += 360;
-            if (dh > 180) dh -= 360;
-            if (dh > 20 || dh < -20) {
-                osal_printk("[JUMP] hue %d->%d (d=%d) ov=%u music=%.2f spd=%.1f\r\n",
-                            prev_hue0, hue_int, dh, audio->overall, (double)music, (double)flow_speed);
-            }
-            prev_hue0 = hue_int;
-        }
-
-        osal_msleep(30);
     }
     return NULL;
 }

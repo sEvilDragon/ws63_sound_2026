@@ -2,7 +2,7 @@
 
 #include "spi_settings.h"
 
-#define SPI_AUDIO_OFFSET  6
+#define SPI_AUDIO_OFFSET  SPI_SETTINGS_LEN
 
 typedef struct {
     uint8_t bands[5];
