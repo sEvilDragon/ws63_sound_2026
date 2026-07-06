@@ -6,6 +6,7 @@
 
 extern "C" {
 #include "cJSON.h"
+#include "wifi_device.h"
 }
 
 namespace {
@@ -16,6 +17,50 @@ static constexpr int k_queue_emergency_low = 2;
 static constexpr int k_wait_slice_ms = 2;
 static constexpr int k_max_wait_loops = 160;
 static constexpr uint32_t k_minimp3_task_stack_size = 0xA000;
+static constexpr uint8_t k_wifi_mac_len = 6;
+
+// Fixed locally administered unicast MAC addresses for the receiving end.
+// Keep STA and SoftAP different to avoid conflicts if both interface addresses are observed.
+static constexpr int8_t k_fixed_sta_mac[k_wifi_mac_len] = {0x02, 0x63, 0x26, 0x20, 0x00, 0x01};
+static constexpr int8_t k_fixed_softap_mac[k_wifi_mac_len] = {0x02, 0x63, 0x26, 0x20, 0x00, 0x02};
+
+void print_wifi_mac(const char *label, const int8_t *mac)
+{
+    osal_printk("[WiFi] %s MAC=%02x:%02x:%02x:%02x:%02x:%02x\r\n", label,
+                static_cast<unsigned int>(static_cast<uint8_t>(mac[0])),
+                static_cast<unsigned int>(static_cast<uint8_t>(mac[1])),
+                static_cast<unsigned int>(static_cast<uint8_t>(mac[2])),
+                static_cast<unsigned int>(static_cast<uint8_t>(mac[3])),
+                static_cast<unsigned int>(static_cast<uint8_t>(mac[4])),
+                static_cast<unsigned int>(static_cast<uint8_t>(mac[5])));
+}
+
+void apply_fixed_wifi_macs()
+{
+    errcode_t ret = wifi_set_base_mac_addr(k_fixed_sta_mac, k_wifi_mac_len);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[WiFi] set fixed STA MAC failed: %u\r\n", ret);
+    } else {
+        int8_t sta_mac[k_wifi_mac_len] = {0};
+        if (wifi_get_base_mac_addr(sta_mac, k_wifi_mac_len) == ERRCODE_SUCC) {
+            print_wifi_mac("fixed STA", sta_mac);
+        } else {
+            print_wifi_mac("fixed STA", k_fixed_sta_mac);
+        }
+    }
+
+    ret = wifi_softap_set_mac_addr(k_fixed_softap_mac, k_wifi_mac_len);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[WiFi] set fixed SoftAP MAC failed: %u\r\n", ret);
+    } else {
+        int8_t softap_mac[k_wifi_mac_len] = {0};
+        if (wifi_softap_get_mac_addr(softap_mac, k_wifi_mac_len) == ERRCODE_SUCC) {
+            print_wifi_mac("fixed SoftAP", softap_mac);
+        } else {
+            print_wifi_mac("fixed SoftAP", k_fixed_softap_mac);
+        }
+    }
+}
 
 void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
 {
@@ -177,6 +222,7 @@ void *wifi_task(void *arg)
     while (wifi_is_wifi_inited() == 0) {
         osal_msleep(100);
     }
+    apply_fixed_wifi_macs();
     sta_.enable_auto_reconnect();
     osal_printk("[WiFi] subsystem ready\r\n");
 

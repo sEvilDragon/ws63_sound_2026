@@ -526,6 +526,7 @@ void *sk9822_task(void *arg)
         led.update();
         advance_overlay(&overlay);
 
+        osal_msleep(FRAME_MS);
     }
     return NULL;
 }
