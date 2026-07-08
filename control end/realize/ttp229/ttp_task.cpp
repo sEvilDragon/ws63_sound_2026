@@ -346,10 +346,11 @@ void ttp229::process_function_keys(uint16_t raw)
             m_func_debounce[i] = 0;
             m_func_prev_raw[i] = cur_raw;
         } else if (cur_raw == prev_stb) {
-            // raw 与 stable 一致: 无边缘, 消抖计数器清零
-            m_func_debounce[i] = 0;
+            // raw 与 stable 一致: 漏桶衰减而非归零, 容忍偶尔的噪声帧
+            if (m_func_debounce[i] > 0)
+                m_func_debounce[i]--;
         } else {
-            // raw 与 stable 不一致: 累计一次, 达到阈值就接受新状态
+            // raw 与 stable 不一致: 累计证据, 达到阈值就接受新状态
             m_func_debounce[i]++;
             if (m_func_debounce[i] >= FUNC_DEBOUNCE_TICKS) {
                 m_func_stable[i] = cur_raw;
@@ -423,6 +424,41 @@ uint8_t ttp_consume_release_latch(void)
     return v;
 }
 
+static int ttp_single_pad_from_mask(uint16_t mask)
+{
+    if (mask == 0) {
+        return 0;
+    }
+    if ((mask & (uint16_t)(mask - 1)) != 0) {
+        return -1;
+    }
+    for (int i = 0; i < 16; i++) {
+        if (mask & (uint16_t)(1u << i)) {
+            return i + 1;
+        }
+    }
+    return -1;
+}
+
+static void ttp_debug_raw_change(const ttp_state_t *s)
+{
+    static bool inited = false;
+    static uint16_t last_raw = 0;
+
+    if (!s) {
+        return;
+    }
+    if (inited && s->raw_state == last_raw) {
+        return;
+    }
+    inited = true;
+    last_raw = s->raw_state;
+
+    int pad = ttp_single_pad_from_mask(s->raw_state);
+    osal_printk("[TTP] touch=0x%04x pad=%d slider_pos=%d func=0x%02x just=0x%02x\r\n",
+                (unsigned)s->raw_state, pad, s->slider_pos,
+                (unsigned)s->func_pressed, (unsigned)s->func_just_pressed);
+}
 void *ttp_task(void *arg)
 {
     (void)arg;
@@ -430,9 +466,27 @@ void *ttp_task(void *arg)
     static sed_ws63::ttp229 s_ttp;
     g_ttp = &s_ttp;
 
+    // 诊断计数器: 统计每个功能键 pad 的原始触摸帧数
+    uint32_t diag_frame = 0;
+    uint32_t diag_raw_cnt[3] = {0};  // A=pad7, B=pad6, C=pad5
+
     while (true) {
         g_ttp->update();
         g_ttp_state = g_ttp->get_state();
+        ttp_debug_raw_change(&g_ttp_state);
+
+        // 诊断: 统计功能键原始触摸
+        diag_frame++;
+        if (g_ttp_state.raw_state & 0x0040) diag_raw_cnt[0]++; // pad 7 = key A
+        if (g_ttp_state.raw_state & 0x0020) diag_raw_cnt[1]++; // pad 6 = key B
+        if (g_ttp_state.raw_state & 0x0010) diag_raw_cnt[2]++; // pad 5 = key C
+
+        if (diag_frame >= 100) {
+            osal_printk("[TTP] diag raw_hit/100: A=%u B=%u C=%u\r\n",
+                        (unsigned)diag_raw_cnt[0], (unsigned)diag_raw_cnt[1], (unsigned)diag_raw_cnt[2]);
+            diag_frame = 0;
+            diag_raw_cnt[0] = diag_raw_cnt[1] = diag_raw_cnt[2] = 0;
+        }
 
         if (g_ttp_state.func_just_pressed)
             g_press_latch |= g_ttp_state.func_just_pressed;

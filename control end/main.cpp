@@ -36,8 +36,8 @@ void app_entry(void)
     taskid = osal_kthread_create((osal_kthread_handler)spi_slave_task, NULL, "spi_slave_task", 2048);
     (void)taskid;
 
-    // taskid = osal_kthread_create((osal_kthread_handler)ttp_task, NULL, "ttp_task", 2048);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)ttp_task, NULL, "ttp_task", 2048);
+    (void)taskid;
 
     taskid = osal_kthread_create((osal_kthread_handler)ui_task, NULL, "ui_task", 2048);
     (void)taskid;

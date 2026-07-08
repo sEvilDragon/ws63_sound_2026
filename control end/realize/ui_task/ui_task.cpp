@@ -111,6 +111,11 @@ static void toggle_hotspot(void)
     nv_mark_dirty();
 }
 
+static const char *ui_mode_name(ui_mode_t mode)
+{
+    return mode == UI_CONFIG ? "CONFIG" : "MAIN";
+}
+
 static int detect_side(int pos)
 {
     // pos is scaled (×TTP_SLIDER_SCALE), range 0..700
@@ -286,12 +291,16 @@ static void ui_tick(void)
     // A 容易误触, 降到 B 之后; 同时按 A+B 时仅 B 生效
     // C 只有 A/B 都没按下时才生效
     if (key_b) {
-        // B 在 MAIN 模式无功能, 仅在 CONFIG 下切 target
         if (g_ui.mode == UI_CONFIG) {
             g_ui.target = (ui_config_target_t)(((int)g_ui.target + 1) % UI_TARGET_COUNT);
+            osal_printk("[UI] key B: target=%s raw=0x%04x\r\n", target_name(g_ui.target),
+                        (unsigned)ttp_get_state()->raw_state);
             reset_long_press();
             reset_slider();
             reset_swipe();
+        } else {
+            osal_printk("[UI] key B: ignored mode=%s raw=0x%04x\r\n", ui_mode_name(g_ui.mode),
+                        (unsigned)ttp_get_state()->raw_state);
         }
         return;
     }
@@ -303,6 +312,8 @@ static void ui_tick(void)
         } else {
             g_ui.mode = UI_MAIN;
         }
+        osal_printk("[UI] key A: mode=%s target=%s raw=0x%04x\r\n", ui_mode_name(g_ui.mode),
+                    target_name(g_ui.target), (unsigned)ttp_get_state()->raw_state);
         reset_long_press();
         reset_slider();
         reset_swipe();
@@ -310,8 +321,11 @@ static void ui_tick(void)
     }
 
     if (key_c) {
-        // C 优先级最低: 仅 A/B 都未按下时才触发
         toggle_hotspot();
+        const spi_settings_t *s = get_spi_settings();
+        osal_printk("[UI] key C: hotspot=%s raw=0x%04x\r\n",
+                    spi_get_hotspot(s->hotspot_network) == SPI_HOTSPOT_ON ? "ON" : "OFF",
+                    (unsigned)ttp_get_state()->raw_state);
         reset_long_press();
         return;
     }

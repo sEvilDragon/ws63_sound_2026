@@ -21,7 +21,7 @@ public:
     //  - TP2 接 GND → 16 键模式已启用
     //  - TP0 默认悬空 → 输出正相 (按下=1); 若 TP0 也接了 GND, 改为 true
     //  - TP1 默认悬空 → 多键同时有效 (滑条质心算法需要)
-    static constexpr bool ACTIVE_LOW = false;
+    static constexpr bool ACTIVE_LOW = true;
 
     ttp229();
     ~ttp229() = default;
@@ -42,14 +42,14 @@ public:
 private:
     // 滑条: 物理从左到右 (10→2, 印 0→7)
     static constexpr int PAD_SLIDER[8] = {10, 12, 9, 11, 15, 16, 1, 2};
-    // 功能键: 7/6/5
+    // Function keys from measured C/B/A sequence: A=Pad7, B=Pad6, C=Pad5
     static constexpr int PAD_FUNC_A = 7;
     static constexpr int PAD_FUNC_B = 6;
     static constexpr int PAD_FUNC_C = 5;
 
     static constexpr int FUNC_DEBOUNCE_TICKS = 2;
-    // 状态翻转后短暂忽略反向抖动 (~100ms @33ms 扫描周期)
-    static constexpr int FUNC_HOLD_TICKS = 3;
+    // 状态翻转后短暂忽略反向抖动 (~195ms @39ms) 防止释放后立即误触发
+    static constexpr int FUNC_HOLD_TICKS = 5;
 
     bool m_healthy;
     ttp_state_t m_state;

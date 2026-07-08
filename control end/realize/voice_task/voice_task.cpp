@@ -43,23 +43,19 @@ extern "C" {
 #define VOICE_ECHO_AFTER_HANDLE 0
 #endif
 
+// 语音模块通过 0x64 寄存器输出的指令 ID（AA 55 00 XX FB 中的第 4 字节）
+// 0x0B+ 为模块内部指令，主机不需要响应
 #define VOICE_ID_NONE             0x00
-#define VOICE_ID_WAKE             0x03
-#define VOICE_ID_VOLUME_UP        0x04
-#define VOICE_ID_VOLUME_DOWN      0x05
-#define VOICE_ID_VOLUME_MAX       0x06
-#define VOICE_ID_VOLUME_MID       0x07
-#define VOICE_ID_VOLUME_MIN       0x08
-#define VOICE_ID_MODE_SLE         0x0B
-#define VOICE_ID_MODE_DLNA        0x0C
-#define VOICE_ID_NETWORK_ON       0x0D
-#define VOICE_ID_HOTSPOT_ON       0x0E
-#define VOICE_ID_NETWORK_OFF      0x0F
-#define VOICE_ID_HOTSPOT_OFF      0x10
-#define VOICE_ID_BRIGHTNESS_UP    0x11
-#define VOICE_ID_BRIGHTNESS_DOWN  0x12
-#define VOICE_ID_BRIGHTNESS_LIMIT 0x13
-#define VOICE_ID_INTRODUCE_SELF   0x25
+#define VOICE_ID_MODE_SLE         0x01  // 切换星闪模式
+#define VOICE_ID_MODE_DLNA        0x02  // 切换网络模式
+#define VOICE_ID_NETWORK_ON       0x03  // 打开网络连接
+#define VOICE_ID_HOTSPOT_ON       0x04  // 打开热点连接
+#define VOICE_ID_NETWORK_OFF      0x05  // 关闭网络连接
+#define VOICE_ID_HOTSPOT_OFF      0x06  // 关闭热点连接
+#define VOICE_ID_BRIGHTNESS_UP    0x07  // 增大亮度
+#define VOICE_ID_BRIGHTNESS_DOWN  0x08  // 减小亮度
+#define VOICE_ID_BRIGHTNESS_MAX   0x09  // 亮度最大
+#define VOICE_ID_BRIGHTNESS_MIN   0x0A  // 亮度最小
 
 namespace {
 
@@ -120,23 +116,6 @@ static void request_voice_speak(sed_ws63::iic_master &iic, uint8_t type, uint8_t
 static bool apply_voice_id(uint8_t id)
 {
     switch (id) {
-        case VOICE_ID_WAKE: // 小闪小闪：唤醒词，语音模块自己播报，音响端无配置变化。
-            return true;
-        case VOICE_ID_VOLUME_UP: // 增大音量
-            update_volume_delta(VOICE_VOLUME_STEP);
-            return true;
-        case VOICE_ID_VOLUME_DOWN: // 减小音量
-            update_volume_delta(-VOICE_VOLUME_STEP);
-            return true;
-        case VOICE_ID_VOLUME_MAX: // 最大音量
-            spi_settings_update_volume(100);
-            return true;
-        case VOICE_ID_VOLUME_MID: // 中等音量
-            spi_settings_update_volume(50);
-            return true;
-        case VOICE_ID_VOLUME_MIN: // 最小音量
-            spi_settings_update_volume(0);
-            return true;
         case VOICE_ID_MODE_SLE: // 切换星闪模式
             spi_settings_update_mode(SPI_MODE_SLE);
             return true;
@@ -161,12 +140,11 @@ static bool apply_voice_id(uint8_t id)
         case VOICE_ID_BRIGHTNESS_DOWN: // 减小亮度
             update_brightness_delta(-VOICE_BRIGHTNESS_STEP);
             return true;
-        case VOICE_ID_BRIGHTNESS_LIMIT:
-            /* Excel 中“亮度最大/亮度最小”语义标签相同，IIC 只返回 1 字节 ID，无法区分。
-             * 当前先按“亮度最大”处理。 */
+        case VOICE_ID_BRIGHTNESS_MAX: // 亮度最大
             spi_settings_update_brightness(100);
             return true;
-        case VOICE_ID_INTRODUCE_SELF: // 介绍自己：语音模块主动播报，音响端无配置变化。
+        case VOICE_ID_BRIGHTNESS_MIN: // 亮度最小
+            spi_settings_update_brightness(0);
             return true;
         default:
             return false;
@@ -197,9 +175,19 @@ void *voice_task(void *arg)
             osal_msleep(VOICE_I2C_POLL_MS);
             continue;
         }
+
+        if (fail_count > 0) {
+            osal_printk("[VOICE] i2c recovered after %d failures\r\n", fail_count);
+        }
         fail_count = 0;
 
         if (id == VOICE_ID_NONE) {
+            // 每 5 秒 (~100 次轮询) 输出一次心跳, 确认 I2C 链路正常
+            static int heartbeat = 0;
+            if (++heartbeat >= 100) {
+                heartbeat = 0;
+                osal_printk("[VOICE] alive, waiting for command...\r\n");
+            }
             osal_msleep(VOICE_I2C_POLL_MS);
             continue;
         }

@@ -290,8 +290,6 @@ void sle::get_data_callback(uint8_t server_id, uint16_t conn_id, ssaps_req_write
     static int gdc_cnt = 0;
     gdc_cnt++;
     if (gdc_cnt <= 3 || gdc_cnt % 50 == 1) {
-        osal_printk("[SLE] data cb #%d, len=%u, active=%d, proc=%p\r\n", gdc_cnt, req_param ? req_param->length : 0,
-                    s_active, (void *)data_process);
     }
     if (!s_active)
         return;
