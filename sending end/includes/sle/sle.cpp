@@ -453,7 +453,7 @@ void sle::ssap_mtu_callback(uint8_t client_id, uint16_t conn_id, ssap_exchange_i
             osal_printk("MTU设置数据长度失败，错误码：%u\n", ret1);
         }
         find_service(index);
-    }
+    }   
 }
 
 void sle::after_phy_set_callback(uint16_t conn_id, errcode_t status, const sle_set_phy_t *param)
