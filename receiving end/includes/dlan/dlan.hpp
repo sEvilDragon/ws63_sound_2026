@@ -31,6 +31,8 @@ public:
     static void register_media_pause_handler(media_pause_handler handler);
     static void register_media_stop_handler(media_stop_handler handler);
     static void register_media_seek_handler(media_seek_handler handler);
+    static bool set_friendly_name(const char *name);
+    static const char *friendly_name();
 
     static void ssdp_and_http_scan();
     static void dlan_stop();
@@ -83,7 +85,7 @@ private:
     static constexpr float http_xml_version = 1.0;
     static constexpr std::array<char, 32> http_xml_manufacturer = {"sEvil_Dragon"};
     static constexpr std::array<char, 64> http_xml_model_description = {"Audio Device Based on HiSilicon WS63"};
-    static constexpr std::array<char, 32> http_xml_name = {"ws63_sound"};
+    static std::array<char, 64> http_xml_name;
 
     // 构建一个类用来存储当前流媒体的状态
     class media_status {

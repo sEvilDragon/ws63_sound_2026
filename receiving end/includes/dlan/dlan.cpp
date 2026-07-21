@@ -1,6 +1,15 @@
 #include "dlan.hpp"
 #include "minimp3.hpp"
-dlan::dlan() {}
+#include "nv_recv.hpp"
+
+dlan::dlan()
+{
+    dlna_config_nv_t cfg = {};
+    nv_recv_read_dlna(&cfg);
+    if (cfg.friendly_name[0] != '\0') {
+        (void)set_friendly_name((const char *)cfg.friendly_name);
+    }
+}
 
 // ��ʼ����̬��Ա����
 std::array<char, 16> dlan::local_ip = {0};
@@ -13,6 +22,7 @@ dlan::media_pause_handler dlan::media_pause_handler_func = nullptr;
 dlan::media_stop_handler dlan::media_stop_handler_func = nullptr;
 dlan::media_seek_handler dlan::media_seek_handler_func = nullptr;
 volatile bool dlan::s_stop_requested = false;
+std::array<char, 64> dlan::http_xml_name = {"ws63_sound"};
 
 void dlan::register_media_set_uri_handler(media_set_uri_handler handler)
 {
@@ -1576,4 +1586,23 @@ void dlan::request_stop()
 void dlan::reset_stop()
 {
     s_stop_requested = false;
+}
+
+bool dlan::set_friendly_name(const char *name)
+{
+    if (name == nullptr || name[0] == '\0' || strlen(name) >= http_xml_name.size()) {
+        return false;
+    }
+    (void)snprintf(http_xml_name.data(), http_xml_name.size(), "%s", name);
+    return true;
+}
+
+const char *dlan::friendly_name()
+{
+    dlna_config_nv_t cfg = {};
+    nv_recv_read_dlna(&cfg);
+    if (cfg.friendly_name[0] != '\0' && strcmp((const char *)cfg.friendly_name, http_xml_name.data()) != 0) {
+        (void)set_friendly_name((const char *)cfg.friendly_name);
+    }
+    return http_xml_name.data();
 }

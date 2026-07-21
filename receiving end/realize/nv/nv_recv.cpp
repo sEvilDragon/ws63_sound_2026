@@ -34,6 +34,15 @@ void nv_recv_load_all(void)
     } else {
         osal_printk(NV_PRINT_PREFIX "SoftAP cfg: no data (ret=%d len=%u), using defaults\r\n", (int)ret, (unsigned)len);
     }
+
+    /* --- 加载 DLNA 显示名称 --- */
+    dlna_config_nv_t dlna_cfg;
+    nv_recv_read_dlna(&dlna_cfg);
+    if (dlna_cfg.friendly_name[0] != '\0') {
+        osal_printk(NV_PRINT_PREFIX "DLNA name: %s\r\n", (const char *)dlna_cfg.friendly_name);
+    } else {
+        osal_printk(NV_PRINT_PREFIX "DLNA name: no data, using default\r\n");
+    }
 }
 
 /* ---------- 单字段更新（读-改-写） ---------- */
@@ -117,6 +126,20 @@ void nv_recv_read_ap(softap_config_nv_t *out)
     }
 }
 
+void nv_recv_read_dlna(dlna_config_nv_t *out)
+{
+    if (out == NULL)
+        return;
+    uint16_t len = 0;
+    (void)memset_s(out, sizeof(*out), 0, sizeof(*out));
+    errcode_t ret = uapi_nv_read(NV_KEY_DLNA, sizeof(*out), &len, (uint8_t *)out);
+    if (ret != ERRCODE_SUCC || len != sizeof(*out)) {
+        (void)memset_s(out, sizeof(*out), 0, sizeof(*out));
+    } else {
+        out->friendly_name[DLNA_NV_NAME_MAX_LEN - 1] = '\0';
+    }
+}
+
 /* ---------- 整体写入 ---------- */
 
 void nv_recv_write_sta(const char *ssid, const char *password)
@@ -141,4 +164,16 @@ void nv_recv_write_ap(const char *name, const char *password)
     (void)strncpy_s((char *)cfg.ap_password, WIFI_NV_PWD_MAX_LEN, password, WIFI_NV_PWD_MAX_LEN - 1);
     errcode_t ret = uapi_nv_write(NV_KEY_SOFTAP, (const uint8_t *)&cfg, sizeof(cfg));
     osal_printk(NV_PRINT_PREFIX "SoftAP cfg written: name=%s (ret=%d)\r\n", name, (int)ret);
+}
+
+int nv_recv_write_dlna_name(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return 0;
+    dlna_config_nv_t cfg;
+    (void)memset_s(&cfg, sizeof(cfg), 0, sizeof(cfg));
+    (void)strncpy_s((char *)cfg.friendly_name, DLNA_NV_NAME_MAX_LEN, name, DLNA_NV_NAME_MAX_LEN - 1);
+    errcode_t ret = uapi_nv_write(NV_KEY_DLNA, (const uint8_t *)&cfg, sizeof(cfg));
+    osal_printk(NV_PRINT_PREFIX "DLNA name written: %s (ret=%d)\r\n", name, (int)ret);
+    return (ret == ERRCODE_SUCC) ? 1 : 0;
 }

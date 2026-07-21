@@ -2,6 +2,7 @@
 #include "spi_task.h"
 #include "wifi_task.hpp"
 #include "nv_recv.hpp"
+#include "dlan.hpp"
 
 extern "C" {
 #include "lwip/sockets.h"
@@ -280,11 +281,12 @@ static void handle_status(int sock)
              "\"volume\":%u,\"bass\":%u,\"brightness\":%u,"
              "\"tone\":%u,\"tone_name\":\"%s\",\"night\":%s,"
              "\"hotspot\":\"%s\",\"network\":\"%s\","
-             "\"wifi_ssid\":\"%s\",\"softap_ssid\":\"%s\",\"device_ip\":\"%s\"}",
+             "\"wifi_ssid\":\"%s\",\"softap_ssid\":\"%s\","
+             "\"dlna_name\":\"%s\",\"device_ip\":\"%s\"}",
              s->mode, mode_name_str(s->mode), s->volume, s->bass, s->brightness,
              s->tone, spi_tone_name(s->tone), spi_settings_is_night(s) ? "true" : "false",
              (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF", (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
-             sta_ssid, ap_ssid, ip);
+             sta_ssid, ap_ssid, dlan::friendly_name(), ip);
     send_json(sock, 200, 0, "ok", s_http_body_buf);
 }
 
@@ -592,6 +594,33 @@ static void handle_set_ap(int sock, const char *body)
     send_json(sock, 200, 0, "ok, restart hotspot for new AP", resp);
 }
 
+// POST /api/v1/dlna/name  { "name":"Living Room Speaker" }
+static void handle_set_dlna_name(int sock, const char *body)
+{
+    char name[DLNA_NV_NAME_MAX_LEN] = {0};
+    if (!json_get_str(body, "name", name, sizeof(name)) || name[0] == '\0') {
+        send_json(sock, 400, 400, "name required", nullptr);
+        return;
+    }
+    if (strlen(name) > (DLNA_NV_NAME_MAX_LEN - 1)) {
+        send_json(sock, 400, 400, "name too long (max 63 bytes)", nullptr);
+        return;
+    }
+    // friendlyName 位于 XML 文本和 JSON 响应中，限制会破坏两种格式的字符。
+    if (strpbrk(name, "<>&\"\\") != nullptr) {
+        send_json(sock, 400, 400, "name contains unsupported characters", nullptr);
+        return;
+    }
+    if (!nv_recv_write_dlna_name(name) || !dlan::set_friendly_name(name)) {
+        send_json(sock, 500, 500, "failed to save DLNA name", nullptr);
+        return;
+    }
+
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"dlna\":{\"name\":\"%s\"},\"rescan\":true}", name);
+    send_json(sock, 200, 0, "ok, rescan DLNA devices", resp);
+}
+
 // ======================== 请求分发 ========================
 static void dispatch(int sock, const char *method, const char *path, const char *body)
 {
@@ -675,6 +704,10 @@ static void dispatch(int sock, const char *method, const char *path, const char 
         }
         if (strcmp(path, "/api/v1/wifi/ap") == 0) {
             handle_set_ap(sock, body);
+            return;
+        }
+        if (strcmp(path, "/api/v1/dlna/name") == 0) {
+            handle_set_dlna_name(sock, body);
             return;
         }
         send_json(sock, 404, 404, "not found", nullptr);

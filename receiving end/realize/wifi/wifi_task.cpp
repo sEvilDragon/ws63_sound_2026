@@ -32,7 +32,7 @@ static constexpr uint32_t k_sta_reconnect_retry_delay_ms = 1000;
 // deliberately nonexistent network.
 // Disable this after the provisioning/retry tests, otherwise a reboot will
 // replace credentials submitted by the mini program again.
-static constexpr bool k_force_invalid_sta_credentials_for_test = true;
+static constexpr bool k_force_invalid_sta_credentials_for_test = false;
 static constexpr char k_invalid_test_ssid[] = "WS63_TEST_INVALID_AP";
 static constexpr char k_invalid_test_password[] = "wrong_password_2026";
 
