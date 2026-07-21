@@ -31,8 +31,12 @@ private:
 
     bool is_connected_ = false;  // 连接状态标志，初始值为false，连接成功后设置为true
     bool auto_reconnect_ = true; // 自动重连标志，默认为true，连接断开后会自动尝试重连
+    volatile bool waiting_for_connection_ = false;
+    volatile int32_t last_connection_reason_ = 0;
 
     static constexpr uint32_t max_scan_num = 64;
+    static constexpr unsigned int scan_wait_timeout_ms = 10000;
+    static constexpr unsigned int connect_wait_timeout_ms = 15000;
 
     static sta *instance; // 单例实例指针 (用于实现静态回调)
 

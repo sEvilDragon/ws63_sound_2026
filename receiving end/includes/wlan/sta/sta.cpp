@@ -43,6 +43,8 @@ errcode_t sta::sta_connect(const stacredential &cred)
     memcpy_s(&current_cred_, sizeof(current_cred_), &cred, sizeof(cred));
     // 重置连接状态和自动重连标志
     is_connected_ = false;
+    waiting_for_connection_ = false;
+    last_connection_reason_ = 0;
     reset_semaphores();
 
     return do_connect_once(cred);
@@ -51,6 +53,7 @@ errcode_t sta::sta_connect(const stacredential &cred)
 void sta::sta_disconnect()
 {
     auto_reconnect_ = false;
+    waiting_for_connection_ = false;
     // 即使上一次连接在扫描、认证或 DHCP 阶段失败，底层 STA 也可能仍处于
     // enabled 状态。无条件 disable，确保显式重连前不会残留旧连接状态。
     (void)wifi_sta_disable();
@@ -117,8 +120,11 @@ errcode_t sta::do_connect_once(const stacredential &cred)
     if (ret != 0) {
         return ret;
     }
-    // 等待扫描完成
-    osal_sem_down(&scan_sem_);
+    // 等待扫描完成；底层漏回调时也必须返回给外层有限重试策略。
+    if (osal_sem_down_timeout(&scan_sem_, scan_wait_timeout_ms) != OSAL_SUCCESS) {
+        osal_printk("[Sta] scan timeout after %u ms\r\n", scan_wait_timeout_ms);
+        return 0x07;
+    }
 
     // 从扫描结果中获取待连接网络信息并连接
     wifi_sta_config_stru sta_config = {0};
@@ -127,12 +133,23 @@ errcode_t sta::do_connect_once(const stacredential &cred)
         return ret;
     }
 
+    waiting_for_connection_ = true;
     ret = wifi_sta_connect(&sta_config);
     if (ret != 0) {
+        waiting_for_connection_ = false;
         return ret;
     }
 
-    osal_sem_down(&connect_sem_);
+    int wait_ret = osal_sem_down_timeout(&connect_sem_, connect_wait_timeout_ms);
+    waiting_for_connection_ = false;
+    if (wait_ret != OSAL_SUCCESS) {
+        osal_printk("[Sta] connection timeout after %u ms\r\n", connect_wait_timeout_ms);
+        return 0x08;
+    }
+    if (!is_connected_) {
+        osal_printk("[Sta] connection rejected, reason=%d\r\n", (int)last_connection_reason_);
+        return 0x09;
+    }
 
     // 连接成功后再启动DHCP
     netif *netif_p = get_netif();
@@ -225,11 +242,15 @@ void sta::wifi_connection_changed_callback(int32_t state, const wifi_linked_info
     if (instance == nullptr) {
         return; // 没有实例，无法处理回调
     }
+    instance->last_connection_reason_ = reason_code;
     if (state == 1) {
         instance->is_connected_ = true;
-        osal_sem_up(&instance->connect_sem_); // 连接成功，释放连接完成信号量
     } else {
         instance->is_connected_ = false; // 连接断开，更新连接状态
+    }
+    if (instance->waiting_for_connection_) {
+        // 成功和认证/关联失败都要唤醒调用方，外层才能继续有限重试。
+        osal_sem_up(&instance->connect_sem_);
     }
 }
 

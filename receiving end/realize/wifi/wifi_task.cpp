@@ -27,6 +27,14 @@ static constexpr uint32_t k_http_stop_wait_ms = 2000;
 static constexpr int k_sta_reconnect_retry_count = 3;
 static constexpr int k_sta_reconnect_attempts = 1 + k_sta_reconnect_retry_count;
 static constexpr uint32_t k_sta_reconnect_retry_delay_ms = 1000;
+// Temporary network-failure test switch. While enabled, every boot overwrites
+// the saved STA credentials and starts one bounded connection cycle with a
+// deliberately nonexistent network.
+// Disable this after the provisioning/retry tests, otherwise a reboot will
+// replace credentials submitted by the mini program again.
+static constexpr bool k_force_invalid_sta_credentials_for_test = true;
+static constexpr char k_invalid_test_ssid[] = "WS63_TEST_INVALID_AP";
+static constexpr char k_invalid_test_password[] = "wrong_password_2026";
 
 // Fixed locally administered unicast MAC addresses for the receiving end.
 // Keep STA and SoftAP different to avoid conflicts if both interface addresses are observed.
@@ -106,8 +114,8 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
 // ======================== 跨 TU 共享的 WiFi 状态 ========================
 // 由 wifi_task 主循环维护，供 http_control / discover_broadcast 读取
 
-static char provisioned_ssid[64] = "OPPO Find X8 972E";
-static char provisioned_password[64] = "mytc4386";
+static char provisioned_ssid[64] = "WS63_TEST_INVALID_AP";
+static char provisioned_password[64] = "wrong_password_2026";
 static bool has_credentials = true;
 
 // 标志：本次 SoftAP 会话中是否已通过任意方式获得了凭据
@@ -275,14 +283,31 @@ void *wifi_task(void *arg)
     sta_.disable_auto_reconnect();
     osal_printk("[WiFi] subsystem ready\r\n");
 
-    // 使用 NV 中最近一次成功提交的凭据；没有有效 NV 时保留编译期默认值。
-    wifi_sta_config_nv_t saved_sta = {};
-    nv_recv_read_sta(&saved_sta);
-    if (saved_sta.ssid[0] != '\0' && saved_sta.password[0] != '\0') {
-        (void)snprintf(provisioned_ssid, sizeof(provisioned_ssid), "%s", (const char *)saved_sta.ssid);
-        (void)snprintf(provisioned_password, sizeof(provisioned_password), "%s", (const char *)saved_sta.password);
+    if (k_force_invalid_sta_credentials_for_test) {
+        osal_printk("[WiFi] TEST: overwriting STA NV with invalid credentials\r\n");
+        nv_recv_write_sta(k_invalid_test_ssid, k_invalid_test_password);
+        (void)snprintf(provisioned_ssid, sizeof(provisioned_ssid), "%s", k_invalid_test_ssid);
+        (void)snprintf(provisioned_password, sizeof(provisioned_password), "%s", k_invalid_test_password);
         has_credentials = true;
-        osal_printk("[WiFi] loaded STA credentials from NV: ssid=%s\r\n", provisioned_ssid);
+        // A failure test must actually enter the bounded STA policy even if a
+        // previous failed run persisted network=OFF in NV.
+        spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_CONN);
+        osal_printk("[WiFi] TEST credentials active: ssid=%s (password hidden)\r\n", provisioned_ssid);
+        osal_printk("[WiFi] TEST: forcing STA connection attempt\r\n");
+    } else {
+        // Use the most recently submitted NV credentials; retain the compiled
+        // preset only when the NV item is empty or invalid.
+        wifi_sta_config_nv_t saved_sta = {};
+        osal_printk("[WiFi] reading STA credentials from NV\r\n");
+        nv_recv_read_sta(&saved_sta);
+        if (saved_sta.ssid[0] != '\0' && saved_sta.password[0] != '\0') {
+            (void)snprintf(provisioned_ssid, sizeof(provisioned_ssid), "%s", (const char *)saved_sta.ssid);
+            (void)snprintf(provisioned_password, sizeof(provisioned_password), "%s", (const char *)saved_sta.password);
+            has_credentials = true;
+            osal_printk("[WiFi] loaded STA credentials from NV: ssid=%s\r\n", provisioned_ssid);
+        } else {
+            osal_printk("[WiFi] no valid STA credentials in NV; using preset ssid=%s\r\n", provisioned_ssid);
+        }
     }
 
     bool softap_active = false;
@@ -294,6 +319,8 @@ void *wifi_task(void *arg)
     osal_task *mp3_handle = nullptr;
     osal_task *http_ctrl_handle = nullptr;
     osal_task *discover_handle = nullptr;
+    uint8_t last_hotspot_network = 0xFF;
+    uint8_t last_mode = 0xFF;
 
     auto stop_dlna = [&]() {
         if (!dlna_running) {
@@ -382,6 +409,14 @@ void *wifi_task(void *arg)
         bool want_network = (spi_get_network(s->hotspot_network) == SPI_NETWORK_CONN);
         uint8_t mode = s->mode;
 
+        if (s->hotspot_network != last_hotspot_network || mode != last_mode) {
+            osal_printk("[WiFi] intent: hotspot=%s network=%s mode=%u credentials=%s\r\n",
+                        want_hotspot ? "ON" : "OFF", want_network ? "ON" : "OFF",
+                        (unsigned)mode, has_credentials ? provisioned_ssid : "NONE");
+            last_hotspot_network = s->hotspot_network;
+            last_mode = mode;
+        }
+
         // 小程序提交新凭据后，无论原先是 STA、SoftAP 还是断网状态，都走同一
         // 条显式重连路径。SoftAP 分支会先退出并在下一轮来到这里。
         if (g_sta_reconnect_requested && !softap_active) {
@@ -396,8 +431,8 @@ void *wifi_task(void *arg)
             disconnect_sta();
 
             if (!connect_sta_with_retries()) {
-                spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_DISC);
-                osal_printk("[WiFi] provisioning reconnect failed after initial try + %d retries; network OFF\r\n",
+                spi_settings_update_hotspot_network(SPI_HOTSPOT_ON, SPI_NETWORK_DISC);
+                osal_printk("[WiFi] provisioning reconnect failed after initial try + %d retries; enabling SoftAP\r\n",
                             k_sta_reconnect_retry_count);
             }
             g_cred_updated_this_session = false;
@@ -540,8 +575,8 @@ void *wifi_task(void *arg)
         if (!sta_connected && has_credentials) {
             osal_printk("[WiFi] network enabled, starting unified STA retry policy\r\n");
             if (!connect_sta_with_retries()) {
-                spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_DISC);
-                osal_printk("[WiFi] STA failed after initial try + %d retries; network OFF\r\n",
+                spi_settings_update_hotspot_network(SPI_HOTSPOT_ON, SPI_NETWORK_DISC);
+                osal_printk("[WiFi] STA failed after initial try + %d retries; enabling SoftAP\r\n",
                             k_sta_reconnect_retry_count);
             }
             continue;
