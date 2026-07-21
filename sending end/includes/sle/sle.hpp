@@ -27,6 +27,7 @@ public:
     sle();
     // 第一个参数是连接设备的索引，第二个参数是要发送的数据，第三个参数是数据长度（字节为单位）
     static void write_send(int index, uint8_t *data, uint16_t len_b);
+    static bool compression_enabled();
 
 private:
     // SLE使能回调函数，SLE使能成功后会调用该函数
@@ -67,6 +68,10 @@ private:
     static void ssap_connect(uint16_t conn_id);
     // MTU协商完成后的回调函数，配置数据长度
     static void ssap_mtu_callback(uint8_t client_id, uint16_t conn_id, ssap_exchange_info_t *param, errcode_t status);
+    static void notification_callback(uint8_t client_id,
+                                      uint16_t conn_id,
+                                      ssapc_handle_value_t *data,
+                                      errcode_t status);
     // 在PHY设置后，调用回调函数，配置mcs
     static void after_phy_set_callback(uint16_t conn_id, errcode_t status, const sle_set_phy_t *param);
 
@@ -117,6 +122,7 @@ private:
     static constexpr uint16_t scan_timeout = 0x1F4;
 
     static sle_addr_t s_pending_addr; // 正在被连接的设备地址，保存到连接回调中使用
+    static volatile bool s_adpcm_enabled;
 
     // 下面定义一些连接到设备后，需要开放的高速配置
     static constexpr uint16_t high_speed_interva_min = 0x14; // 传输间隔最小值

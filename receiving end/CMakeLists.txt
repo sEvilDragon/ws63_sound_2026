@@ -19,7 +19,6 @@ set(PUBLIC_HEADER "${PUBLIC_HEADER}"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/spi_task"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/wifi_connected"
     "${CMAKE_CURRENT_SOURCE_DIR}/realize/nv"
-
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/wlan/softap"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/wlan/sta"
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/wlan/udp"
@@ -35,4 +34,5 @@ add_subdirectory(realize)
 
 set(SOURCES "${SOURCES}"
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../other/adpcm/adpcm.cpp"
     PARENT_SCOPE)

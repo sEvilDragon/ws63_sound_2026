@@ -17,4 +17,5 @@ add_subdirectory(realize)
 
 set(SOURCES "${SOURCES}"
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../other/adpcm/adpcm.cpp"
     PARENT_SCOPE)

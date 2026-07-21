@@ -3,6 +3,7 @@
 #include "wifi_task.hpp"
 #include "nv_recv.hpp"
 #include "dlan.hpp"
+#include "sle.hpp"
 
 extern "C" {
 #include "lwip/sockets.h"
@@ -279,12 +280,13 @@ static void handle_status(int sock)
     snprintf(s_http_body_buf, sizeof(s_http_body_buf),
              "{\"mode\":%u,\"mode_name\":\"%s\","
              "\"volume\":%u,\"bass\":%u,\"brightness\":%u,"
-             "\"tone\":%u,\"tone_name\":\"%s\",\"night\":%s,"
+             "\"tone\":%u,\"tone_name\":\"%s\",\"night\":%s,\"sle_adpcm\":%s,"
              "\"hotspot\":\"%s\",\"network\":\"%s\","
              "\"wifi_ssid\":\"%s\",\"softap_ssid\":\"%s\","
              "\"dlna_name\":\"%s\",\"device_ip\":\"%s\"}",
              s->mode, mode_name_str(s->mode), s->volume, s->bass, s->brightness,
              s->tone, spi_tone_name(s->tone), spi_settings_is_night(s) ? "true" : "false",
+             sle::adpcm_enabled() ? "true" : "false",
              (hotspot == SPI_HOTSPOT_ON) ? "ON" : "OFF", (network == SPI_NETWORK_CONN) ? "CONNECTED" : "DISCONNECTED",
              sta_ssid, ap_ssid, dlan::friendly_name(), ip);
     send_json(sock, 200, 0, "ok", s_http_body_buf);
@@ -551,6 +553,30 @@ static void handle_set_sta(int sock, const char *body)
     send_json(sock, 200, 0, "ok, reconnect scheduled", resp);
 }
 
+// POST /api/v1/sle/adpcm  { "enabled": true }
+static void handle_set_sle_adpcm(int sock, const char *body)
+{
+    const uint8_t mode = get_spi_settings()->mode;
+    if (mode != SPI_MODE_SLE && mode != SPI_MODE_SLE_MIC) {
+        send_json(sock, 409, 409, "SLE ADPCM can only be changed in SLE mode", nullptr);
+        return;
+    }
+
+    bool enabled = false;
+    if (!json_get_bool(body, "enabled", &enabled)) {
+        send_json(sock, 400, 400, "missing or invalid enabled boolean", nullptr);
+        return;
+    }
+    if (!sle::set_adpcm_enabled(enabled)) {
+        send_json(sock, 500, 500, "failed to persist SLE ADPCM setting", nullptr);
+        return;
+    }
+
+    char resp[32];
+    snprintf(resp, sizeof(resp), "{\"enabled\":%s}", enabled ? "true" : "false");
+    send_json(sock, 200, 0, "ok", resp);
+}
+
 // POST /api/v1/wifi/ap  — 支持部分更新：{ "ssid":"..." } 或 { "password":"..." } 或两者
 static void handle_set_ap(int sock, const char *body)
 {
@@ -688,6 +714,10 @@ static void dispatch(int sock, const char *method, const char *path, const char 
         }
         if (strcmp(path, "/api/v1/night") == 0) {
             handle_set_night(sock, body);
+            return;
+        }
+        if (strcmp(path, "/api/v1/sle/adpcm") == 0) {
+            handle_set_sle_adpcm(sock, body);
             return;
         }
         if (strcmp(path, "/api/v1/hotspot") == 0) {

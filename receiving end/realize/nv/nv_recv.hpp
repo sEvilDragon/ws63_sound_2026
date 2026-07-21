@@ -10,6 +10,7 @@ extern "C" {
 #define NV_KEY_WIFI_STA 0x5002
 #define NV_KEY_SOFTAP 0x5003
 #define NV_KEY_DLNA 0x5004
+#define NV_KEY_SLE_AUDIO 0x5005
 
 /* NV 存储结构体（与 nv_common_cfg.h 保持一致） */
 #define WIFI_NV_SSID_MAX_LEN 33
@@ -29,6 +30,12 @@ typedef struct {
 typedef struct {
     uint8_t friendly_name[DLNA_NV_NAME_MAX_LEN];
 } dlna_config_nv_t;
+
+typedef struct {
+    uint8_t version;
+    uint8_t adpcm_enabled;
+    uint8_t reserved[2];
+} sle_audio_config_nv_t;
 
 /**
  * @brief 上电时从 NV 加载所有接收端配置并打印。
@@ -86,6 +93,10 @@ void nv_recv_write_ap(const char *name, const char *password);
  * @return 1 写入成功，0 写入失败。
  */
 int nv_recv_write_dlna_name(const char *name);
+
+/* The receiver is the only persistent owner of the SLE codec setting. */
+int nv_recv_sle_adpcm_enabled(void);
+int nv_recv_write_sle_adpcm(uint8_t enabled);
 
 #ifdef __cplusplus
 }

@@ -7,6 +7,10 @@ extern "C" {
 }
 
 #define NV_PRINT_PREFIX "[NV_Recv] "
+#define SLE_AUDIO_NV_VERSION 1
+
+static bool s_sle_adpcm_enabled = false;
+static bool s_sle_audio_nv_valid = false;
 
 /* ---------- 公开 API ---------- */
 
@@ -42,6 +46,23 @@ void nv_recv_load_all(void)
         osal_printk(NV_PRINT_PREFIX "DLNA name: %s\r\n", (const char *)dlna_cfg.friendly_name);
     } else {
         osal_printk(NV_PRINT_PREFIX "DLNA name: no data, using default\r\n");
+    }
+
+    /* --- 加载 SLE 音频压缩配置；缺失或非法时保持无损 PCM 默认值 --- */
+    sle_audio_config_nv_t sle_cfg;
+    (void)memset_s(&sle_cfg, sizeof(sle_cfg), 0, sizeof(sle_cfg));
+    len = 0;
+    ret = uapi_nv_read(NV_KEY_SLE_AUDIO, sizeof(sle_cfg), &len, (uint8_t *)&sle_cfg);
+    if (ret == ERRCODE_SUCC && len == sizeof(sle_cfg) && sle_cfg.version == SLE_AUDIO_NV_VERSION &&
+        sle_cfg.adpcm_enabled <= 1) {
+        s_sle_adpcm_enabled = sle_cfg.adpcm_enabled != 0;
+        s_sle_audio_nv_valid = true;
+        osal_printk(NV_PRINT_PREFIX "SLE ADPCM: %s\r\n", s_sle_adpcm_enabled ? "ON" : "OFF");
+    } else {
+        s_sle_adpcm_enabled = false;
+        s_sle_audio_nv_valid = false;
+        osal_printk(NV_PRINT_PREFIX "SLE ADPCM: no valid data (ret=%d len=%u), default OFF\r\n",
+                    (int)ret, (unsigned)len);
     }
 }
 
@@ -175,5 +196,29 @@ int nv_recv_write_dlna_name(const char *name)
     (void)strncpy_s((char *)cfg.friendly_name, DLNA_NV_NAME_MAX_LEN, name, DLNA_NV_NAME_MAX_LEN - 1);
     errcode_t ret = uapi_nv_write(NV_KEY_DLNA, (const uint8_t *)&cfg, sizeof(cfg));
     osal_printk(NV_PRINT_PREFIX "DLNA name written: %s (ret=%d)\r\n", name, (int)ret);
+    return (ret == ERRCODE_SUCC) ? 1 : 0;
+}
+
+int nv_recv_sle_adpcm_enabled(void)
+{
+    return s_sle_adpcm_enabled ? 1 : 0;
+}
+
+int nv_recv_write_sle_adpcm(uint8_t enabled)
+{
+    const bool new_value = enabled != 0;
+    if (s_sle_audio_nv_valid && new_value == s_sle_adpcm_enabled) {
+        return 1;
+    }
+
+    sle_audio_config_nv_t cfg = {};
+    cfg.version = SLE_AUDIO_NV_VERSION;
+    cfg.adpcm_enabled = new_value ? 1 : 0;
+    errcode_t ret = uapi_nv_write(NV_KEY_SLE_AUDIO, (const uint8_t *)&cfg, sizeof(cfg));
+    if (ret == ERRCODE_SUCC) {
+        s_sle_adpcm_enabled = new_value;
+        s_sle_audio_nv_valid = true;
+    }
+    osal_printk(NV_PRINT_PREFIX "SLE ADPCM written: %s (ret=%d)\r\n", new_value ? "ON" : "OFF", (int)ret);
     return (ret == ERRCODE_SUCC) ? 1 : 0;
 }

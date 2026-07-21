@@ -1,7 +1,10 @@
 #include "sle.hpp"
 
+#include "../../../other/adpcm/adpcm.hpp"
+
 std::array<sle::connection_device, sle::max_connection_num> sle::connection_devices = {0};
 sle_addr_t sle::s_pending_addr = {0};
+volatile bool sle::s_adpcm_enabled = false;
 
 sle::sle()
 {
@@ -20,6 +23,7 @@ sle::sle()
     c.find_structure_cb = find_service_callback;
     c.ssapc_find_property_cbk = find_property_callback;
     c.exchange_info_cb = ssap_mtu_callback;
+    c.notification_cb = notification_callback;
 
     sle_announce_seek_register_callbacks(&a);
     sle_connection_register_callbacks(&b);
@@ -29,6 +33,32 @@ sle::sle()
     if (ret != ERRCODE_SUCC) {
         osal_printk("SLE使能失败，错误码：%u\n", ret);
     }
+}
+
+bool sle::compression_enabled()
+{
+    return s_adpcm_enabled;
+}
+
+void sle::notification_callback(uint8_t client_id,
+                                uint16_t conn_id,
+                                ssapc_handle_value_t *data,
+                                errcode_t status)
+{
+    if (status != ERRCODE_SUCC || data == nullptr || data->data == nullptr ||
+        data->data_len != sle_audio::codec_control_size || data->data[0] != sle_audio::codec_control_magic ||
+        data->data[1] != sle_audio::codec_control_version || data->data[2] > 1) {
+        return;
+    }
+
+    const int index = find_connectioned_device_connid(conn_id);
+    if (index < 0 || connection_devices[index].client_id != client_id) {
+        return;
+    }
+
+    const bool enabled = data->data[2] != 0;
+    s_adpcm_enabled = enabled;
+    osal_printk("[SLE] ADPCM synchronized from receiver: %s\r\n", enabled ? "ON" : "OFF");
 }
 
 void sle::sle_enable_callback(errcode_t status)
@@ -222,6 +252,7 @@ void sle::connect_changed_callback(uint16_t conn_id,
     unused(pair_state);
     unused(disc_reason);
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
+        s_adpcm_enabled = false;
         // 连接成功：找到之前标记为 pending 的槽位，转为 active
         int index = -1;
         for (int i = 0; i < max_connection_num; ++i) {
@@ -272,6 +303,7 @@ void sle::connect_changed_callback(uint16_t conn_id,
         }
 
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
+        s_adpcm_enabled = false;
         int index = find_connectioned_device_connid(conn_id);
         if (index != -1) {
             // 找到对应连接设备，清理资源(恢复默认值)

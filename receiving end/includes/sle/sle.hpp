@@ -23,6 +23,10 @@ public:
     static void teardown();
     static void reset_state();
 
+    static bool adpcm_enabled();
+    static bool set_adpcm_enabled(bool enabled);
+    static void notify_adpcm_state();
+
     static volatile bool s_active;
 
 private:
@@ -77,7 +81,8 @@ private:
 
     // 连接对应标识
     static uint8_t id; // 系统自动分配，无需设置
-    static uint8_t conn_id;
+    static uint16_t conn_id;
+    static bool s_connected;
     static uint16_t service_handle;  // 服务句柄
     static uint16_t property_handle; // 属性句柄
 
@@ -95,7 +100,9 @@ private:
     static constexpr uint8_t property_permissions = SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE; // 读写权限
     static constexpr uint32_t operate_indication = SSAP_OPERATE_INDICATION_BIT_READ |
                                                    SSAP_OPERATE_INDICATION_BIT_WRITE |
-                                                   SSAP_OPERATE_INDICATION_BIT_WRITE_NO_RSP; // 读写权限，写不需要应答
+                                                   SSAP_OPERATE_INDICATION_BIT_WRITE_NO_RSP |
+                                                   SSAP_OPERATE_INDICATION_BIT_NOTIFY |
+                                                   SSAP_OPERATE_INDICATION_BIT_DESCRIPTOR_CLIENT_CONFIGURATION_WRITE;
     static constexpr uint16_t property_value_len = 0;   // 属性初始值长度，和C原始代码一致
     static constexpr uint8_t *property_value = nullptr; // 属性初始值
 

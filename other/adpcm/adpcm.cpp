@@ -1,138 +1,170 @@
 #include "adpcm.hpp"
 
-/* 静态数组定义 (使用 std::array，在现代编译器优化下开销与基础数组一致) */
-const std::array<int8_t, 16> adpcm::index_table = {
-    -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8
+namespace {
+
+constexpr int8_t kIndexTable[16] = {
+    -1, -1, -1, -1, 2, 4, 6, 8,
+    -1, -1, -1, -1, 2, 4, 6, 8,
 };
 
-const std::array<uint16_t, 89> adpcm::stepsize_table = {
-    7,    8,     9,     10,    11,    12,    13,    14,    16,    17,    19,    21,    23,    25,   28,
-    31,   34,    37,    41,    45,    50,    55,    60,    66,    73,    80,    88,    97,    107,  118,
-    130,  143,   157,   173,   190,   209,   230,   253,   279,   307,   337,   371,   408,   449,  494,
-    544,  598,   658,   724,   796,   876,   963,   1060,  1166,  1282,  1411,  1552,  1707,  1878, 2066,
-    2272, 2499,  2749,  3024,  3327,  3660,  4026,  4428,  4871,  5358,  5894,  6484,  7132,  7845, 8630,
-    9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+constexpr int16_t kStepTable[89] = {
+    7,     8,     9,     10,    11,    12,    13,    14,    16,    17,    19,    21,    23,
+    25,    28,    31,    34,    37,    41,    45,    50,    55,    60,    66,    73,    80,
+    88,    97,    107,   118,   130,   143,   157,   173,   190,   209,   230,   253,   279,
+    307,   337,   371,   408,   449,   494,   544,   598,   658,   724,   796,   876,   963,
+    1060,  1166,  1282,  1411,  1552,  1707,  1878,  2066,  2272,  2499,  2749,  3024,  3327,
+    3660,  4026,  4428,  4871,  5358,  5894,  6484,  7132,  7845,  8630,  9493,  10442, 11487,
+    12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
 };
 
-std::array<uint8_t, 2048> adpcm::out_buffer = {0};
-
-uint8_t *adpcm::encode(const int16_t *indata, int len)
+constexpr int clamp_index(int index)
 {
-    // len = 960 交错立体声样本数 (480L + 480R)
-    int samples_per_channel = len / 2;
-    uint8_t *outp = out_buffer.data();
-
-    // 写入 6 字节状态头（编码前的状态，接收端用于流程同步）
-    // 格式: [L_val_low, L_val_high, L_index, R_val_low, R_val_high, R_index]
-    int16_t lv = last_prediction[0];
-    int16_t rv = last_prediction[1];
-    *outp++ = (uint8_t)(lv & 0xFF);
-    *outp++ = (uint8_t)((lv >> 8) & 0xFF);
-    *outp++ = (uint8_t)last_index[0];
-    *outp++ = (uint8_t)(rv & 0xFF);
-    *outp++ = (uint8_t)((rv >> 8) & 0xFF);
-    *outp++ = (uint8_t)last_index[1];
-
-    // 编码 L 声道（输入偏移 0, 2, 4...）
-    int32_t valpred_l = last_prediction[0];
-    int32_t step_idx_l = last_index[0];
-    for (int i = 0; i < samples_per_channel; i++) {
-        int32_t val = (int32_t)indata[i * 2];
-        int32_t step = (int32_t)stepsize_table[step_idx_l];
-        int32_t diff = val - valpred_l;
-        uint8_t sign = (diff < 0) ? 0x80 : 0x00;
-        if (sign) diff = -diff;
-        int32_t magnitude = (diff * 64) / step;
-        if (magnitude > 127) magnitude = 127;
-        *outp++ = (uint8_t)(sign | magnitude);
-        int32_t vpdiff = (magnitude * step) >> 6;
-        if (sign) valpred_l -= vpdiff;
-        else valpred_l += vpdiff;
-        if (valpred_l > 32767) valpred_l = 32767;
-        else if (valpred_l < -32768) valpred_l = -32768;
-        step_idx_l += index_table[magnitude >> 4];
-        if (step_idx_l < 0) step_idx_l = 0;
-        else if (step_idx_l > 88) step_idx_l = 88;
-    }
-
-    // 编码 R 声道（输入偏移 1, 3, 5...）
-    int32_t valpred_r = last_prediction[1];
-    int32_t step_idx_r = last_index[1];
-    for (int i = 0; i < samples_per_channel; i++) {
-        int32_t val = (int32_t)indata[i * 2 + 1];
-        int32_t step = (int32_t)stepsize_table[step_idx_r];
-        int32_t diff = val - valpred_r;
-        uint8_t sign = (diff < 0) ? 0x80 : 0x00;
-        if (sign) diff = -diff;
-        int32_t magnitude = (diff * 64) / step;
-        if (magnitude > 127) magnitude = 127;
-        *outp++ = (uint8_t)(sign | magnitude);
-        int32_t vpdiff = (magnitude * step) >> 6;
-        if (sign) valpred_r -= vpdiff;
-        else valpred_r += vpdiff;
-        if (valpred_r > 32767) valpred_r = 32767;
-        else if (valpred_r < -32768) valpred_r = -32768;
-        step_idx_r += index_table[magnitude >> 4];
-        if (step_idx_r < 0) step_idx_r = 0;
-        else if (step_idx_r > 88) step_idx_r = 88;
-    }
-
-    last_prediction[0] = (int16_t)valpred_l;
-    last_prediction[1] = (int16_t)valpred_r;
-    last_index[0] = (int8_t)step_idx_l;
-    last_index[1] = (int8_t)step_idx_r;
-
-    return out_buffer.data();
+    return index < 0 ? 0 : (index > 88 ? 88 : index);
 }
 
-void adpcm::decode(const uint8_t *indata, int len, int16_t *outdata)
+constexpr int16_t clamp_sample(int32_t sample)
 {
-    // indata格式：非交织，前半段为L声道，后半段为R声道
-    // outdata格式：交织，[L0][R0][L1][R1]...（I2S DMA直接消费）
-    int samples_per_channel = len / 2;
-    const uint8_t *l_data = indata;
-    const uint8_t *r_data = indata + samples_per_channel;
+    return static_cast<int16_t>(sample < -32768 ? -32768 : (sample > 32767 ? 32767 : sample));
+}
 
-    int32_t valpred[2] = {last_prediction[0], last_prediction[1]};
-    int32_t step_idx[2] = {last_index[0], last_index[1]};
+void put_u16_le(uint8_t *dst, uint16_t value)
+{
+    dst[0] = static_cast<uint8_t>(value & 0xFFU);
+    dst[1] = static_cast<uint8_t>(value >> 8U);
+}
 
-    for (int i = 0; i < samples_per_channel; i++) {
-        // 解码L声道
-        {
-            uint8_t delta = l_data[i];
-            int32_t step = (int32_t)stepsize_table[step_idx[0]];
-            uint8_t sign = delta & 0x80;
-            int32_t magnitude = delta & 0x7F;
-            step_idx[0] += index_table[magnitude >> 4];
-            if (step_idx[0] < 0) step_idx[0] = 0;
-            else if (step_idx[0] > 88) step_idx[0] = 88;
-            int32_t vpdiff = (magnitude * step) >> 6;
-            if (sign) valpred[0] -= vpdiff;
-            else      valpred[0] += vpdiff;
-            if (valpred[0] > 32767)       valpred[0] = 32767;
-            else if (valpred[0] < -32768) valpred[0] = -32768;
-            outdata[i * 2] = (int16_t)valpred[0];
-        }
-        // 解码R声道
-        {
-            uint8_t delta = r_data[i];
-            int32_t step = (int32_t)stepsize_table[step_idx[1]];
-            uint8_t sign = delta & 0x80;
-            int32_t magnitude = delta & 0x7F;
-            step_idx[1] += index_table[magnitude >> 4];
-            if (step_idx[1] < 0) step_idx[1] = 0;
-            else if (step_idx[1] > 88) step_idx[1] = 88;
-            int32_t vpdiff = (magnitude * step) >> 6;
-            if (sign) valpred[1] -= vpdiff;
-            else      valpred[1] += vpdiff;
-            if (valpred[1] > 32767)       valpred[1] = 32767;
-            else if (valpred[1] < -32768) valpred[1] = -32768;
-            outdata[i * 2 + 1] = (int16_t)valpred[1];
-        }
+uint16_t get_u16_le(const uint8_t *src)
+{
+    return static_cast<uint16_t>(src[0]) | (static_cast<uint16_t>(src[1]) << 8U);
+}
+
+} // namespace
+
+void adpcm::reset()
+{
+    index_[0] = 0;
+    index_[1] = 0;
+}
+
+uint8_t adpcm::encode_nibble(int16_t sample, int32_t &predictor, int &index)
+{
+    const int step = kStepTable[index];
+    int diff = static_cast<int>(sample) - predictor;
+    uint8_t nibble = 0;
+    if (diff < 0) {
+        nibble = 0x08;
+        diff = -diff;
     }
 
-    last_prediction[0] = (int16_t)valpred[0];
-    last_prediction[1] = (int16_t)valpred[1];
-    last_index[0] = (int8_t)step_idx[0];
-    last_index[1] = (int8_t)step_idx[1];
+    int difference = step >> 3;
+    int remainder = diff;
+    if (remainder >= step) {
+        nibble |= 0x04;
+        remainder -= step;
+        difference += step;
+    }
+    if (remainder >= (step >> 1)) {
+        nibble |= 0x02;
+        remainder -= step >> 1;
+        difference += step >> 1;
+    }
+    if (remainder >= (step >> 2)) {
+        nibble |= 0x01;
+        difference += step >> 2;
+    }
+
+    predictor += (nibble & 0x08U) ? -difference : difference;
+    predictor = clamp_sample(predictor);
+    index = clamp_index(index + kIndexTable[nibble]);
+    return nibble;
+}
+
+int16_t adpcm::decode_nibble(uint8_t nibble, int32_t &predictor, int &index)
+{
+    nibble &= 0x0FU;
+    const int step = kStepTable[index];
+    int difference = step >> 3;
+    if (nibble & 0x04U) {
+        difference += step;
+    }
+    if (nibble & 0x02U) {
+        difference += step >> 1;
+    }
+    if (nibble & 0x01U) {
+        difference += step >> 2;
+    }
+
+    predictor += (nibble & 0x08U) ? -difference : difference;
+    predictor = clamp_sample(predictor);
+    index = clamp_index(index + kIndexTable[nibble]);
+    return static_cast<int16_t>(predictor);
+}
+
+std::size_t adpcm::encode(const int16_t *pcm,
+                          std::size_t interleaved_samples,
+                          uint8_t *output,
+                          std::size_t output_capacity)
+{
+    const std::size_t encoded_size = sle_audio::adpcm_encoded_size(interleaved_samples);
+    if (pcm == nullptr || output == nullptr || encoded_size == 0 || encoded_size > output_capacity ||
+        interleaved_samples > 0xFFFFU) {
+        return 0;
+    }
+
+    const std::size_t frames = interleaved_samples / 2U;
+    output[0] = sle_audio::adpcm_packet_marker;
+    put_u16_le(output + 1, static_cast<uint16_t>(interleaved_samples));
+
+    int32_t predictor[2] = {pcm[0], pcm[1]};
+    put_u16_le(output + 3, static_cast<uint16_t>(pcm[0]));
+    output[5] = static_cast<uint8_t>(index_[0]);
+    output[6] = 0;
+    put_u16_le(output + 7, static_cast<uint16_t>(pcm[1]));
+    output[9] = static_cast<uint8_t>(index_[1]);
+    output[10] = 0;
+
+    uint8_t *payload = output + sle_audio::adpcm_packet_header_size;
+    for (std::size_t frame = 1; frame < frames; ++frame) {
+        const uint8_t left = encode_nibble(pcm[frame * 2U], predictor[0], index_[0]);
+        const uint8_t right = encode_nibble(pcm[frame * 2U + 1U], predictor[1], index_[1]);
+        payload[frame - 1U] = static_cast<uint8_t>(left | (right << 4U));
+    }
+    return encoded_size;
+}
+
+std::size_t adpcm::decode(const uint8_t *packet,
+                          std::size_t packet_length,
+                          int16_t *output,
+                          std::size_t output_capacity) const
+{
+    if (packet == nullptr || output == nullptr || packet_length < sle_audio::adpcm_packet_header_size ||
+        packet[0] != sle_audio::adpcm_packet_marker) {
+        return 0;
+    }
+
+    const std::size_t interleaved_samples = get_u16_le(packet + 1);
+    const std::size_t expected_size = sle_audio::adpcm_encoded_size(interleaved_samples);
+    if (expected_size == 0 || expected_size != packet_length || interleaved_samples > output_capacity) {
+        return 0;
+    }
+
+    int32_t predictor[2] = {
+        static_cast<int16_t>(get_u16_le(packet + 3)),
+        static_cast<int16_t>(get_u16_le(packet + 7)),
+    };
+    int index[2] = {packet[5], packet[9]};
+    if (index[0] > 88 || index[1] > 88) {
+        return 0;
+    }
+
+    output[0] = static_cast<int16_t>(predictor[0]);
+    output[1] = static_cast<int16_t>(predictor[1]);
+    const std::size_t frames = interleaved_samples / 2U;
+    const uint8_t *payload = packet + sle_audio::adpcm_packet_header_size;
+    for (std::size_t frame = 1; frame < frames; ++frame) {
+        const uint8_t packed = payload[frame - 1U];
+        output[frame * 2U] = decode_nibble(packed, predictor[0], index[0]);
+        output[frame * 2U + 1U] = decode_nibble(packed >> 4U, predictor[1], index[1]);
+    }
+    return interleaved_samples;
 }

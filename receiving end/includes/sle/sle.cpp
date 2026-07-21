@@ -1,7 +1,11 @@
 #include "sle.hpp"
+#include "../../../other/adpcm/adpcm.hpp"
+#include "nv_recv.hpp"
+
 uint16_t sle::true_mtu = 0;
 uint8_t sle::id = 0;
-uint8_t sle::conn_id = 0;
+uint16_t sle::conn_id = 0;
+bool sle::s_connected = false;
 uint16_t sle::service_handle = 0;
 uint16_t sle::property_handle = 0;
 sle::data_process_t sle::data_process = nullptr;
@@ -16,6 +20,44 @@ void sle::set_data_process_fuction(data_process_t callback)
 void sle::set_data_clear_fuction(data_clear_t callback)
 {
     data_clear = callback;
+}
+
+bool sle::adpcm_enabled()
+{
+    return nv_recv_sle_adpcm_enabled() != 0;
+}
+
+bool sle::set_adpcm_enabled(bool enabled)
+{
+    if (!nv_recv_write_sle_adpcm(enabled ? 1 : 0)) {
+        return false;
+    }
+    notify_adpcm_state();
+    return true;
+}
+
+void sle::notify_adpcm_state()
+{
+    if (!s_active || !s_connected || property_handle == 0) {
+        return;
+    }
+
+    uint8_t value[sle_audio::codec_control_size] = {
+        sle_audio::codec_control_magic,
+        sle_audio::codec_control_version,
+        static_cast<uint8_t>(adpcm_enabled() ? 1 : 0),
+    };
+    ssaps_ntf_ind_t param = {0};
+    param.handle = property_handle;
+    param.type = SSAP_PROPERTY_TYPE_VALUE;
+    param.value_len = sizeof(value);
+    param.value = value;
+    errcode_t ret = ssaps_notify_indicate(id, conn_id, &param);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[SLE] ADPCM state notify failed: %u\r\n", ret);
+    } else {
+        osal_printk("[SLE] ADPCM state notified: %s\r\n", adpcm_enabled() ? "ON" : "OFF");
+    }
 }
 
 sle::sle()
@@ -65,6 +107,7 @@ void sle::reset_state()
 {
     id = 0;
     conn_id = 0;
+    s_connected = false;
     service_handle = 0;
     property_handle = 0;
     true_mtu = 0;
@@ -135,6 +178,19 @@ void sle::set_property()
     errcode_t ret = ssaps_add_property_sync(id, service_handle, &property_info, &property_handle);
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SLE] add property failed: %u\n", ret);
+        return;
+    }
+
+    uint8_t notify_enabled[] = {0x01, 0x00};
+    ssaps_desc_info_t descriptor = {0};
+    descriptor.permissions = SSAP_PERMISSION_READ | SSAP_PERMISSION_WRITE;
+    descriptor.operate_indication = SSAP_OPERATE_INDICATION_BIT_READ | SSAP_OPERATE_INDICATION_BIT_WRITE;
+    descriptor.type = SSAP_DESCRIPTOR_CLIENT_CONFIGURATION;
+    descriptor.value_len = sizeof(notify_enabled);
+    descriptor.value = notify_enabled;
+    ret = ssaps_add_descriptor_sync(id, service_handle, property_handle, &descriptor);
+    if (ret != ERRCODE_SUCC) {
+        osal_printk("[SLE] add notify descriptor failed: %u\n", ret);
     }
 }
 
@@ -225,6 +281,7 @@ void sle::connect_changed_callback(uint16_t conn_id,
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         osal_printk("[SLE] connected, conn_id=%u\r\n", conn_id);
         sle::conn_id = conn_id;
+        s_connected = true;
 
         sle_stop_announce(audio_announce_handle);
 
@@ -253,9 +310,13 @@ void sle::connect_changed_callback(uint16_t conn_id,
             osal_printk("[SLE] set PHY failed: %u\n", ret_phy);
         }
 
+        /* Try immediately; MTU callback repeats this after SSAP is ready. */
+        notify_adpcm_state();
+
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         osal_printk("[SLE] disconnected, conn_id=%u\r\n", conn_id);
         sle::conn_id = 0;
+        s_connected = false;
 
         if (data_clear != nullptr && s_active) {
             data_clear();
@@ -278,6 +339,7 @@ void sle::ssap_mtu_callback(uint8_t client_id, uint16_t conn_id, ssap_exchange_i
         return;
     }
     true_mtu = param->mtu_size;
+    notify_adpcm_state();
 }
 
 void sle::get_data_callback(uint8_t server_id, uint16_t conn_id, ssaps_req_write_cb_t *req_param, errcode_t status)
@@ -293,6 +355,10 @@ void sle::get_data_callback(uint8_t server_id, uint16_t conn_id, ssaps_req_write
     }
     if (!s_active)
         return;
+    if (req_param == nullptr || req_param->handle != property_handle ||
+        req_param->type != SSAP_PROPERTY_TYPE_VALUE) {
+        return;
+    }
     if (data_process == nullptr) {
         osal_printk("[SLE] data_process not init\r\n");
         return;

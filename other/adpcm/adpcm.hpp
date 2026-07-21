@@ -1,55 +1,73 @@
 #ifndef __ADPCM_H__
 #define __ADPCM_H__
 
+#include <cstddef>
 #include <cstdint>
-#include <array>
 
+namespace sle_audio {
+
+/* Every SLE audio write starts with one packet marker byte. */
+constexpr uint8_t packet_type_mask = 0xF0;
+constexpr uint8_t pcm_packet_marker = 0x01;
+constexpr uint8_t adpcm_packet_marker = 0xF1;
+
+/* Receiver -> sender notification payload. */
+constexpr uint8_t codec_control_magic = 0xAC;
+constexpr uint8_t codec_control_version = 0x01;
+constexpr std::size_t codec_control_size = 3;
+
+/*
+ * ADPCM packet layout:
+ *   0      : 0xF1 (high nibble 0xF means ADPCM, low nibble is version)
+ *   1..2   : decoded interleaved int16 sample count, little-endian
+ *   3..6   : left predictor(int16 LE), index(uint8), reserved
+ *   7..10  : right predictor(int16 LE), index(uint8), reserved
+ *   11..   : one byte per following stereo frame: L nibble low, R nibble high
+ *
+ * Each packet carries its own IMA state. A lost SLE packet therefore cannot
+ * desynchronise all subsequent audio.
+ */
+constexpr std::size_t adpcm_packet_header_size = 11;
+
+constexpr bool is_adpcm_packet(uint8_t marker)
+{
+    return (marker & packet_type_mask) == packet_type_mask;
+}
+
+constexpr std::size_t adpcm_encoded_size(std::size_t interleaved_samples)
+{
+    return (interleaved_samples >= 2 && (interleaved_samples & 1U) == 0)
+               ? adpcm_packet_header_size + (interleaved_samples / 2U) - 1U
+               : 0U;
+}
+
+} // namespace sle_audio
+
+/* Standard 4-bit IMA ADPCM codec for interleaved stereo PCM16 packets. */
 class adpcm {
 public:
-    adpcm() {
-        reset();
-    }
+    adpcm() { reset(); }
     ~adpcm() = default;
 
-    /**
-     * @brief 编码 PCM 数据为 ADPCM (8-bit)
-     * @param indata 输入的 PCM16 数据 (左右声道交替 LRLR)
-     * @param len 样本数量 (单声道样本数 * 2)
-     * @return 指向静态输出缓冲区的指针
-     */
-    uint8_t *encode(const int16_t *indata, int len);
+    /* Returns the encoded packet length, or 0 if the arguments are invalid. */
+    std::size_t encode(const int16_t *pcm,
+                       std::size_t interleaved_samples,
+                       uint8_t *output,
+                       std::size_t output_capacity);
 
-    /**
-     * @brief 解码 ADPCM 数据为 PCM16
-     * @param indata 输入的 ADPCM 8-bit 数据，非交织格式：前 len/2 字节为L声道，后 len/2 字节为R声道
-     * @param len 总数据长度（必须为偶数）
-     * @param outdata 输出的 PCM16 缓冲区，交织格式：[L0][R0][L1][R1]... 共 len 个 int16_t
-     */
-    void decode(const uint8_t *indata, int len, int16_t *outdata);
+    /* Returns the decoded interleaved int16 sample count, or 0 on failure. */
+    std::size_t decode(const uint8_t *packet,
+                       std::size_t packet_length,
+                       int16_t *output,
+                       std::size_t output_capacity) const;
 
-    void reset()
-    {
-        last_prediction[0] = 0;
-        last_prediction[1] = 0;
-        last_index[0] = 0;
-        last_index[1] = 0;
-    }
-
-    void set_state(int16_t lv, int8_t li, int16_t rv, int8_t ri)
-    {
-        last_prediction[0] = lv;
-        last_index[0]      = li;
-        last_prediction[1] = rv;
-        last_index[1]      = ri;
-    }
+    void reset();
 
 private:
-    int16_t last_prediction[2];
-    int8_t last_index[2];
+    int index_[2];
 
-    static const std::array<int8_t, 16> index_table;
-    static const std::array<uint16_t, 89> stepsize_table;
-    static std::array<uint8_t, 2048> out_buffer;
+    static uint8_t encode_nibble(int16_t sample, int32_t &predictor, int &index);
+    static int16_t decode_nibble(uint8_t nibble, int32_t &predictor, int &index);
 };
 
 #endif

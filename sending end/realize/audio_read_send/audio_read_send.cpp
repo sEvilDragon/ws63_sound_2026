@@ -1,5 +1,9 @@
 #include "audio_read_send.h"
 
+#include "../../../other/adpcm/adpcm.hpp"
+
+#include <cstring>
+
 // 创建pcm2706任务，实现读取音频数据
 void *audio_read_send_task(void *arg)
 {
@@ -17,9 +21,11 @@ void *audio_read_send_task(void *arg)
     static denoise g_denoise;
     osal_printk("去噪实例创建完成\n");
 
-    // 初始化ADPCM编码器（已禁用，当前使用无压缩原始PCM传输）
-    // static adpcm g_adpcm;
-    // osal_printk("ADPCM实例创建完成\n");
+    /* ADPCM只在SLE发送前使用，PCM2706采集数据本身始终保持原始PCM。 */
+    static adpcm g_adpcm;
+    static uint8_t adpcm_packet[sle_audio::adpcm_encoded_size(pcm2706::buffer_size)] = {0};
+    static constexpr int chunk_samples = 360;
+    static uint8_t pcm_packet[1 + chunk_samples * sizeof(int16_t)] = {0};
     osal_printk("实例创建完毕\n");
 
     while (true) {
@@ -57,17 +63,35 @@ void *audio_read_send_task(void *arg)
         // 除杂
         // g_denoise.process(data_ptr, pcm.buffer_size);
 
-        // 星闪发送（无压缩原始PCM）
-        // MTU = 1000 字节，int16_t 占 2 字节，每包最多 360 个样本（1400 字节 < 1500）
-        // buffer_size=960 正好 1.47 包，比原来 4 包减少一半协议开销和调度次数
-        const int chunk_samples = 360;
+        /*
+         * 只在即将写入SLE时选择编码。ADPCM整帧约490字节，一次write即可；
+         * 原始PCM仍分包，但每包也增加一个非0xF标志字节。
+         */
+        const bool use_adpcm = sle::compression_enabled();
+        std::size_t adpcm_length = 0;
+        if (use_adpcm) {
+            adpcm_length = g_adpcm.encode(data_ptr, pcm.buffer_size, adpcm_packet, sizeof(adpcm_packet));
+            if (adpcm_length == 0) {
+                osal_printk("[Audio] ADPCM encode failed, dropping frame\r\n");
+                continue;
+            }
+        }
+
         for (int i = 0; i < sle::max_connection_num; i++) {
             if (sle::connection_devices[i].is_active && sle::connection_devices[i].target_handle != 0) {
+                if (use_adpcm) {
+                    sle::write_send(i, adpcm_packet, static_cast<uint16_t>(adpcm_length));
+                    continue;
+                }
+
                 for (int offset = 0; offset < pcm.buffer_size; offset += chunk_samples) {
                     int send_samples = pcm.buffer_size - offset;
                     if (send_samples > chunk_samples)
                         send_samples = chunk_samples;
-                    sle::write_send(i, (uint8_t *)(data_ptr + offset), (uint16_t)(send_samples * (int)sizeof(int16_t)));
+                    const std::size_t payload_bytes = send_samples * sizeof(int16_t);
+                    pcm_packet[0] = sle_audio::pcm_packet_marker;
+                    std::memcpy(pcm_packet + 1, data_ptr + offset, payload_bytes);
+                    sle::write_send(i, pcm_packet, static_cast<uint16_t>(payload_bytes + 1));
                 }
             }
         }

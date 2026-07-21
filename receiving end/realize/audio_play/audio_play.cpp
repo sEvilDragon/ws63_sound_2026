@@ -1,6 +1,9 @@
 #include "audio_play.hpp"
+#include "../../../other/adpcm/adpcm.hpp"
 #include "spi_task.h"
 #include "wifi_task.hpp"
+
+#include <cstring>
 
 extern "C" {
 #include "soc_osal.h"
@@ -12,6 +15,9 @@ static volatile bool s_sle_running = false;
 static osal_task *s_sle_task_handle = nullptr;
 static constexpr int k_sle_stop_timeout_loops = 80;
 static constexpr int k_sle_release_grace_ms = 200;
+static constexpr std::size_t k_max_sle_pcm_samples = 960;
+static adpcm s_adpcm_decoder;
+static int16_t s_sle_pcm_buffer[k_max_sle_pcm_samples] = {0};
 
 static const char *mode_name(uint8_t mode)
 {
@@ -33,14 +39,31 @@ static const char *mode_name(uint8_t mode)
 
 static void sle_data_process(const uint8_t *data, uint16_t len)
 {
-    if (data == nullptr) {
+    if (data == nullptr || len < 1) {
         return;
     }
-    if (len % 2 == 1) {
+
+    std::size_t pcm_samples = 0;
+    if (sle_audio::is_adpcm_packet(data[0])) {
+        pcm_samples = s_adpcm_decoder.decode(data, len, s_sle_pcm_buffer, k_max_sle_pcm_samples);
+        if (pcm_samples == 0) {
+            osal_printk("[Audio] invalid ADPCM packet: marker=0x%02x len=%u\r\n", data[0], len);
+            return;
+        }
+    } else if (data[0] == sle_audio::pcm_packet_marker) {
+        const std::size_t payload_bytes = len - 1U;
+        if ((payload_bytes & 1U) != 0 || payload_bytes > sizeof(s_sle_pcm_buffer)) {
+            return;
+        }
+        std::memcpy(s_sle_pcm_buffer, data + 1, payload_bytes);
+        pcm_samples = payload_bytes / sizeof(int16_t);
+    } else {
+        /* Unknown/legacy packets have no reliable codec marker. */
         return;
     }
+
     const spi_settings_t *s = get_spi_settings();
-    iis::data_write((const int16_t *)data, len / sizeof(int16_t), spi_settings_effective_volume(s),
+    iis::data_write(s_sle_pcm_buffer, pcm_samples, spi_settings_effective_volume(s),
                     spi_settings_effective_bass(s));
     iis::fill_buffer_if_needed();
 }
