@@ -22,6 +22,8 @@ static constexpr int k_max_backlog = 4;
 static constexpr size_t k_recv_buf_size = 1024;
 static constexpr size_t k_resp_body_size = 512;
 static constexpr int k_client_timeout_sec = 3;
+// The relay server publishes the currently selected file at this stable URL.
+static constexpr char k_relay_play_url[] = "http://124.222.12.152:18080/ws63-test.mp3";
 
 static char s_http_send_buf[512];
 static char s_http_body_buf[k_resp_body_size];
@@ -300,6 +302,56 @@ static void handle_set_mode(int sock, const char *body)
     send_json(sock, 200, 0, "ok", resp);
 }
 
+// POST /api/v1/play { "url": "source URL (optional, for logging)" }
+// The source URL is not fetched by WS63. Playback always uses the relay file.
+static void handle_play(int sock, const char *body)
+{
+    char source_url[256] = {0};
+    const bool has_source_url = json_get_str(body, "url", source_url, sizeof(source_url));
+    (void)has_source_url;
+
+    // Ensure wifi_task starts the DLNA/minimp3 lifecycle before the request is
+    // consumed. The URL is safe to set before minimp3_task itself runs.
+    spi_settings_update_mode(SPI_MODE_DLNA);
+    minimp3::play_url(k_relay_play_url);
+    send_json(sock, 200, 0, "ok", "{\"playing\":true,\"url\":\"http://124.222.12.152:18080/ws63-test.mp3\"}");
+}
+
+// POST /api/v1/pause
+static void handle_pause(int sock)
+{
+    minimp3::pause_playback();
+    send_json(sock, 200, 0, "ok", "{\"paused\":true}");
+}
+
+// POST /api/v1/resume
+static void handle_resume(int sock)
+{
+    minimp3::resume_playback();
+    send_json(sock, 200, 0, "ok", "{\"playing\":true}");
+}
+
+// POST /api/v1/stop
+static void handle_stop(int sock)
+{
+    minimp3::stop_playback();
+    send_json(sock, 200, 0, "ok", "{\"stopped\":true}");
+}
+
+// POST /api/v1/seek { "seconds": 30 }
+static void handle_seek(int sock, const char *body)
+{
+    int seconds = -1;
+    if (!json_get_int(body, "seconds", &seconds) || seconds < 0) {
+        send_json(sock, 400, 400, "invalid seconds", nullptr);
+        return;
+    }
+    minimp3::seek_to_seconds(static_cast<uint32_t>(seconds));
+    char resp[64];
+    snprintf(resp, sizeof(resp), "{\"seconds\":%d}", seconds);
+    send_json(sock, 200, 0, "ok", resp);
+}
+
 // POST /api/v1/volume  { "volume": 75 }
 static void handle_set_volume(int sock, const char *body)
 {
@@ -393,7 +445,7 @@ static void handle_hotspot(int sock, const char *body)
         return;
     }
     if (strcmp(action, "on") == 0) {
-        spi_settings_update_hotspot_network(SPI_HOTSPOT_ON, SPI_NETWORK_CONN);
+        spi_settings_update_hotspot_network(SPI_HOTSPOT_ON, SPI_NETWORK_DISC);
         send_json(sock, 200, 0, "ok", "{\"hotspot\":\"ON\"}");
     } else if (strcmp(action, "off") == 0) {
         spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_CONN);
@@ -412,7 +464,8 @@ static void handle_network(int sock, const char *body)
         return;
     }
     if (strcmp(action, "connect") == 0) {
-        spi_settings_update_hotspot_network(spi_get_hotspot(get_spi_settings()->hotspot_network), SPI_NETWORK_CONN);
+        // Connecting STA is also the explicit way to leave SoftAP mode.
+        spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_CONN);
         send_json(sock, 200, 0, "ok", "{\"network\":\"CONNECTING\"}");
     } else if (strcmp(action, "disconnect") == 0) {
         spi_settings_update_hotspot_network(spi_get_hotspot(get_spi_settings()->hotspot_network), SPI_NETWORK_DISC);
@@ -486,11 +539,14 @@ static void handle_set_sta(int sock, const char *body)
     nv_recv_write_sta((const char *)cur.ssid, (const char *)cur.password);
 
     // 同步更新内存凭据（供主循环下次连接使用）
-    wifi_update_sta_credentials((const char *)cur.ssid, (const char *)cur.password);
+    if (!wifi_update_sta_credentials((const char *)cur.ssid, (const char *)cur.password)) {
+        send_json(sock, 400, 400, "incomplete or invalid STA credentials", nullptr);
+        return;
+    }
 
     char resp[128];
-    snprintf(resp, sizeof(resp), "{\"sta\":{\"ssid\":\"%s\"}}", (const char *)cur.ssid);
-    send_json(sock, 200, 0, "ok, reconnect required", resp);
+    snprintf(resp, sizeof(resp), "{\"sta\":{\"ssid\":\"%s\"},\"reconnect\":true}", (const char *)cur.ssid);
+    send_json(sock, 200, 0, "ok, reconnect scheduled", resp);
 }
 
 // POST /api/v1/wifi/ap  — 支持部分更新：{ "ssid":"..." } 或 { "password":"..." } 或两者
@@ -561,6 +617,26 @@ static void dispatch(int sock, const char *method, const char *path, const char 
 
     // POST
     if (strcmp(method, "POST") == 0) {
+        if (strcmp(path, "/api/v1/play") == 0) {
+            handle_play(sock, body);
+            return;
+        }
+        if (strcmp(path, "/api/v1/pause") == 0) {
+            handle_pause(sock);
+            return;
+        }
+        if (strcmp(path, "/api/v1/resume") == 0) {
+            handle_resume(sock);
+            return;
+        }
+        if (strcmp(path, "/api/v1/stop") == 0) {
+            handle_stop(sock);
+            return;
+        }
+        if (strcmp(path, "/api/v1/seek") == 0) {
+            handle_seek(sock, body);
+            return;
+        }
         if (strcmp(path, "/api/v1/mode") == 0) {
             handle_set_mode(sock, body);
             return;

@@ -5,5 +5,6 @@
 #include "iis.hpp"
 
 void *audio_play_task(void *arg);
+bool audio_sle_task_running(void);
 
 #endif

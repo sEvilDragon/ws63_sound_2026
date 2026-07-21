@@ -127,7 +127,7 @@ private:
     static constexpr uint8_t format = SLE_RADIO_FRAME_2; // 开放4M通道
     static constexpr uint8_t phy = SLE_PHY_4M;           // 无特殊选项
     static constexpr uint8_t pilot_density =
-        SLE_PHY_PILOT_DENSITY_NO;          // MCS=12时必须使用无导频(NO=3)，16:1会导致吞吐异常
+        SLE_PHY_PILOT_DENSITY_16_TO_1;          // 与接收端保持一致，恢复旧版本配置
     static constexpr uint8_t feedback = 0; // 关闭反馈机制，增加传输效率
 
     // 设置mcs

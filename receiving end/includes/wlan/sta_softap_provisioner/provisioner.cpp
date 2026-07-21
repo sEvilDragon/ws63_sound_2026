@@ -57,8 +57,8 @@ errcode_t softap_provisioner::receive_credentials(stacredential *out, const char
     }
 
     char buf[udp_buffer_size_] = {0};
-    int32_t len = udp_server.receive_udp((uint8_t *)buf, sizeof(buf));
-    if (len <= 0) {
+    int32_t len = udp_server.receive_udp((uint8_t *)buf, sizeof(buf) - 1);
+    if (len < 100) {
         osal_printk("接收UDP数据失败，错误码: %d\n", len);
         return 0x05; // 接收失败，返回错误码
     }

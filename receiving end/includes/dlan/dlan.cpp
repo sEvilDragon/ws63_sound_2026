@@ -1112,8 +1112,16 @@ void dlan::http_process()
                     }
 
                     copy_string_safe(g_current_uri.data(), g_current_uri.size(), media_url.data());
+                    bool set_uri_ok = true;
                     if (media_set_uri_handler_func != nullptr) {
-                        media_set_uri_handler_func(g_current_uri.data());
+                        set_uri_ok = media_set_uri_handler_func(g_current_uri.data());
+                    }
+                    if (!set_uri_ok) {
+                        osal_printk("SetAVTransportURI handler failed for relay URL\n");
+                        send_http_soap_fault_response(client_sock, 501, "Relay request failed");
+                        update_transport_state("STOPPED", true);
+                        lwip_close(client_sock);
+                        return;
                     }
                     static const char *set_uri_response_body =
                         "<?xml version=\"1.0\"?>"

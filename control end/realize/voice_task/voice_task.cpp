@@ -91,7 +91,12 @@ static void update_hotspot(uint8_t hotspot)
 static void update_network(uint8_t network)
 {
     const spi_settings_t *s = get_spi_settings();
-    spi_settings_update_hotspot_network(spi_get_hotspot(s->hotspot_network), network);
+    // 打开 STA 时主动退出 SoftAP，避免产生 hotspot/network 同时开启的状态。
+    uint8_t hotspot = spi_get_hotspot(s->hotspot_network);
+    if (network == SPI_NETWORK_CONN) {
+        hotspot = SPI_HOTSPOT_OFF;
+    }
+    spi_settings_update_hotspot_network(hotspot, network);
 }
 
 static bool read_voice_id(sed_ws63::iic_master &iic, uint8_t *id)

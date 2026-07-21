@@ -4,7 +4,6 @@
 #include "led_test.h"
 #include "audio_play.hpp"
 #include "wifi_task.hpp"
-#include "http_download_test.hpp"
 #include "spi_task.h"
 #include "nv_recv.hpp"
 
@@ -31,37 +30,32 @@ void app_entry(void)
      * 必须在 osal_kthread_lock() 之前调用，因为 NV 操作内部
      * 使用信号量，依赖调度器运行。 */
     nv_recv_load_all();
-    bool spi_settings_loaded = (spi_settings_load_from_nv() != 0);
+    (void)spi_settings_load_from_nv();
 #else
     osal_printk("[RECV] NV NOT ENABLED in build config!\r\n");
-    bool spi_settings_loaded = false;
 #endif
 
     osal_kthread_lock();
 
-    if (!spi_settings_loaded) {
-        spi_settings_update_mode(SPI_MODE_SLE);
-    }
+    /* 默认从有线模式启动；其余音量、亮度等参数仍从 NV 加载。 */
+    spi_settings_update_mode(SPI_MODE_WIREED);
 
-    // taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 1024);
-    // osal_printk("[RECV] led_test_task created: %p\r\n", taskid);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 1024);
+    osal_printk("[RECV] led_test_task created: %p\r\n", taskid);
+    (void)taskid;
 
-    // taskid = osal_kthread_create((osal_kthread_handler)spi_master_task, NULL, "spi_master_task", 4096);
-    // osal_printk("[RECV] spi_master_task created: %p\r\n", taskid);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)spi_master_task, NULL, "spi_master_task", 4096);
+    osal_printk("[RECV] spi_master_task created: %p\r\n", taskid);
+    (void)taskid;
 
-    // taskid = osal_kthread_create((osal_kthread_handler)audio_play_task, NULL, "audio_play_task", 4096);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)audio_play_task, NULL, "audio_play_task", 4096);
+    osal_printk("[RECV] audio_play_task created: %p\r\n", taskid);
+    (void)taskid;
 
     taskid = osal_kthread_create((osal_kthread_handler)wifi_task, NULL, "wifi_task", 4096 * 3);
     (void)taskid;
 
-    taskid = osal_kthread_create((osal_kthread_handler)http_download_test_task, NULL, "http_download_test", 8192);
-    osal_printk("[RECV] http_download_test task created: %p\r\n", taskid);
-    (void)taskid;
-
-    // minimp3_task is created dynamically by wifi_task when DLNA mode starts
+    // minimp3_task is created dynamically by wifi_task when DLNA mode starts.
     // taskid = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", 8192 * 4);
     // (void)taskid;
 

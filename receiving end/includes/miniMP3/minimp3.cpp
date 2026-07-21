@@ -1186,8 +1186,17 @@ do_reconnect:
     ctx->connected = false;
     ctx->stream_pos = 0;
 
+    if (minimp3::should_interrupt_stream()) {
+        return -1;
+    }
+
     if (!open_stream_transport(ctx->transport, ctx->url)) {
         osal_printk("ex-seek: reconnect failed\n");
+        return -1;
+    }
+
+    if (minimp3::should_interrupt_stream()) {
+        free_stream_transport(ctx->transport);
         return -1;
     }
 
@@ -1228,6 +1237,11 @@ do_reconnect:
     const uint64_t hdr_start = stream_now_ms();
 
     while (!header_ended && header_len < static_cast<int>(header.size() - 1)) {
+        if (minimp3::should_interrupt_stream()) {
+            free_stream_transport(ctx->transport);
+            return -1;
+        }
+
         bool timed_out = false;
         int ret = stream_recv_some(ctx->transport, reinterpret_cast<uint8_t *>(header.data()) + header_len,
                                    static_cast<int>(header.size() - 1 - header_len), &timed_out);
@@ -1257,6 +1271,13 @@ do_reconnect:
 
     if (!header_ended) {
         osal_printk("ex-seek: header timeout\n");
+        free_stream_transport(ctx->transport);
+        return -1;
+    }
+
+    const int status_code = parse_http_status_code_from_header(header.data());
+    if (status_code != 200 && status_code != 206) {
+        MP3_LOG("ex-seek: HTTP status=%d, retrying\n", status_code);
         free_stream_transport(ctx->transport);
         return -1;
     }
@@ -1556,9 +1577,11 @@ void minimp3::stream_mp3_to_iis()
     bool dec_open = false;
 
     // 重试计数器，防止失败时无限重试耗光 CPU 和日志
-    int open_retry_count = 0;
-    static constexpr int k_max_open_retries = 5;
-    static constexpr uint32_t k_open_retry_base_ms = 200;
+    // The relay removes the old fixed file while downloading a new one. Keep
+    // retrying at a fixed cadence until the file is published, while allowing
+    // Stop, SetAVTransportURI, Pause, Seek, and task exit to interrupt it.
+    uint32_t open_retry_count = 0;
+    static constexpr uint32_t k_open_retry_delay_ms = 100;
 
     // PCM buffer for IIS output — 静态分配，避免堆碎片化导致分配失败
     static constexpr size_t k_pcm_batch_samples = 1152 * 2;
@@ -1613,20 +1636,13 @@ void minimp3::stream_mp3_to_iis()
             iis::data_clear();
 
             // 内存压力检查：连续多次打开失败，等待更长时间以回收系统资源
-            if (open_retry_count >= k_max_open_retries) {
-                osal_printk("minimp3_ex: too many open failures (%d), stopping playback\n", open_retry_count);
-                is_playing = false;
-                is_url_ready = false;
-                open_retry_count = 0;
-                osal_msleep(500);
-                continue;
-            }
-
             if (!parse_stream_url(current_url.data(), io_ctx.url)) {
-                osal_printk("minimp3_ex: URL parse fail: %s\n", current_url.data());
-                open_retry_count++;
-                uint32_t delay = k_open_retry_base_ms * (1U << (open_retry_count > 4 ? 4 : open_retry_count));
-                osal_msleep(delay);
+                ++open_retry_count;
+                if (open_retry_count == 1 || (open_retry_count % 20U) == 0) {
+                    osal_printk("minimp3_ex: URL parse failed, retry=%u\n",
+                                static_cast<unsigned int>(open_retry_count));
+                }
+                osal_msleep(k_open_retry_delay_ms);
                 continue;
             }
 
@@ -1651,10 +1667,14 @@ void minimp3::stream_mp3_to_iis()
             // Fast open – byte-level seeking only, NO sample index (avoids full-file scan)
             active_epoch = s_stream_epoch;
             s_interrupt_stream = false;
+            if (s_exit_requested || !is_playing || s_stream_epoch != active_epoch) {
+                continue;
+            }
             int ret = mp3dec_ex_open_cb(&dec, &io, MP3D_DO_NOT_SCAN);
             io_ctx.seek_on_open_active = false; // 清除标志
             if (ret != 0) {
-                osal_printk("minimp3_ex: open_cb failed ret=%d (attempt %d)\n", ret, open_retry_count + 1);
+                // Failure details are logged periodically below to avoid
+                // flooding the console while the relay file is unavailable.
                 // mp3dec_ex_open_cb 在返回 IO 错误前内部可能已分配缓冲区，
                 // 需要调用 mp3dec_ex_close 释放已分配的内存/标志静态缓冲区已占用标记。
                 mp3dec_ex_close(&dec);
@@ -1665,14 +1685,16 @@ void minimp3::stream_mp3_to_iis()
                     open_retry_count = 0;
                     continue;
                 }
-                open_retry_count++;
-                uint32_t delay = k_open_retry_base_ms * (1U << (open_retry_count > 4 ? 4 : open_retry_count));
+                ++open_retry_count;
+                if (open_retry_count == 1 || (open_retry_count % 20U) == 0) {
+                    osal_printk("minimp3_ex: open_cb failed, retry=%u\n",
+                                static_cast<unsigned int>(open_retry_count));
+                }
                 if (ret == MP3D_E_MEMORY) {
                     // 内存不足，等更长时间让 LWIP / TLS 释放资源
-                    delay += 800;
-                    osal_printk("minimp3_ex: memory exhausted, waiting %u ms\n", delay);
+                    MP3_LOG("minimp3_ex: memory open failure, retrying\n");
                 }
-                osal_msleep(delay);
+                osal_msleep(k_open_retry_delay_ms);
                 continue;
             }
             if (s_interrupt_stream || s_stream_epoch != active_epoch) {

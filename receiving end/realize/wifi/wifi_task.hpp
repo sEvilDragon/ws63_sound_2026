@@ -13,9 +13,11 @@ const char *wifi_get_current_ssid(void);
 const char *wifi_get_current_ap_name(void);
 const char *wifi_get_current_ip(void);
 bool wifi_is_sta_connected(void);
+bool wifi_dlna_tasks_running(void);
 
-// 更新 STA 凭据（同时写入 NV），下次连接周期生效
-void wifi_update_sta_credentials(const char *ssid, const char *password);
+// 更新 STA 凭据（同时写入 NV），并请求 WiFi 主循环立即重新联网。
+// 返回 true 表示已得到完整且有效的凭据，false 表示凭据不完整或无效。
+bool wifi_update_sta_credentials(const char *ssid, const char *password);
 
 // 更新 SoftAP 配置（同时写入 NV），下次开启热点生效
 void wifi_update_ap_config(const char *name, const char *password);

@@ -17,7 +17,10 @@ extern "C" {
 class dlan {
 public:
     dlan();
-    using media_set_uri_handler = void (*)(const char *uri);
+    // Return true only when the renderer accepted the URI and prepared a
+    // playable session.  This lets SetAVTransportURI report relay failures
+    // instead of acknowledging a request that Play cannot honor.
+    using media_set_uri_handler = bool (*)(const char *uri);
     using media_play_handler = bool (*)(const char *uri);
     using media_pause_handler = void (*)();
     using media_stop_handler = void (*)();

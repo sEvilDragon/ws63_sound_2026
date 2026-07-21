@@ -3,6 +3,8 @@
 #include "udp.hpp"
 #include "discover_broadcast.hpp"
 #include "nv_recv.hpp"
+#include "relay_client.hpp"
+#include "audio_play.hpp"
 
 extern "C" {
 #include "cJSON.h"
@@ -18,6 +20,13 @@ static constexpr int k_wait_slice_ms = 2;
 static constexpr int k_max_wait_loops = 160;
 static constexpr uint32_t k_minimp3_task_stack_size = 0xA000;
 static constexpr uint8_t k_wifi_mac_len = 6;
+static constexpr uint32_t k_dlna_stop_wait_ms = 2500;
+static constexpr uint32_t k_discover_stop_wait_ms = 4000;
+static constexpr uint32_t k_http_stop_wait_ms = 2000;
+// Explicit provisioning reconnect: one initial attempt plus three retries.
+static constexpr int k_sta_reconnect_retry_count = 3;
+static constexpr int k_sta_reconnect_attempts = 1 + k_sta_reconnect_retry_count;
+static constexpr uint32_t k_sta_reconnect_retry_delay_ms = 1000;
 
 // Fixed locally administered unicast MAC addresses for the receiving end.
 // Keep STA and SoftAP different to avoid conflicts if both interface addresses are observed.
@@ -103,15 +112,19 @@ static bool has_credentials = true;
 
 // 标志：本次 SoftAP 会话中是否已通过任意方式获得了凭据
 static volatile bool g_cred_updated_this_session = false;
+static volatile bool g_sta_reconnect_requested = false;
 
 void wifi_notify_cred_updated(void)
 {
     g_cred_updated_this_session = true;
+    g_sta_reconnect_requested = true;
 }
 
 // 本机 IP（STA 连接后由 dhcp 分配），供外部查询
 static char g_sta_ip[16] = "0.0.0.0";
 static bool g_sta_connected_flag = false;
+static volatile bool g_relay_playback_ready = false;
+static volatile bool g_dlna_tasks_running_flag = false;
 
 const char *wifi_get_current_ssid(void)
 {
@@ -128,6 +141,11 @@ bool wifi_is_sta_connected(void)
     return g_sta_connected_flag;
 }
 
+bool wifi_dlna_tasks_running(void)
+{
+    return g_dlna_tasks_running_flag;
+}
+
 const char *wifi_get_current_ap_name(void)
 {
     // 从 NV 读取 SoftAP 名称（高频调用，直接读 NV）
@@ -140,30 +158,34 @@ const char *wifi_get_current_ap_name(void)
     return (const char *)ap_cfg.ap_name;
 }
 
-void wifi_update_sta_credentials(const char *ssid, const char *password)
+bool wifi_update_sta_credentials(const char *ssid, const char *password)
 {
     // 支持部分更新：任一参数为 NULL 表示不更新该字段
     if (ssid == NULL && password == NULL)
-        return;
+        return false;
 
     if (ssid != NULL) {
         size_t sl = strlen(ssid);
-        if (sl > 0 && sl < sizeof(provisioned_ssid)) {
-            memcpy(provisioned_ssid, ssid, sl + 1);
-            has_credentials = true;
-        }
+        if (sl == 0 || sl >= sizeof(provisioned_ssid))
+            return false;
+        memcpy(provisioned_ssid, ssid, sl + 1);
     }
     if (password != NULL) {
         size_t pl = strlen(password);
-        if (pl > 0 && pl < sizeof(provisioned_password)) {
-            memcpy(provisioned_password, password, pl + 1);
-            has_credentials = true;
-        }
+        if (pl == 0 || pl >= sizeof(provisioned_password))
+            return false;
+        memcpy(provisioned_password, password, pl + 1);
     }
     // 向 NV 写入当前完整凭据
+    if (provisioned_ssid[0] == '\0' || provisioned_password[0] == '\0') {
+        osal_printk("[WiFi] credentials incomplete, reconnect not scheduled\r\n");
+        return false;
+    }
+    has_credentials = true;
     nv_recv_write_sta(provisioned_ssid, provisioned_password);
-    g_cred_updated_this_session = true;
+    wifi_notify_cred_updated();
     osal_printk("[WiFi] credentials updated via API: ssid=%s\r\n", provisioned_ssid);
+    return true;
 }
 
 void wifi_update_ap_config(const char *name, const char *password)
@@ -184,21 +206,47 @@ static void update_sta_ip(void)
     }
 }
 
+static void clear_sta_ip(void)
+{
+    (void)snprintf(g_sta_ip, sizeof(g_sta_ip), "0.0.0.0");
+}
+
 void *dlna_task(void *arg)
 {
     (void)arg;
     static dlan dlan_;
     osal_printk("[DLNA] task started\r\n");
 
-    dlan_.register_media_set_uri_handler(minimp3::prepare_url);
+    g_relay_playback_ready = false;
+    dlan_.register_media_set_uri_handler([](const char *source_url) -> bool {
+        // The stable URL is reused for every song, so explicitly discard the
+        // old session before submitting the new source URL to the relay.
+        g_relay_playback_ready = false;
+        minimp3::stop_playback();
+        minimp3::clear_playback_url();
+
+        if (!ws63_relay::submit_source_url(source_url)) {
+            osal_printk("[DLNA] relay request failed\r\n");
+            return false;
+        }
+
+        minimp3::prepare_url(ws63_relay::fixed_play_url());
+        g_relay_playback_ready = true;
+        osal_printk("[DLNA] relay source accepted; waiting on fixed URL\r\n");
+        return true;
+    });
     dlan_.register_media_play_handler([](const char *uri) -> bool {
         if (minimp3::get_is_paused()) {
+            if (!g_relay_playback_ready) {
+                return false;
+            }
             minimp3::resume_playback();
             return true;
         }
-        if (uri == nullptr || uri[0] == '\0')
+        if (!g_relay_playback_ready || uri == nullptr || uri[0] == '\0')
             return false;
-        minimp3::play_url(uri);
+        (void)uri;
+        minimp3::play_url(ws63_relay::fixed_play_url());
         return true;
     });
     dlan_.register_media_pause_handler([]() { minimp3::pause_playback(); });
@@ -223,8 +271,19 @@ void *wifi_task(void *arg)
         osal_msleep(100);
     }
     apply_fixed_wifi_macs();
-    sta_.enable_auto_reconnect();
+    // 由 wifi_task 统一执行有限重试；不启用 SDK 的后台无限/额外重连。
+    sta_.disable_auto_reconnect();
     osal_printk("[WiFi] subsystem ready\r\n");
+
+    // 使用 NV 中最近一次成功提交的凭据；没有有效 NV 时保留编译期默认值。
+    wifi_sta_config_nv_t saved_sta = {};
+    nv_recv_read_sta(&saved_sta);
+    if (saved_sta.ssid[0] != '\0' && saved_sta.password[0] != '\0') {
+        (void)snprintf(provisioned_ssid, sizeof(provisioned_ssid), "%s", (const char *)saved_sta.ssid);
+        (void)snprintf(provisioned_password, sizeof(provisioned_password), "%s", (const char *)saved_sta.password);
+        has_credentials = true;
+        osal_printk("[WiFi] loaded STA credentials from NV: ssid=%s\r\n", provisioned_ssid);
+    }
 
     bool softap_active = false;
     bool dlna_running = false;
@@ -236,25 +295,132 @@ void *wifi_task(void *arg)
     osal_task *http_ctrl_handle = nullptr;
     osal_task *discover_handle = nullptr;
 
+    auto stop_dlna = [&]() {
+        if (!dlna_running) {
+            return;
+        }
+        dlan::request_stop();
+        minimp3::request_exit();
+        minimp3::stop_playback();
+        osal_msleep(k_dlna_stop_wait_ms);
+        dlna_handle = nullptr;
+        mp3_handle = nullptr;
+        dlna_running = false;
+        g_dlna_tasks_running_flag = false;
+        osal_printk("[WiFi] DLNA stopped\r\n");
+    };
+
+    auto stop_discover = [&]() {
+        if (!discover_running) {
+            return;
+        }
+        discover_broadcast_request_stop();
+        osal_msleep(k_discover_stop_wait_ms);
+        discover_handle = nullptr;
+        discover_running = false;
+    };
+
+    auto stop_http = [&]() {
+        if (!http_ctrl_running) {
+            return;
+        }
+        http_control_request_stop();
+        osal_msleep(k_http_stop_wait_ms);
+        http_ctrl_handle = nullptr;
+        http_ctrl_running = false;
+    };
+
+    auto disconnect_sta = [&]() {
+        sta_.sta_disconnect();
+        sta_connected = false;
+        g_sta_connected_flag = false;
+        clear_sta_ip();
+    };
+
+    auto connect_sta_with_retries = [&]() -> bool {
+        sed_ws63::stacredential cred;
+        memset(&cred, 0, sizeof(cred));
+        (void)snprintf(cred.ssid, sizeof(cred.ssid), "%s", provisioned_ssid);
+        (void)snprintf(cred.password, sizeof(cred.password), "%s", provisioned_password);
+
+        // 所有 STA 建链都使用这条有限重试策略，避免 SDK 自动重连与本策略叠加。
+        sta_.disable_auto_reconnect();
+        for (int attempt = 1; attempt <= k_sta_reconnect_attempts; ++attempt) {
+            sta_.sta_disconnect();
+            osal_printk("[WiFi] reconnect attempt %d/%d, ssid=%s\r\n", attempt, k_sta_reconnect_attempts,
+                        provisioned_ssid);
+            errcode_t ret = sta_.sta_connect(cred);
+            if (ret == ERRCODE_SUCC && sta_.is_connected()) {
+                sta_connected = true;
+                g_sta_connected_flag = true;
+                update_sta_ip();
+                osal_printk("[WiFi] STA connected, IP=%s\r\n", g_sta_ip);
+                return true;
+            }
+
+            sta_connected = false;
+            g_sta_connected_flag = false;
+            clear_sta_ip();
+            osal_printk("[WiFi] reconnect attempt %d failed: %u\r\n", attempt, ret);
+            if (attempt < k_sta_reconnect_attempts) {
+                osal_msleep(k_sta_reconnect_retry_delay_ms);
+            }
+        }
+
+        // 三次重试仍失败：彻底关闭 STA，并由调用方把 network 状态置为 DISC。
+        sta_.sta_disconnect();
+        sta_.disable_auto_reconnect();
+        sta_connected = false;
+        g_sta_connected_flag = false;
+        clear_sta_ip();
+        return false;
+    };
+
     while (true) {
         const spi_settings_t *s = get_spi_settings();
         bool want_hotspot = (spi_get_hotspot(s->hotspot_network) == SPI_HOTSPOT_ON);
+        bool want_network = (spi_get_network(s->hotspot_network) == SPI_NETWORK_CONN);
         uint8_t mode = s->mode;
+
+        // 小程序提交新凭据后，无论原先是 STA、SoftAP 还是断网状态，都走同一
+        // 条显式重连路径。SoftAP 分支会先退出并在下一轮来到这里。
+        if (g_sta_reconnect_requested && !softap_active) {
+            g_sta_reconnect_requested = false;
+            osal_printk("[WiFi] provisioning credentials received, restarting network\r\n");
+
+            // 配网动作本身应当重新开启联网意图，同时保证 STA 与 SoftAP 不并存。
+            spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_CONN);
+            stop_dlna();
+            stop_discover();
+            stop_http();
+            disconnect_sta();
+
+            if (!connect_sta_with_retries()) {
+                spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_DISC);
+                osal_printk("[WiFi] provisioning reconnect failed after initial try + %d retries; network OFF\r\n",
+                            k_sta_reconnect_retry_count);
+            }
+            g_cred_updated_this_session = false;
+            continue;
+        }
 
         // ===== SOFTAP (hotspot) MODE =====
         if (want_hotspot && !softap_active) {
+            // SoftAP 和 STA 互斥：一旦进入热点态，立即把网络意图改为断开。
+            spi_settings_update_hotspot_network(SPI_HOTSPOT_ON, SPI_NETWORK_DISC);
             if (dlna_running) {
                 dlan::request_stop();
                 minimp3::request_exit();
                 minimp3::stop_playback();
-                osal_msleep(2000);
+                osal_msleep(k_dlna_stop_wait_ms);
                 dlna_handle = nullptr;
                 mp3_handle = nullptr;
                 dlna_running = false;
+                g_dlna_tasks_running_flag = false;
             }
             if (discover_running) {
                 discover_broadcast_request_stop();
-                osal_msleep(3500);
+                osal_msleep(k_discover_stop_wait_ms);
                 discover_handle = nullptr;
                 discover_running = false;
             }
@@ -262,6 +428,7 @@ void *wifi_task(void *arg)
                 sta_.sta_disconnect();
                 sta_connected = false;
                 g_sta_connected_flag = false;
+                clear_sta_ip();
             }
 
             osal_printk("[WiFi] starting SoftAP for provisioning\r\n");
@@ -306,43 +473,42 @@ void *wifi_task(void *arg)
                 bool got_cred = false;
                 while (want_hotspot && !got_cred) {
                     // 检查是否已通过 HTTP 在本会话中配置了凭据
-                    if (g_cred_updated_this_session) {
-                        osal_printk("[WiFi] credentials set via HTTP, waiting for hotspot off...\r\n");
-                        osal_msleep(500);
-                        want_hotspot = (spi_get_hotspot(get_spi_settings()->hotspot_network) == SPI_HOTSPOT_ON);
-                        continue;
+                    if (g_cred_updated_this_session || g_sta_reconnect_requested) {
+                        osal_printk("[WiFi] credentials set via HTTP, leaving SoftAP for reconnect\r\n");
+                        got_cred = true;
+                        break;
                     }
 
                     uint8_t buf[512] = {0};
-                    int32_t len = udp_server.receive_udp(buf, sizeof(buf));
+                    sockaddr_in sender = {};
+                    int32_t len = udp_server.receive_udp(buf, sizeof(buf) - 1, &sender);
                     want_hotspot = (spi_get_hotspot(get_spi_settings()->hotspot_network) == SPI_HOTSPOT_ON);
-                    if (!want_hotspot)
-                        break;
-                    if (len <= 0) {
+                    if (len < 100) {
+                        if (!want_hotspot)
+                            break;
                         osal_msleep(100);
                         continue;
                     }
 
                     cJSON *json = cJSON_Parse((const char *)buf);
-                    if (!json)
-                        continue;
-
-                    cJSON *ssid_item = cJSON_GetObjectItem(json, "ssid");
-                    cJSON *pwd_item = cJSON_GetObjectItem(json, "password");
-                    if (ssid_item && pwd_item && ssid_item->valuestring && pwd_item->valuestring) {
-                        size_t sl = strlen(ssid_item->valuestring);
-                        size_t pl = strlen(pwd_item->valuestring);
-                        if (sl > 0 && sl < sizeof(provisioned_ssid) && pl > 0 && pl < sizeof(provisioned_password)) {
-                            memcpy(provisioned_ssid, ssid_item->valuestring, sl + 1);
-                            memcpy(provisioned_password, pwd_item->valuestring, pl + 1);
-                            has_credentials = true;
-                            got_cred = true;
-                            nv_recv_write_sta(provisioned_ssid, provisioned_password);
-                            g_cred_updated_this_session = true;
-                            osal_printk("[WiFi] provisioned: SSID=%s\r\n", provisioned_ssid);
+                    bool accepted = false;
+                    if (json != nullptr) {
+                        cJSON *ssid_item = cJSON_GetObjectItem(json, "ssid");
+                        cJSON *pwd_item = cJSON_GetObjectItem(json, "password");
+                        if (cJSON_IsString(ssid_item) && cJSON_IsString(pwd_item)) {
+                            accepted = wifi_update_sta_credentials(ssid_item->valuestring, pwd_item->valuestring);
                         }
+                        cJSON_Delete(json);
                     }
-                    cJSON_Delete(json);
+
+                    const char *ack = accepted
+                                          ? "{\"code\":0,\"msg\":\"credentials_received\",\"reconnect\":true}"
+                                          : "{\"code\":400,\"msg\":\"invalid_credentials\"}";
+                    (void)udp_server.send_udp((const uint8_t *)ack, (uint32_t)strlen(ack), sender);
+                    if (accepted) {
+                        got_cred = true;
+                        osal_printk("[WiFi] provisioned: SSID=%s, reconnect scheduled\r\n", provisioned_ssid);
+                    }
                 }
 
                 udp_server.close_udp();
@@ -353,49 +519,39 @@ void *wifi_task(void *arg)
             softap_active = false;
             osal_printk("[WiFi] SoftAP stopped\r\n");
 
-            if (has_credentials) {
-                osal_printk("[WiFi] connecting STA to %s...\r\n", provisioned_ssid);
-                sed_ws63::stacredential cred;
-                memset(&cred, 0, sizeof(cred));
-                snprintf(cred.ssid, sizeof(cred.ssid), "%s", provisioned_ssid);
-                snprintf(cred.password, sizeof(cred.password), "%s", provisioned_password);
-                errcode_t r = sta_.sta_connect(cred);
-                if (r == ERRCODE_SUCC) {
-                    sta_connected = true;
-                    g_sta_connected_flag = true;
-                    update_sta_ip();
-                    osal_printk("[WiFi] STA connected, IP=%s\r\n", g_sta_ip);
-                } else {
-                    osal_printk("[WiFi] STA connect failed: %u\r\n", r);
-                }
-            }
+            // 新凭据统一由下一轮的显式重连状态机处理，避免 SoftAP 路径只尝试一次。
             continue;
         }
 
         // ===== STA MODE =====
-        if (!sta_connected && has_credentials) {
-            osal_printk("[WiFi] connecting to %s...\r\n", provisioned_ssid);
-            sed_ws63::stacredential cred;
-            memset(&cred, 0, sizeof(cred));
-            snprintf(cred.ssid, sizeof(cred.ssid), "%s", provisioned_ssid);
-            snprintf(cred.password, sizeof(cred.password), "%s", provisioned_password);
-            errcode_t r = sta_.sta_connect(cred);
-            if (r == ERRCODE_SUCC) {
-                sta_connected = true;
-                g_sta_connected_flag = true;
-                update_sta_ip();
-                osal_printk("[WiFi] STA connected, IP=%s\r\n", g_sta_ip);
-            } else {
-                osal_printk("[WiFi] STA failed: %u, retry in 3s\r\n", r);
-                osal_msleep(3000);
-                continue;
+        if (!want_network) {
+            // network=DISC 后不再使用凭据自动重试；只有下一次配网或显式打开网络
+            // 才允许重新建立 STA。
+            stop_dlna();
+            stop_discover();
+            stop_http();
+            if (sta_connected || sta_.is_connected()) {
+                disconnect_sta();
             }
+            osal_msleep(500);
+            continue;
+        }
+
+        if (!sta_connected && has_credentials) {
+            osal_printk("[WiFi] network enabled, starting unified STA retry policy\r\n");
+            if (!connect_sta_with_retries()) {
+                spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_DISC);
+                osal_printk("[WiFi] STA failed after initial try + %d retries; network OFF\r\n",
+                            k_sta_reconnect_retry_count);
+            }
+            continue;
         }
 
         if (sta_connected && !sta_.is_connected()) {
             osal_printk("[WiFi] STA disconnected\r\n");
             sta_connected = false;
             g_sta_connected_flag = false;
+            clear_sta_ip();
         }
 
         // ===== UDP DISCOVER BROADCAST LIFECYCLE =====
@@ -411,7 +567,7 @@ void *wifi_task(void *arg)
         if (!sta_connected && discover_running) {
             osal_printk("[WiFi] stopping discover broadcast\r\n");
             discover_broadcast_request_stop();
-            osal_msleep(3500); // 等待 sleep 分段超时 + 任务退出
+            osal_msleep(k_discover_stop_wait_ms);
             discover_handle = nullptr;
             discover_running = false;
         }
@@ -429,7 +585,7 @@ void *wifi_task(void *arg)
         if (!sta_connected && http_ctrl_running) {
             osal_printk("[WiFi] stopping HTTP control server\r\n");
             http_control_request_stop();
-            osal_msleep(1500); // 等待 accept 超时 + 任务退出
+            osal_msleep(k_http_stop_wait_ms);
             http_ctrl_handle = nullptr;
             http_ctrl_running = false;
         }
@@ -438,12 +594,30 @@ void *wifi_task(void *arg)
         bool want_dlna = (mode == SPI_MODE_DLNA || mode == SPI_MODE_DLNA_NET);
 
         if (want_dlna && sta_connected && !dlna_running) {
+            if (audio_sle_task_running()) {
+                // audio_play_task clears this only after SLE teardown and its
+                // release grace period have both completed.
+                osal_msleep(100);
+                continue;
+            }
             dlan::reset_stop();
             minimp3::reset_exit();
+            g_dlna_tasks_running_flag = true;
             dlna_handle = osal_kthread_create((osal_kthread_handler)dlna_task, NULL, "dlna_task", 8192);
             mp3_handle = osal_kthread_create((osal_kthread_handler)minimp3_task, NULL, "minimp3_task", k_minimp3_task_stack_size);
-            dlna_running = true;
-            osal_printk("[WiFi] DLNA started\r\n");
+            if (dlna_handle != nullptr && mp3_handle != nullptr) {
+                dlna_running = true;
+                osal_printk("[WiFi] DLNA started\r\n");
+            } else {
+                dlan::request_stop();
+                minimp3::request_exit();
+                minimp3::stop_playback();
+                osal_msleep(k_dlna_stop_wait_ms);
+                dlna_handle = nullptr;
+                mp3_handle = nullptr;
+                g_dlna_tasks_running_flag = false;
+                osal_printk("[WiFi] DLNA task creation failed\r\n");
+            }
         }
 
         if (!want_dlna && dlna_running) {
@@ -451,10 +625,11 @@ void *wifi_task(void *arg)
             dlan::request_stop();
             minimp3::request_exit();
             minimp3::stop_playback();
-            osal_msleep(2000);
+            osal_msleep(k_dlna_stop_wait_ms);
             dlna_handle = nullptr;
             mp3_handle = nullptr;
             dlna_running = false;
+            g_dlna_tasks_running_flag = false;
             osal_printk("[WiFi] DLNA stopped\r\n");
         }
 
@@ -463,10 +638,11 @@ void *wifi_task(void *arg)
             dlan::request_stop();
             minimp3::request_exit();
             minimp3::stop_playback();
-            osal_msleep(2000);
+            osal_msleep(k_dlna_stop_wait_ms);
             dlna_handle = nullptr;
             mp3_handle = nullptr;
             dlna_running = false;
+            g_dlna_tasks_running_flag = false;
         }
 
         if (sta_connected) {

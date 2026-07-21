@@ -51,20 +51,26 @@ errcode_t sta::sta_connect(const stacredential &cred)
 void sta::sta_disconnect()
 {
     auto_reconnect_ = false;
-    if (is_connected_) {
-        (void)wifi_sta_disable();
-    }
+    // 即使上一次连接在扫描、认证或 DHCP 阶段失败，底层 STA 也可能仍处于
+    // enabled 状态。无条件 disable，确保显式重连前不会残留旧连接状态。
+    (void)wifi_sta_disable();
     is_connected_ = false;
 }
 
 void sta::enable_auto_reconnect()
 {
     auto_reconnect_ = true;
+    if (is_connected_) {
+        (void)wifi_sta_set_reconnect_policy(1, 10, 10, 100);
+    }
 }
 
 void sta::disable_auto_reconnect()
 {
     auto_reconnect_ = false;
+    if (is_connected_) {
+        (void)wifi_sta_set_reconnect_policy(0, 0, 0, 0);
+    }
 }
 
 bool sta::is_connected() const

@@ -20,6 +20,10 @@ errcode_t udp::bind_udp(uint16_t port, const char *bind_ip)
     srv_addr.sin_port = lwip_htons(port);          // 服务器端口
 
     // 绑定套接字
+    // Let callers observe stop/reconnect requests instead of blocking forever.
+    timeval timeout = {0, 100000}; // 100 ms
+    (void)lwip_setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
     if (lwip_bind(sfd, (sockaddr *)&srv_addr, sizeof(srv_addr)) < 0) {
         lwip_close(sfd);
         sfd = -1;
@@ -42,8 +46,9 @@ errcode_t udp::receive_udp(uint8_t *buffer, uint32_t buffer_size, sockaddr_in *f
     }
 
     sockaddr_in sender = {0};
+    socklen_t sender_len = sizeof(sender);
 
-    int32_t ret = lwip_recvfrom(sfd, buffer, buffer_size, 0, (sockaddr *)&sender, nullptr);
+    int32_t ret = lwip_recvfrom(sfd, buffer, buffer_size, 0, (sockaddr *)&sender, &sender_len);
     if (ret < 0) {
         return 0x06; // 接收数据失败
     }
