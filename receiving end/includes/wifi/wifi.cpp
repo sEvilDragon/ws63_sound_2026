@@ -5,8 +5,8 @@
 osal_semaphore wifi::scan_done_sem;
 osal_semaphore wifi::connect_done_sem;
 bool wifi::connect_done = false;
-std::array<char, wifi::wifi_ssid_max_size> wifi::wifi_scan_expect_ssid = {"WS63_TEST_INVALID_AP"};
-std::array<char, wifi::wifi_password_max_size> wifi::wifi_scan_expect_password = {"wrong_password_2026"};
+std::array<char, wifi::wifi_ssid_max_size> wifi::wifi_scan_expect_ssid = {"OPPO Find X8 972E"};
+std::array<char, wifi::wifi_password_max_size> wifi::wifi_scan_expect_password = {"mytc4386"};
 
 wifi::wifi()
 {

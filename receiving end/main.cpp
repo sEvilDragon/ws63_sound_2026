@@ -39,6 +39,9 @@ void app_entry(void)
 
     /* 默认从有线模式启动；其余音量、亮度等参数仍从 NV 加载。 */
     spi_settings_update_mode(SPI_MODE_WIREED);
+    /* 每次启动先执行一次受控的 STA 连接周期；四次均失败后由
+     * wifi_task 自动切换到 SoftAP，避免旧 NV 中 OFF/OFF 状态阻断联网。 */
+    spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_CONN);
 
     taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 1024);
     osal_printk("[RECV] led_test_task created: %p\r\n", taskid);

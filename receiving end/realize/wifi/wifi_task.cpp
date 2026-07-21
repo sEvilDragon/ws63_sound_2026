@@ -114,8 +114,8 @@ void push_pcm_with_closed_loop(const int16_t *data, uint32_t size)
 // ======================== 跨 TU 共享的 WiFi 状态 ========================
 // 由 wifi_task 主循环维护，供 http_control / discover_broadcast 读取
 
-static char provisioned_ssid[64] = "WS63_TEST_INVALID_AP";
-static char provisioned_password[64] = "wrong_password_2026";
+static char provisioned_ssid[64] = "OPPO Find X8 972E";
+static char provisioned_password[64] = "mytc4386";
 static bool has_credentials = true;
 
 // 标志：本次 SoftAP 会话中是否已通过任意方式获得了凭据
@@ -541,6 +541,8 @@ void *wifi_task(void *arg)
                                           : "{\"code\":400,\"msg\":\"invalid_credentials\"}";
                     (void)udp_server.send_udp((const uint8_t *)ack, (uint32_t)strlen(ack), sender);
                     if (accepted) {
+                        // 给 ACK 留出极短的无线发送时间，再关闭 UDP 和 SoftAP。
+                        osal_msleep(150);
                         got_cred = true;
                         osal_printk("[WiFi] provisioned: SSID=%s, reconnect scheduled\r\n", provisioned_ssid);
                     }
