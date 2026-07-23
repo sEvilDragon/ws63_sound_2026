@@ -5,6 +5,7 @@
 std::array<sle::connection_device, sle::max_connection_num> sle::connection_devices = {0};
 sle_addr_t sle::s_pending_addr = {0};
 volatile bool sle::s_adpcm_enabled = false;
+volatile bool sle::s_mono_enabled = false;
 
 sle::sle()
 {
@@ -40,14 +41,20 @@ bool sle::compression_enabled()
     return s_adpcm_enabled;
 }
 
+bool sle::mono_enabled()
+{
+    return s_mono_enabled;
+}
+
 void sle::notification_callback(uint8_t client_id,
                                 uint16_t conn_id,
                                 ssapc_handle_value_t *data,
                                 errcode_t status)
 {
     if (status != ERRCODE_SUCC || data == nullptr || data->data == nullptr ||
-        data->data_len != sle_audio::codec_control_size || data->data[0] != sle_audio::codec_control_magic ||
-        data->data[1] != sle_audio::codec_control_version || data->data[2] > 1) {
+        (data->data_len != sle_audio::codec_control_legacy_size && data->data_len != sle_audio::codec_control_size) ||
+        data->data[0] != sle_audio::codec_control_magic || data->data[1] != sle_audio::codec_control_version ||
+        data->data[2] > 1 || (data->data_len == sle_audio::codec_control_size && data->data[3] > 1)) {
         return;
     }
 
@@ -57,8 +64,11 @@ void sle::notification_callback(uint8_t client_id,
     }
 
     const bool enabled = data->data[2] != 0;
+    const bool mono = data->data_len == sle_audio::codec_control_size && data->data[3] != 0;
     s_adpcm_enabled = enabled;
-    osal_printk("[SLE] ADPCM synchronized from receiver: %s\r\n", enabled ? "ON" : "OFF");
+    s_mono_enabled = mono;
+    osal_printk("[SLE] audio state synchronized from receiver: ADPCM=%s mono=%s\r\n", enabled ? "ON" : "OFF",
+                mono ? "ON" : "OFF");
 }
 
 void sle::sle_enable_callback(errcode_t status)
@@ -253,6 +263,7 @@ void sle::connect_changed_callback(uint16_t conn_id,
     unused(disc_reason);
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         s_adpcm_enabled = false;
+        s_mono_enabled = false;
         // 连接成功：找到之前标记为 pending 的槽位，转为 active
         int index = -1;
         for (int i = 0; i < max_connection_num; ++i) {
@@ -304,6 +315,7 @@ void sle::connect_changed_callback(uint16_t conn_id,
 
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         s_adpcm_enabled = false;
+        s_mono_enabled = false;
         int index = find_connectioned_device_connid(conn_id);
         if (index != -1) {
             // 找到对应连接设备，清理资源(恢复默认值)

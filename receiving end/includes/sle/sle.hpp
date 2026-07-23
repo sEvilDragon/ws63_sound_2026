@@ -25,6 +25,8 @@ public:
 
     static bool adpcm_enabled();
     static bool set_adpcm_enabled(bool enabled);
+    static bool mono_enabled();
+    static bool set_mono_enabled(bool enabled);
     static void notify_adpcm_state();
 
     static volatile bool s_active;

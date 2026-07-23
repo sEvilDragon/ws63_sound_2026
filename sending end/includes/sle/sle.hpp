@@ -28,6 +28,7 @@ public:
     // 第一个参数是连接设备的索引，第二个参数是要发送的数据，第三个参数是数据长度（字节为单位）
     static void write_send(int index, uint8_t *data, uint16_t len_b);
     static bool compression_enabled();
+    static bool mono_enabled();
 
 private:
     // SLE使能回调函数，SLE使能成功后会调用该函数
@@ -123,6 +124,7 @@ private:
 
     static sle_addr_t s_pending_addr; // 正在被连接的设备地址，保存到连接回调中使用
     static volatile bool s_adpcm_enabled;
+    static volatile bool s_mono_enabled;
 
     // 下面定义一些连接到设备后，需要开放的高速配置
     static constexpr uint16_t high_speed_interva_min = 0x14; // 传输间隔最小值

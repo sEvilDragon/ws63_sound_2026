@@ -15,9 +15,24 @@ static volatile bool s_sle_running = false;
 static osal_task *s_sle_task_handle = nullptr;
 static constexpr int k_sle_stop_timeout_loops = 80;
 static constexpr int k_sle_release_grace_ms = 200;
-static constexpr std::size_t k_max_sle_pcm_samples = 960;
+static constexpr std::size_t k_max_sle_pcm_samples = 960; /* interleaved stereo samples */
+static constexpr std::size_t k_max_sle_mono_samples = k_max_sle_pcm_samples / 2U;
 static adpcm s_adpcm_decoder;
 static int16_t s_sle_pcm_buffer[k_max_sle_pcm_samples] = {0};
+static int16_t s_sle_mono_buffer[k_max_sle_mono_samples] = {0};
+
+static std::size_t expand_mono_to_stereo(const int16_t *mono, std::size_t samples, int16_t *stereo,
+                                         std::size_t stereo_capacity)
+{
+    if (mono == nullptr || stereo == nullptr || samples == 0 || samples > stereo_capacity / 2U) {
+        return 0;
+    }
+    for (std::size_t i = 0; i < samples; ++i) {
+        stereo[2U * i] = mono[i];
+        stereo[2U * i + 1U] = mono[i];
+    }
+    return samples * 2U;
+}
 
 static const char *mode_name(uint8_t mode)
 {
@@ -44,12 +59,29 @@ static void sle_data_process(const uint8_t *data, uint16_t len)
     }
 
     std::size_t pcm_samples = 0;
-    if (sle_audio::is_adpcm_packet(data[0])) {
+    if (data[0] == sle_audio::adpcm_mono_packet_marker) {
+        const std::size_t mono_samples =
+            s_adpcm_decoder.decode_mono(data, len, s_sle_mono_buffer, k_max_sle_mono_samples);
+        pcm_samples = expand_mono_to_stereo(s_sle_mono_buffer, mono_samples, s_sle_pcm_buffer,
+                                            k_max_sle_pcm_samples);
+        if (pcm_samples == 0) {
+            osal_printk("[Audio] invalid mono ADPCM packet: len=%u\r\n", len);
+            return;
+        }
+    } else if (sle_audio::is_adpcm_packet(data[0])) {
         pcm_samples = s_adpcm_decoder.decode(data, len, s_sle_pcm_buffer, k_max_sle_pcm_samples);
         if (pcm_samples == 0) {
             osal_printk("[Audio] invalid ADPCM packet: marker=0x%02x len=%u\r\n", data[0], len);
             return;
         }
+    } else if (data[0] == sle_audio::pcm_mono_packet_marker) {
+        const std::size_t payload_bytes = len - 1U;
+        if ((payload_bytes & 1U) != 0 || payload_bytes > sizeof(s_sle_mono_buffer)) {
+            return;
+        }
+        std::memcpy(s_sle_mono_buffer, data + 1, payload_bytes);
+        pcm_samples = expand_mono_to_stereo(s_sle_mono_buffer, payload_bytes / sizeof(int16_t), s_sle_pcm_buffer,
+                                            k_max_sle_pcm_samples);
     } else if (data[0] == sle_audio::pcm_packet_marker) {
         const std::size_t payload_bytes = len - 1U;
         if ((payload_bytes & 1U) != 0 || payload_bytes > sizeof(s_sle_pcm_buffer)) {
@@ -59,6 +91,10 @@ static void sle_data_process(const uint8_t *data, uint16_t len)
         pcm_samples = payload_bytes / sizeof(int16_t);
     } else {
         /* Unknown/legacy packets have no reliable codec marker. */
+        return;
+    }
+
+    if (pcm_samples == 0) {
         return;
     }
 

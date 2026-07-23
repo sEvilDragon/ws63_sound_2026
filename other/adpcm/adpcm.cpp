@@ -132,6 +132,36 @@ std::size_t adpcm::encode(const int16_t *pcm,
     return encoded_size;
 }
 
+std::size_t adpcm::encode_mono(const int16_t *pcm,
+                               std::size_t samples,
+                               uint8_t *output,
+                               std::size_t output_capacity)
+{
+    const std::size_t encoded_size = sle_audio::adpcm_mono_encoded_size(samples);
+    if (pcm == nullptr || output == nullptr || encoded_size == 0 || encoded_size > output_capacity) {
+        return 0;
+    }
+
+    output[0] = sle_audio::adpcm_mono_packet_marker;
+    put_u16_le(output + 1, static_cast<uint16_t>(samples));
+    int32_t predictor = pcm[0];
+    put_u16_le(output + 3, static_cast<uint16_t>(pcm[0]));
+    output[5] = static_cast<uint8_t>(index_[0]);
+    output[6] = 0;
+
+    uint8_t *payload = output + sle_audio::adpcm_mono_packet_header_size;
+    for (std::size_t sample = 1; sample < samples; ++sample) {
+        const uint8_t nibble = encode_nibble(pcm[sample], predictor, index_[0]);
+        const std::size_t byte_index = (sample - 1U) / 2U;
+        if (((sample - 1U) & 1U) == 0) {
+            payload[byte_index] = nibble;
+        } else {
+            payload[byte_index] = static_cast<uint8_t>(payload[byte_index] | (nibble << 4U));
+        }
+    }
+    return encoded_size;
+}
+
 std::size_t adpcm::decode(const uint8_t *packet,
                           std::size_t packet_length,
                           int16_t *output,
@@ -167,4 +197,36 @@ std::size_t adpcm::decode(const uint8_t *packet,
         output[frame * 2U + 1U] = decode_nibble(packed >> 4U, predictor[1], index[1]);
     }
     return interleaved_samples;
+}
+
+std::size_t adpcm::decode_mono(const uint8_t *packet,
+                               std::size_t packet_length,
+                               int16_t *output,
+                               std::size_t output_capacity) const
+{
+    if (packet == nullptr || output == nullptr || packet_length < sle_audio::adpcm_mono_packet_header_size ||
+        packet[0] != sle_audio::adpcm_mono_packet_marker) {
+        return 0;
+    }
+
+    const std::size_t samples = get_u16_le(packet + 1);
+    const std::size_t expected_size = sle_audio::adpcm_mono_encoded_size(samples);
+    if (expected_size == 0 || expected_size != packet_length || samples > output_capacity) {
+        return 0;
+    }
+
+    int32_t predictor = static_cast<int16_t>(get_u16_le(packet + 3));
+    int index = packet[5];
+    if (index > 88) {
+        return 0;
+    }
+
+    output[0] = static_cast<int16_t>(predictor);
+    const uint8_t *payload = packet + sle_audio::adpcm_mono_packet_header_size;
+    for (std::size_t sample = 1; sample < samples; ++sample) {
+        const uint8_t packed = payload[(sample - 1U) / 2U];
+        const uint8_t nibble = (((sample - 1U) & 1U) == 0) ? (packed & 0x0FU) : (packed >> 4U);
+        output[sample] = decode_nibble(nibble, predictor, index);
+    }
+    return samples;
 }

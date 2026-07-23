@@ -36,6 +36,20 @@ bool sle::set_adpcm_enabled(bool enabled)
     return true;
 }
 
+bool sle::mono_enabled()
+{
+    return nv_recv_sle_mono_enabled() != 0;
+}
+
+bool sle::set_mono_enabled(bool enabled)
+{
+    if (!nv_recv_write_sle_mono(enabled ? 1 : 0)) {
+        return false;
+    }
+    notify_adpcm_state();
+    return true;
+}
+
 void sle::notify_adpcm_state()
 {
     if (!s_active || !s_connected || property_handle == 0) {
@@ -46,6 +60,7 @@ void sle::notify_adpcm_state()
         sle_audio::codec_control_magic,
         sle_audio::codec_control_version,
         static_cast<uint8_t>(adpcm_enabled() ? 1 : 0),
+        static_cast<uint8_t>(mono_enabled() ? 1 : 0),
     };
     ssaps_ntf_ind_t param = {0};
     param.handle = property_handle;
@@ -56,7 +71,8 @@ void sle::notify_adpcm_state()
     if (ret != ERRCODE_SUCC) {
         osal_printk("[SLE] ADPCM state notify failed: %u\r\n", ret);
     } else {
-        osal_printk("[SLE] ADPCM state notified: %s\r\n", adpcm_enabled() ? "ON" : "OFF");
+        osal_printk("[SLE] audio state notified: ADPCM=%s mono=%s\r\n", adpcm_enabled() ? "ON" : "OFF",
+                    mono_enabled() ? "ON" : "OFF");
     }
 }
 

@@ -34,7 +34,8 @@ typedef struct {
 typedef struct {
     uint8_t version;
     uint8_t adpcm_enabled;
-    uint8_t reserved[2];
+    uint8_t mono_enabled;
+    uint8_t reserved;
 } sle_audio_config_nv_t;
 
 /**
@@ -97,6 +98,8 @@ int nv_recv_write_dlna_name(const char *name);
 /* The receiver is the only persistent owner of the SLE codec setting. */
 int nv_recv_sle_adpcm_enabled(void);
 int nv_recv_write_sle_adpcm(uint8_t enabled);
+int nv_recv_sle_mono_enabled(void);
+int nv_recv_write_sle_mono(uint8_t enabled);
 
 #ifdef __cplusplus
 }

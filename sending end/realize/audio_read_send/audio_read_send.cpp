@@ -26,6 +26,8 @@ void *audio_read_send_task(void *arg)
     static uint8_t adpcm_packet[sle_audio::adpcm_encoded_size(pcm2706::buffer_size)] = {0};
     static constexpr int chunk_samples = 360;
     static uint8_t pcm_packet[1 + chunk_samples * sizeof(int16_t)] = {0};
+    static constexpr std::size_t mono_frame_samples = pcm2706::buffer_size / 2U;
+    static int16_t mono_frame[mono_frame_samples] = {0};
     osal_printk("实例创建完毕\n");
 
     while (true) {
@@ -68,9 +70,19 @@ void *audio_read_send_task(void *arg)
          * 原始PCM仍分包，但每包也增加一个非0xF标志字节。
          */
         const bool use_adpcm = sle::compression_enabled();
+        const bool use_mono = sle::mono_enabled();
+        if (use_mono) {
+            for (std::size_t frame = 0; frame < mono_frame_samples; ++frame) {
+                const int32_t mixed = static_cast<int32_t>(data_ptr[2U * frame]) + data_ptr[2U * frame + 1U];
+                mono_frame[frame] = static_cast<int16_t>(mixed / 2);
+            }
+        }
         std::size_t adpcm_length = 0;
         if (use_adpcm) {
-            adpcm_length = g_adpcm.encode(data_ptr, pcm.buffer_size, adpcm_packet, sizeof(adpcm_packet));
+            adpcm_length = use_mono
+                               ? g_adpcm.encode_mono(mono_frame, mono_frame_samples, adpcm_packet,
+                                                     sizeof(adpcm_packet))
+                               : g_adpcm.encode(data_ptr, pcm.buffer_size, adpcm_packet, sizeof(adpcm_packet));
             if (adpcm_length == 0) {
                 osal_printk("[Audio] ADPCM encode failed, dropping frame\r\n");
                 continue;
@@ -84,13 +96,16 @@ void *audio_read_send_task(void *arg)
                     continue;
                 }
 
-                for (int offset = 0; offset < pcm.buffer_size; offset += chunk_samples) {
-                    int send_samples = pcm.buffer_size - offset;
+                const int16_t *send_data = use_mono ? mono_frame : data_ptr;
+                const int total_samples = use_mono ? static_cast<int>(mono_frame_samples)
+                                                   : static_cast<int>(pcm.buffer_size);
+                for (int offset = 0; offset < total_samples; offset += chunk_samples) {
+                    int send_samples = total_samples - offset;
                     if (send_samples > chunk_samples)
                         send_samples = chunk_samples;
                     const std::size_t payload_bytes = send_samples * sizeof(int16_t);
-                    pcm_packet[0] = sle_audio::pcm_packet_marker;
-                    std::memcpy(pcm_packet + 1, data_ptr + offset, payload_bytes);
+                    pcm_packet[0] = use_mono ? sle_audio::pcm_mono_packet_marker : sle_audio::pcm_packet_marker;
+                    std::memcpy(pcm_packet + 1, send_data + offset, payload_bytes);
                     sle::write_send(i, pcm_packet, static_cast<uint16_t>(payload_bytes + 1));
                 }
             }
