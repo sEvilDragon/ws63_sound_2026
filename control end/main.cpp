@@ -36,11 +36,11 @@ void app_entry(void)
     // taskid = osal_kthread_create((osal_kthread_handler)spi_slave_task, NULL, "spi_slave_task", 2048);
     // (void)taskid;
 
-    // taskid = osal_kthread_create((osal_kthread_handler)ttp_task, NULL, "ttp_task", 2048);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)ttp_task, NULL, "ttp_task", 2048);
+    (void)taskid;
 
-    // taskid = osal_kthread_create((osal_kthread_handler)ui_task, NULL, "ui_task", 2048);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)ui_task, NULL, "ui_task", 2048);
+    (void)taskid;
 
     // taskid = osal_kthread_create((osal_kthread_handler)voice_task, NULL, "voice_task", 2048);
     // (void)taskid;
@@ -50,8 +50,8 @@ void app_entry(void)
 
     // sk9822 DMA 与 spi_slave DMA 共存问题已修复:
     // uapi_dma_init/open 统一在 app_entry 入口调用, 避免 hal_dma_v151_open 重置通道状态
-    // taskid = osal_kthread_create((osal_kthread_handler)sk9822_task, NULL, "sk9822_task", 4096 * 2);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)sk9822_task, NULL, "sk9822_task", 4096 * 2);
+    (void)taskid;
 
     // taskid = osal_kthread_create((osal_kthread_handler)cs43131_task, NULL, "cs43131_task", 4096);
     // (void)taskid;

@@ -58,8 +58,10 @@ static void sle_data_process(const uint8_t *data, uint16_t len)
         return;
     }
 
+    const char *format = nullptr;
     std::size_t pcm_samples = 0;
     if (data[0] == sle_audio::adpcm_mono_packet_marker) {
+        format = "ADPCM mono";
         const std::size_t mono_samples =
             s_adpcm_decoder.decode_mono(data, len, s_sle_mono_buffer, k_max_sle_mono_samples);
         pcm_samples = expand_mono_to_stereo(s_sle_mono_buffer, mono_samples, s_sle_pcm_buffer,
@@ -69,12 +71,14 @@ static void sle_data_process(const uint8_t *data, uint16_t len)
             return;
         }
     } else if (sle_audio::is_adpcm_packet(data[0])) {
+        format = "ADPCM stereo";
         pcm_samples = s_adpcm_decoder.decode(data, len, s_sle_pcm_buffer, k_max_sle_pcm_samples);
         if (pcm_samples == 0) {
             osal_printk("[Audio] invalid ADPCM packet: marker=0x%02x len=%u\r\n", data[0], len);
             return;
         }
     } else if (data[0] == sle_audio::pcm_mono_packet_marker) {
+        format = "PCM mono";
         const std::size_t payload_bytes = len - 1U;
         if ((payload_bytes & 1U) != 0 || payload_bytes > sizeof(s_sle_mono_buffer)) {
             return;
@@ -83,6 +87,7 @@ static void sle_data_process(const uint8_t *data, uint16_t len)
         pcm_samples = expand_mono_to_stereo(s_sle_mono_buffer, payload_bytes / sizeof(int16_t), s_sle_pcm_buffer,
                                             k_max_sle_pcm_samples);
     } else if (data[0] == sle_audio::pcm_packet_marker) {
+        format = "PCM stereo";
         const std::size_t payload_bytes = len - 1U;
         if ((payload_bytes & 1U) != 0 || payload_bytes > sizeof(s_sle_pcm_buffer)) {
             return;
@@ -98,6 +103,12 @@ static void sle_data_process(const uint8_t *data, uint16_t len)
         return;
     }
 
+    static uint8_t last_marker = 0;
+    if (data[0] != last_marker) {
+        osal_printk("[Audio] SLE RX format: %s, marker=0x%02x len=%u\r\n", format, data[0], len);
+        last_marker = data[0];
+    }
+
     const spi_settings_t *s = get_spi_settings();
     iis::data_write(s_sle_pcm_buffer, pcm_samples, spi_settings_effective_volume(s),
                     spi_settings_effective_bass(s));
@@ -110,7 +121,8 @@ static void *sle_audio_task(void *arg)
 
     sle::set_data_process_fuction(sle_data_process);
     sle::set_data_clear_fuction(iis::data_clear);
-    static sle g_sle;
+    osal_printk("[Audio] initializing SLE mode\r\n");
+    sle g_sle;
 
     while (!s_sle_stop) {
         osal_msleep(100);
@@ -119,6 +131,7 @@ static void *sle_audio_task(void *arg)
     sle::teardown();
     iis::data_clear();
     s_sle_done = true;
+    osal_printk("[Audio] SLE mode stopped\r\n");
     return nullptr;
 }
 
@@ -128,6 +141,9 @@ static void start_sle_mode(void)
     s_sle_done = false;
     s_sle_task_handle = osal_kthread_create((osal_kthread_handler)sle_audio_task, NULL, "sle_audio", 4096);
     s_sle_running = (s_sle_task_handle != nullptr);
+    if (!s_sle_running) {
+        osal_printk("[Audio] SLE task creation failed\r\n");
+    }
 }
 
 static bool stop_sle_mode(void)

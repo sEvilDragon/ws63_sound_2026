@@ -32,7 +32,6 @@ bool sle::set_adpcm_enabled(bool enabled)
     if (!nv_recv_write_sle_adpcm(enabled ? 1 : 0)) {
         return false;
     }
-    notify_adpcm_state();
     return true;
 }
 
@@ -46,7 +45,6 @@ bool sle::set_mono_enabled(bool enabled)
     if (!nv_recv_write_sle_mono(enabled ? 1 : 0)) {
         return false;
     }
-    notify_adpcm_state();
     return true;
 }
 
@@ -326,8 +324,6 @@ void sle::connect_changed_callback(uint16_t conn_id,
             osal_printk("[SLE] set PHY failed: %u\n", ret_phy);
         }
 
-        /* Try immediately; MTU callback repeats this after SSAP is ready. */
-        notify_adpcm_state();
 
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         osal_printk("[SLE] disconnected, conn_id=%u\r\n", conn_id);
@@ -355,7 +351,6 @@ void sle::ssap_mtu_callback(uint8_t client_id, uint16_t conn_id, ssap_exchange_i
         return;
     }
     true_mtu = param->mtu_size;
-    notify_adpcm_state();
 }
 
 void sle::get_data_callback(uint8_t server_id, uint16_t conn_id, ssaps_req_write_cb_t *req_param, errcode_t status)
@@ -365,14 +360,35 @@ void sle::get_data_callback(uint8_t server_id, uint16_t conn_id, ssaps_req_write
         osal_printk("[SLE] write callback failed: %u\n", status);
         return;
     }
-    static int gdc_cnt = 0;
-    gdc_cnt++;
-    if (gdc_cnt <= 3 || gdc_cnt % 50 == 1) {
-    }
     if (!s_active)
         return;
-    if (req_param == nullptr || req_param->handle != property_handle ||
-        req_param->type != SSAP_PROPERTY_TYPE_VALUE) {
+    if (req_param == nullptr || req_param->handle != property_handle) {
+        return;
+    }
+    if (req_param->type != SSAP_PROPERTY_TYPE_VALUE) {
+        return;
+    }
+    if (req_param->value != nullptr && req_param->length == sle_audio::codec_control_request_size &&
+        req_param->value[0] == sle_audio::codec_control_magic &&
+        req_param->value[1] == sle_audio::codec_control_version) {
+        if (req_param->need_rsp) {
+            uint8_t value[sle_audio::codec_control_size] = {
+                sle_audio::codec_control_magic,
+                sle_audio::codec_control_version,
+                static_cast<uint8_t>(adpcm_enabled() ? 1 : 0),
+                static_cast<uint8_t>(mono_enabled() ? 1 : 0),
+            };
+            ssaps_send_rsp_t response = {0};
+            response.request_id = req_param->request_id;
+            response.status = ERRCODE_SUCC;
+            response.value_len = sizeof(value);
+            response.value = value;
+            const errcode_t ret = ssaps_send_response(server_id, conn_id, &response);
+            if (ret != ERRCODE_SUCC) {
+                osal_printk("[SLE] audio state response failed: %u\r\n", ret);
+            }
+        } else {
+        }
         return;
     }
     if (data_process == nullptr) {

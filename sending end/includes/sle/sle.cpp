@@ -6,6 +6,7 @@ std::array<sle::connection_device, sle::max_connection_num> sle::connection_devi
 sle_addr_t sle::s_pending_addr = {0};
 volatile bool sle::s_adpcm_enabled = false;
 volatile bool sle::s_mono_enabled = false;
+volatile bool sle::s_audio_state_valid = false;
 
 sle::sle()
 {
@@ -24,7 +25,6 @@ sle::sle()
     c.find_structure_cb = find_service_callback;
     c.ssapc_find_property_cbk = find_property_callback;
     c.exchange_info_cb = ssap_mtu_callback;
-    c.notification_cb = notification_callback;
 
     sle_announce_seek_register_callbacks(&a);
     sle_connection_register_callbacks(&b);
@@ -46,6 +46,33 @@ bool sle::mono_enabled()
     return s_mono_enabled;
 }
 
+void sle::request_audio_state()
+{
+    static uint8_t sync_request[sle_audio::codec_control_request_size] = {
+        sle_audio::codec_control_magic,
+        sle_audio::codec_control_version,
+    };
+    for (int index = 0; index < max_connection_num; ++index) {
+        if (!connection_devices[index].is_active || connection_devices[index].target_handle == 0) {
+            continue;
+        }
+
+        ssapc_write_param_t request = {0};
+        request.handle = connection_devices[index].target_handle;
+        request.type = SSAP_PROPERTY_TYPE_VALUE;
+        request.data_len = sizeof(sync_request);
+        request.data = sync_request;
+        const errcode_t ret = ssapc_write_req(connection_devices[index].client_id,
+                                              connection_devices[index].conn_id, &request);
+        if (ret != ERRCODE_SUCC) {
+            static unsigned int fail_count = 0;
+            if ((fail_count++ % 20U) == 0U) {
+                osal_printk("[SLE] audio state request failed: %u\r\n", ret);
+            }
+        }
+    }
+}
+
 void sle::notification_callback(uint8_t client_id,
                                 uint16_t conn_id,
                                 ssapc_handle_value_t *data,
@@ -65,10 +92,45 @@ void sle::notification_callback(uint8_t client_id,
 
     const bool enabled = data->data[2] != 0;
     const bool mono = data->data_len == sle_audio::codec_control_size && data->data[3] != 0;
+    const bool changed = !s_audio_state_valid || enabled != s_adpcm_enabled || mono != s_mono_enabled;
     s_adpcm_enabled = enabled;
     s_mono_enabled = mono;
-    osal_printk("[SLE] audio state synchronized from receiver: ADPCM=%s mono=%s\r\n", enabled ? "ON" : "OFF",
-                mono ? "ON" : "OFF");
+    s_audio_state_valid = true;
+    if (changed) {
+        osal_printk("[SLE] audio state synchronized by notification: ADPCM=%s mono=%s\r\n",
+                    enabled ? "ON" : "OFF", mono ? "ON" : "OFF");
+    }
+}
+
+void sle::write_confirm_callback(uint8_t client_id,
+                                 uint16_t conn_id,
+                                 ssapc_write_result_t *write_result,
+                                 errcode_t status)
+{
+    const int index = find_connectioned_device_connid(conn_id);
+    if (status != ERRCODE_SUCC || write_result == nullptr || index < 0 ||
+        connection_devices[index].client_id != client_id ||
+        write_result->handle != connection_devices[index].target_handle) {
+        return;
+    }
+    if (write_result->type != SSAP_PROPERTY_TYPE_VALUE || write_result->data == nullptr ||
+        write_result->data_len != sle_audio::codec_control_size ||
+        write_result->data[0] != sle_audio::codec_control_magic ||
+        write_result->data[1] != sle_audio::codec_control_version || write_result->data[2] > 1 ||
+        write_result->data[3] > 1) {
+        return;
+    }
+
+    const bool enabled = write_result->data[2] != 0;
+    const bool mono = write_result->data[3] != 0;
+    const bool changed = !s_audio_state_valid || enabled != s_adpcm_enabled || mono != s_mono_enabled;
+    s_adpcm_enabled = enabled;
+    s_mono_enabled = mono;
+    s_audio_state_valid = true;
+    if (changed) {
+        osal_printk("[SLE] audio state synchronized by response: ADPCM=%s mono=%s\r\n",
+                    enabled ? "ON" : "OFF", mono ? "ON" : "OFF");
+    }
 }
 
 void sle::sle_enable_callback(errcode_t status)
@@ -264,6 +326,7 @@ void sle::connect_changed_callback(uint16_t conn_id,
     if (conn_state == SLE_ACB_STATE_CONNECTED) {
         s_adpcm_enabled = false;
         s_mono_enabled = false;
+        s_audio_state_valid = false;
         // 连接成功：找到之前标记为 pending 的槽位，转为 active
         int index = -1;
         for (int i = 0; i < max_connection_num; ++i) {
@@ -316,6 +379,7 @@ void sle::connect_changed_callback(uint16_t conn_id,
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
         s_adpcm_enabled = false;
         s_mono_enabled = false;
+        s_audio_state_valid = false;
         int index = find_connectioned_device_connid(conn_id);
         if (index != -1) {
             // 找到对应连接设备，清理资源(恢复默认值)
@@ -439,8 +503,8 @@ void sle::find_property_callback(uint8_t client_id,
 
     if (uuid == uuid_property) {
         // 找到对应属性，保存目标特征句柄，准备发送数据
-        osal_msleep(100);
         connection_devices[index].target_handle = property->handle;
+
     } else {
         osal_printk("SSAP查找属性回调参数错误，错误码：%u\n", status);
     }

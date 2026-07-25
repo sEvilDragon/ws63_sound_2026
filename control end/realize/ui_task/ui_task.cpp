@@ -1,340 +1,186 @@
 #include "ui_task.h"
 #include "ui_task.hpp"
 #include "spi_task.h"
+#include "ttp_task.h"
+#include "voice_task.h"
 
 extern "C" {
-#include "soc_osal.h"
 #include "app_init.h"
+#include "soc_osal.h"
 }
 
 namespace sed_ws63 {
 
-static constexpr int LONG_PRESS_THRESHOLD = 100;
-static constexpr int LONG_PRESS_REPEAT = 20;
-// swipe 阈值已按 TTP_SLIDER_SCALE 放大: 需移动 ≥ 2 个逻辑档位且速度 > 5
-static constexpr int SWIPE_THRESHOLD = 2 * TTP_SLIDER_SCALE;
-static constexpr int SWIPE_SPEED_MIN = 5;
-static constexpr int LONG_PRESS_SIDE_NONE = 0;
-static constexpr int LONG_PRESS_SIDE_LEFT = 1;
-static constexpr int LONG_PRESS_SIDE_RIGHT = 2;
-
-// 滑条灵敏度: 手指从左滑到右 (700 缩放单位) 对应 value 变化量
-// 50 = 一次全滑条约 ±50, 类似鼠标滚轮, 想更快就改大, 更慢就改小
+static constexpr uint8_t MODE_LIST[] = {
+    SPI_MODE_WIREED, // 无模式
+    SPI_MODE_SLE,
+    SPI_MODE_DLNA,
+};
+static constexpr int MODE_COUNT = sizeof(MODE_LIST) / sizeof(MODE_LIST[0]);
 static constexpr int SLIDER_SENSITIVITY = 50;
 
-static constexpr uint8_t MODE_LIST[3] = {SPI_MODE_SLE, SPI_MODE_DLNA, SPI_MODE_WIREED};
+static ui_target_t g_target = UI_TARGET_MODE;
+static int g_last_slider_pos = TTP_SLIDER_NO_POS;
+static bool g_mode_changed_in_gesture = false;
 
-static ui_state_t g_ui;
-
-// 每帧锁存: ui_tick() 入口一次性读出并清零, 整个 tick 内复用本地副本
-static uint8_t g_press_edge = 0;
-static uint8_t g_release_edge = 0;
-
-static int clamp100(int v)
+static int clamp_percent(int value)
 {
-    if (v < 0)
+    if (value < 0) {
         return 0;
-    if (v > 100)
+    }
+    if (value > 100) {
         return 100;
-    return v;
+    }
+    return value;
 }
 
-static void cycle_mode(int dir)
+static void reset_slider_tracking(void)
 {
-    spi_settings_t *s = (spi_settings_t *)get_spi_settings();
-    int idx = -1;
-    for (int i = 0; i < 3; i++) {
-        if (MODE_LIST[i] == s->mode) {
-            idx = i;
+    g_last_slider_pos = TTP_SLIDER_NO_POS;
+    g_mode_changed_in_gesture = false;
+}
+
+static void cycle_mode(int direction)
+{
+    const spi_settings_t *settings = get_spi_settings();
+    int index = 0;
+    for (int i = 0; i < MODE_COUNT; i++) {
+        if (MODE_LIST[i] == settings->mode) {
+            index = i;
             break;
         }
     }
-    if (idx < 0)
-        idx = 0;
-    idx = (idx + dir + 3) % 3;
-    s->mode = MODE_LIST[idx];
-    nv_mark_dirty();
+
+    index = (index + direction + MODE_COUNT) % MODE_COUNT;
+    spi_settings_update_mode(MODE_LIST[index]);
+    osal_printk("[UI] slider: mode=%s direction=%s\r\n", mode_name(MODE_LIST[index]),
+                direction > 0 ? "right" : "left");
 }
 
-static void set_value_with_log(ui_config_target_t target, int new_val)
+static void select_next_target(void)
 {
-    spi_settings_t *s = (spi_settings_t *)get_spi_settings();
-    new_val = clamp100(new_val);
+    g_target = (ui_target_t)(((int)g_target + 1) % UI_TARGET_COUNT);
+    reset_slider_tracking();
 
-    uint8_t *p = nullptr;
-    const char *name = nullptr;
-    switch (target) {
+    switch (g_target) {
+        case UI_TARGET_MODE:
+            voice_request_mode_selection_prompt();
+            break;
         case UI_TARGET_VOLUME:
-            p = &s->volume;
-            name = "volume";
+            voice_request_volume_adjust_prompt();
             break;
         case UI_TARGET_BRIGHTNESS:
-            p = &s->brightness;
-            name = "brightness";
-            break;
-        case UI_TARGET_BASS:
-            p = &s->bass;
-            name = "bass";
+            voice_request_brightness_adjust_prompt();
             break;
         default:
-            return;
+            break;
     }
-
-    if ((int)*p != new_val) {
-        *p = (uint8_t)new_val;
-        nv_mark_dirty();
-    }
-}
-
-static int get_current_value(ui_config_target_t target)
-{
-    const spi_settings_t *s = get_spi_settings();
-    switch (target) {
-        case UI_TARGET_VOLUME:
-            return s->volume;
-        case UI_TARGET_BRIGHTNESS:
-            return s->brightness;
-        case UI_TARGET_BASS:
-            return s->bass;
-        default:
-            return 0;
-    }
+    osal_printk("[UI] key A: target=%s\r\n", target_name(g_target));
 }
 
 static void toggle_hotspot(void)
 {
-    spi_settings_t *s = (spi_settings_t *)get_spi_settings();
-    uint8_t hs = spi_get_hotspot(s->hotspot_network);
-    uint8_t nw = spi_get_network(s->hotspot_network);
-    uint8_t new_hs = (hs == SPI_HOTSPOT_ON) ? SPI_HOTSPOT_OFF : SPI_HOTSPOT_ON;
-    s->hotspot_network = spi_make_hotspot_network(new_hs, nw);
-    nv_mark_dirty();
-}
+    const spi_settings_t *settings = get_spi_settings();
+    uint8_t hotspot = spi_get_hotspot(settings->hotspot_network);
+    uint8_t network = spi_get_network(settings->hotspot_network);
+    uint8_t next = (hotspot == SPI_HOTSPOT_ON) ? SPI_HOTSPOT_OFF : SPI_HOTSPOT_ON;
 
-static const char *ui_mode_name(ui_mode_t mode)
-{
-    return mode == UI_CONFIG ? "CONFIG" : "MAIN";
-}
-
-static int detect_side(int pos)
-{
-    // pos is scaled (×TTP_SLIDER_SCALE), range 0..700
-    if (pos >= 0 && pos < 4 * TTP_SLIDER_SCALE)
-        return LONG_PRESS_SIDE_LEFT;
-    if (pos >= 4 * TTP_SLIDER_SCALE && pos <= 7 * TTP_SLIDER_SCALE)
-        return LONG_PRESS_SIDE_RIGHT;
-    return LONG_PRESS_SIDE_NONE;
-}
-
-static void reset_long_press(void)
-{
-    g_ui.long_press.side = LONG_PRESS_SIDE_NONE;
-    g_ui.long_press.ticks = 0;
-}
-
-static void reset_slider(void)
-{
-    g_ui.slider.active = false;
-    g_ui.slider.last_pos = TTP_SLIDER_NO_POS;
-    g_ui.slider.last_value = -1;
-}
-
-static void reset_swipe(void)
-{
-    g_ui.swipe.dispatched = false;
-    g_ui.swipe.anchor_pos = 0;
-    g_ui.swipe.anchor_valid = false;
-}
-
-static void handle_long_press_tick(int side, ui_config_target_t target)
-{
-    if (g_ui.long_press.side != side) {
-        g_ui.long_press.side = (uint8_t)side;
-        g_ui.long_press.ticks = 0;
-        return;
-    }
-
-    g_ui.long_press.ticks++;
-    if (g_ui.long_press.ticks < LONG_PRESS_THRESHOLD)
-        return;
-
-    int over = g_ui.long_press.ticks - LONG_PRESS_THRESHOLD;
-    if (over == 0 || (over > 0 && (over % LONG_PRESS_REPEAT) == 0)) {
-        int delta = (side == LONG_PRESS_SIDE_RIGHT) ? +1 : -1;
-        int cur = get_current_value(target);
-        set_value_with_log(target, cur + delta);
-        g_ui.slider.last_value = clamp100(cur + delta);
-    }
-}
-
-static void handle_main_mode(void)
-{
-    const ttp_state_t *t = ttp_get_state();
-
-    if (t->slider_pos != TTP_SLIDER_NO_POS) {
-        // 新触碰: 上一轮未设 anchor 或已释放, 现在重新设定
-        if (!g_ui.swipe.anchor_valid) {
-            g_ui.swipe.anchor_pos = t->slider_pos;
-            g_ui.swipe.anchor_valid = true;
-            g_ui.swipe.dispatched = false;
-        }
-        int delta = t->slider_pos - g_ui.swipe.anchor_pos;
-        int abs_delta = (delta < 0) ? -delta : delta;
-        if (!g_ui.swipe.dispatched && abs_delta >= SWIPE_THRESHOLD && t->slider_speed > SWIPE_SPEED_MIN) {
-            int dir = (delta > 0) ? +1 : -1;
-            cycle_mode(dir);
-            g_ui.swipe.dispatched = true;
-            reset_long_press();
-            return;
-        }
+    spi_settings_update_hotspot_network(next, network);
+    bool is_on = spi_get_hotspot(get_spi_settings()->hotspot_network) == SPI_HOTSPOT_ON;
+    if (is_on) {
+        voice_request_hotspot_on_prompt();
     } else {
-        // 滑条释放: 清掉 anchor_valid, 下次触碰必须重新设定 anchor
-        // 这样 "点左 + 释放 + 点右" 不会被当成从左到右的滑动
-        reset_swipe();
+        voice_request_hotspot_off_prompt();
     }
+    osal_printk("[UI] key B: hotspot=%s\r\n", is_on ? "ON" : "OFF");
+}
 
-    if (t->slider_pos == TTP_SLIDER_NO_POS) {
-        reset_long_press();
+static void toggle_network(void)
+{
+    const spi_settings_t *settings = get_spi_settings();
+    uint8_t hotspot = spi_get_hotspot(settings->hotspot_network);
+    uint8_t network = spi_get_network(settings->hotspot_network);
+    uint8_t next = (network == SPI_NETWORK_CONN) ? SPI_NETWORK_DISC : SPI_NETWORK_CONN;
+
+    spi_settings_update_hotspot_network(hotspot, next);
+    bool is_on = spi_get_network(get_spi_settings()->hotspot_network) == SPI_NETWORK_CONN;
+    if (is_on) {
+        voice_request_network_on_prompt();
+    } else {
+        voice_request_network_off_prompt();
+    }
+    osal_printk("[UI] key C: network=%s\r\n", is_on ? "ON" : "OFF");
+}
+
+static void handle_slider(void)
+{
+    int pos = ttp_get_state()->slider_pos;
+    if (pos == TTP_SLIDER_NO_POS) {
+        reset_slider_tracking();
         return;
     }
 
-    uint16_t full = t->raw_state;
-    int pop = 0;
-    for (int i = 0; i < 16; i++)
-        if (full & (1u << i))
-            pop++;
-
-    if (pop == 1 && !g_ui.swipe.dispatched) {
-        int side = detect_side(t->slider_pos);
-        if (side != LONG_PRESS_SIDE_NONE) {
-            handle_long_press_tick(side, UI_TARGET_VOLUME);
-            return;
-        }
+    if (g_last_slider_pos == TTP_SLIDER_NO_POS) {
+        g_last_slider_pos = pos;
+        return;
     }
-    reset_long_press();
-}
 
-static void handle_config_mode(void)
-{
-    const ttp_state_t *t = ttp_get_state();
+    int delta = pos - g_last_slider_pos;
+    if (delta == 0) {
+        return;
+    }
+    g_last_slider_pos = pos;
 
-    if (t->slider_pos != TTP_SLIDER_NO_POS) {
-        // 首次触碰: 记录锚点, 不产生增量
-        if (!g_ui.slider.active) {
-            g_ui.slider.last_pos = t->slider_pos;
-            g_ui.slider.active = true;
-            reset_long_press();
-            return;
-        }
-
-        int delta = t->slider_pos - g_ui.slider.last_pos;
-        if (delta != 0) {
-            if (g_ui.target == UI_TARGET_MODE) {
-                // mode 只有 3 个选项, 仍然用绝对位置映射
-                int mode_idx = (t->slider_pos / TTP_SLIDER_SCALE) % 3;
-                uint8_t new_mode = MODE_LIST[mode_idx];
-                spi_settings_t *s = (spi_settings_t *)get_spi_settings();
-                if (s->mode != new_mode) {
-                    s->mode = new_mode;
-                    nv_mark_dirty();
-                }
-            } else {
-                // ★ 鼠标滚轮式相对滑动 ★
-                // delta 单位: 缩放值 (×100); 700 = 一个完整 8-pad 滑程
-                // value_delta = delta × SENSITIVITY / 700
-                int value_delta = (delta * SLIDER_SENSITIVITY) / (7 * TTP_SLIDER_SCALE);
-                if (value_delta != 0) {
-                    int cur = get_current_value(g_ui.target);
-                    int new_val = clamp100(cur + value_delta);
-                    set_value_with_log(g_ui.target, new_val);
-                    g_ui.slider.last_value = new_val;
-                }
+    switch (g_target) {
+        case UI_TARGET_MODE:
+            if (!g_mode_changed_in_gesture) {
+                cycle_mode(delta > 0 ? 1 : -1);
+                g_mode_changed_in_gesture = true;
             }
-            g_ui.slider.last_pos = t->slider_pos;
-            reset_long_press();
-            return;
-        }
-
-        // 位置不变: 检查单指长按微调 (±1)
-        uint16_t full = t->raw_state;
-        int pop = 0;
-        for (int i = 0; i < 16; i++)
-            if (full & (1u << i))
-                pop++;
-
-        if (pop == 1 && g_ui.target != UI_TARGET_MODE) {
-            int side = detect_side(t->slider_pos);
-            if (side != LONG_PRESS_SIDE_NONE) {
-                handle_long_press_tick(side, g_ui.target);
-                return;
+            break;
+        case UI_TARGET_VOLUME: {
+            int value_delta = delta * SLIDER_SENSITIVITY /
+                              ((TTP_SLIDER_PADS_COUNT - 1) * TTP_SLIDER_SCALE);
+            if (value_delta != 0) {
+                int volume = clamp_percent((int)get_spi_settings()->volume + value_delta);
+                spi_settings_update_volume((uint8_t)volume);
+                osal_printk("[UI] slider: volume=%u delta=%d\r\n", (unsigned)volume, value_delta);
             }
+            break;
         }
-        reset_long_press();
-    } else {
-        // 手指离开: 重置状态, 下次触碰从新锚点开始计增量
-        reset_long_press();
-        reset_slider();
+        case UI_TARGET_BRIGHTNESS: {
+            int value_delta = delta * SLIDER_SENSITIVITY /
+                              ((TTP_SLIDER_PADS_COUNT - 1) * TTP_SLIDER_SCALE);
+            if (value_delta != 0) {
+                int brightness = clamp_percent((int)get_spi_settings()->brightness + value_delta);
+                spi_settings_update_brightness((uint8_t)brightness);
+                osal_printk("[UI] slider: brightness=%u delta=%d\r\n", (unsigned)brightness, value_delta);
+            }
+            break;
+        }
+        default:
+            break;
     }
 }
 
 static void ui_tick(void)
 {
-    // 一次性消费本周期所有边沿, 后续整段逻辑复用同一份本地副本
-    g_press_edge = ttp_consume_press_latch();
-    g_release_edge = ttp_consume_release_latch();
+    uint8_t press = ttp_consume_press_latch();
 
-    bool key_a = (g_press_edge & (1u << TTP_FUNC_IDX_A)) != 0;
-    bool key_b = (g_press_edge & (1u << TTP_FUNC_IDX_B)) != 0;
-    bool key_c = (g_press_edge & (1u << TTP_FUNC_IDX_C)) != 0;
-
-    // 功能键优先级: B(target切换) > A(模式切换) > C(热点)
-    // A 容易误触, 降到 B 之后; 同时按 A+B 时仅 B 生效
-    // C 只有 A/B 都没按下时才生效
-    if (key_b) {
-        if (g_ui.mode == UI_CONFIG) {
-            g_ui.target = (ui_config_target_t)(((int)g_ui.target + 1) % UI_TARGET_COUNT);
-            osal_printk("[UI] key B: target=%s raw=0x%04x\r\n", target_name(g_ui.target),
-                        (unsigned)ttp_get_state()->raw_state);
-            reset_long_press();
-            reset_slider();
-            reset_swipe();
-        } else {
-            osal_printk("[UI] key B: ignored mode=%s raw=0x%04x\r\n", ui_mode_name(g_ui.mode),
-                        (unsigned)ttp_get_state()->raw_state);
-        }
+    if (press & (1u << TTP_FUNC_IDX_A)) {
+        select_next_target();
         return;
     }
-
-    if (key_a) {
-        if (g_ui.mode == UI_MAIN) {
-            g_ui.mode = UI_CONFIG;
-            g_ui.target = UI_TARGET_MODE;
-        } else {
-            g_ui.mode = UI_MAIN;
-        }
-        osal_printk("[UI] key A: mode=%s target=%s raw=0x%04x\r\n", ui_mode_name(g_ui.mode),
-                    target_name(g_ui.target), (unsigned)ttp_get_state()->raw_state);
-        reset_long_press();
-        reset_slider();
-        reset_swipe();
-        return;
-    }
-
-    if (key_c) {
+    if (press & (1u << TTP_FUNC_IDX_B)) {
         toggle_hotspot();
-        const spi_settings_t *s = get_spi_settings();
-        osal_printk("[UI] key C: hotspot=%s raw=0x%04x\r\n",
-                    spi_get_hotspot(s->hotspot_network) == SPI_HOTSPOT_ON ? "ON" : "OFF",
-                    (unsigned)ttp_get_state()->raw_state);
-        reset_long_press();
+        return;
+    }
+    if (press & (1u << TTP_FUNC_IDX_C)) {
+        toggle_network();
         return;
     }
 
-    // 无功能键按下 → 处理滑条
-    if (g_ui.mode == UI_MAIN)
-        handle_main_mode();
-    else
-        handle_config_mode();
+    handle_slider();
 }
 
 } // namespace sed_ws63
@@ -343,9 +189,12 @@ void *ui_task(void *arg)
 {
     (void)arg;
 
-    const spi_settings_t *s0 = get_spi_settings();
-    osal_printk("[UI] task started. mode=%s vol=%u bri=%u bass=%u\r\n", sed_ws63::mode_name(s0->mode),
-                (unsigned)s0->volume, (unsigned)s0->brightness, (unsigned)s0->bass);
+    const spi_settings_t *settings = get_spi_settings();
+    osal_printk("[UI] started: target=%s mode=%s volume=%u brightness=%u hotspot=%s network=%s\r\n",
+                sed_ws63::target_name(sed_ws63::UI_TARGET_MODE), sed_ws63::mode_name(settings->mode),
+                (unsigned)settings->volume, (unsigned)settings->brightness,
+                spi_get_hotspot(settings->hotspot_network) == SPI_HOTSPOT_ON ? "ON" : "OFF",
+                spi_get_network(settings->hotspot_network) == SPI_NETWORK_CONN ? "ON" : "OFF");
 
     while (true) {
         sed_ws63::ui_tick();

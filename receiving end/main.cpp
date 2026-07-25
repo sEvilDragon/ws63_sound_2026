@@ -28,7 +28,8 @@ void app_entry(void)
 #if defined(CONFIG_MIDDLEWARE_SUPPORT_NV)
     /* uapi_nv_init() 已在系统初始化中调用, 此处只需加载配置。
      * 必须在 osal_kthread_lock() 之前调用，因为 NV 操作内部
-     * 使用信号量，依赖调度器运行。 */
+     * 使用信号量，依赖调度器运行。spi_task 中的静态值是首次
+     * 上电预设；有效 NV 会完整覆盖预设，加载后不要再强制改值。 */
     nv_recv_load_all();
     (void)spi_settings_load_from_nv();
 #else
@@ -36,12 +37,6 @@ void app_entry(void)
 #endif
 
     osal_kthread_lock();
-
-    /* 默认从有线模式启动；其余音量、亮度等参数仍从 NV 加载。 */
-    spi_settings_update_mode(SPI_MODE_WIREED);
-    /* 每次启动先执行一次受控的 STA 连接周期；四次均失败后由
-     * wifi_task 自动切换到 SoftAP，避免旧 NV 中 OFF/OFF 状态阻断联网。 */
-    spi_settings_update_hotspot_network(SPI_HOTSPOT_OFF, SPI_NETWORK_CONN);
 
     taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 1024);
     osal_printk("[RECV] led_test_task created: %p\r\n", taskid);

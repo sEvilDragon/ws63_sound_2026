@@ -71,6 +71,16 @@ void *audio_read_send_task(void *arg)
          */
         const bool use_adpcm = sle::compression_enabled();
         const bool use_mono = sle::mono_enabled();
+        static bool mode_logged = false;
+        static bool last_adpcm = false;
+        static bool last_mono = false;
+        if (!mode_logged || use_adpcm != last_adpcm || use_mono != last_mono) {
+            osal_printk("[Audio] SLE TX format: %s %s\r\n", use_adpcm ? "ADPCM" : "PCM",
+                        use_mono ? "mono" : "stereo");
+            mode_logged = true;
+            last_adpcm = use_adpcm;
+            last_mono = use_mono;
+        }
         if (use_mono) {
             for (std::size_t frame = 0; frame < mono_frame_samples; ++frame) {
                 const int32_t mixed = static_cast<int32_t>(data_ptr[2U * frame]) + data_ptr[2U * frame + 1U];

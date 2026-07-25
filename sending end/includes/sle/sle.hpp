@@ -29,6 +29,7 @@ public:
     static void write_send(int index, uint8_t *data, uint16_t len_b);
     static bool compression_enabled();
     static bool mono_enabled();
+    static void request_audio_state();
 
 private:
     // SLE使能回调函数，SLE使能成功后会调用该函数
@@ -73,6 +74,10 @@ private:
                                       uint16_t conn_id,
                                       ssapc_handle_value_t *data,
                                       errcode_t status);
+    static void write_confirm_callback(uint8_t client_id,
+                                       uint16_t conn_id,
+                                       ssapc_write_result_t *write_result,
+                                       errcode_t status);
     // 在PHY设置后，调用回调函数，配置mcs
     static void after_phy_set_callback(uint16_t conn_id, errcode_t status, const sle_set_phy_t *param);
 
@@ -125,6 +130,7 @@ private:
     static sle_addr_t s_pending_addr; // 正在被连接的设备地址，保存到连接回调中使用
     static volatile bool s_adpcm_enabled;
     static volatile bool s_mono_enabled;
+    static volatile bool s_audio_state_valid;
 
     // 下面定义一些连接到设备后，需要开放的高速配置
     static constexpr uint16_t high_speed_interva_min = 0x14; // 传输间隔最小值

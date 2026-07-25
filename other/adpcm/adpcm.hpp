@@ -19,9 +19,10 @@ constexpr uint8_t pcm_mono_packet_marker = packet_version | packet_mono_flag;
 constexpr uint8_t adpcm_packet_marker = packet_type_mask | packet_version;
 constexpr uint8_t adpcm_mono_packet_marker = packet_type_mask | packet_version | packet_mono_flag;
 
-/* Receiver -> sender notification payload. */
+/* Codec control messages exchanged between receiver and sender. */
 constexpr uint8_t codec_control_magic = 0xAC;
 constexpr uint8_t codec_control_version = 0x01;
+constexpr std::size_t codec_control_request_size = 2;
 constexpr std::size_t codec_control_legacy_size = 3;
 constexpr std::size_t codec_control_size = 4;
 

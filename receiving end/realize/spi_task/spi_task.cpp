@@ -45,15 +45,6 @@ static bool spi_settings_payload_equal(const spi_settings_t *a, const spi_settin
            a->flags == b->flags;
 }
 
-static bool spi_settings_recv_nv_payload_equal(const spi_settings_t *a, const spi_settings_t *b)
-{
-    return a->hotspot_network == b->hotspot_network &&
-           a->mode == b->mode &&
-           a->volume == b->volume &&
-           a->brightness == b->brightness &&
-           a->bass == b->bass;
-}
-
 const spi_settings_t *get_spi_settings()
 {
     return &g_settings;
@@ -79,9 +70,8 @@ static void spi_settings_apply_control_payload(const spi_settings_t *src)
         return;
     }
 
-    bool persist_changed = !spi_settings_recv_nv_payload_equal(&g_settings, src);
-    bool flags_changed = g_settings.flags != src->flags;
-    if (!persist_changed && !flags_changed) {
+    bool persist_changed = !spi_settings_payload_equal(&g_settings, src);
+    if (!persist_changed) {
         return;
     }
 
@@ -90,6 +80,7 @@ static void spi_settings_apply_control_payload(const spi_settings_t *src)
     g_settings.volume = src->volume;
     g_settings.brightness = src->brightness;
     g_settings.bass = src->bass;
+    g_settings.tone = src->tone;
     g_settings.flags = src->flags;
     if (persist_changed) {
         spi_settings_mark_dirty();
@@ -105,10 +96,10 @@ int spi_settings_load_from_nv(void)
         spi_validate_settings(&saved)) {
         g_settings = saved;
         g_settings.cmd = SPI_CMD_QUERY;
-        g_settings.flags = 0;
-        osal_printk("[DWS_M] NV settings loaded: mode=%s vol=%u bri=%u bass=%u tone=%s len=%u\r\n",
+        osal_printk("[DWS_M] NV settings loaded: mode=%s vol=%u bri=%u bass=%u tone=%s flags=0x%02x len=%u\r\n",
                     mode_name(g_settings.mode), (unsigned)g_settings.volume, (unsigned)g_settings.brightness,
-                    (unsigned)g_settings.bass, spi_tone_name(g_settings.tone), (unsigned)len);
+                    (unsigned)g_settings.bass, spi_tone_name(g_settings.tone), (unsigned)g_settings.flags,
+                    (unsigned)len);
         return 1;
     }
 
@@ -129,10 +120,11 @@ void spi_settings_nv_flush_if_idle(void)
 
     spi_settings_t saved = g_settings;
     saved.cmd = SPI_CMD_QUERY;
-    saved.flags = 0;
     errcode_t ret = uapi_nv_write(NV_KEY_SPI_SETTINGS, (const uint8_t *)&saved, sizeof(saved));
     if (ret != ERRCODE_SUCC) {
         osal_printk("[DWS_M] NV write failed: %d\r\n", (int)ret);
+        g_nv_last_change_tick = now;
+        return;
     }
     g_nv_dirty = false;
 }
@@ -140,7 +132,7 @@ void spi_settings_nv_flush_if_idle(void)
 void spi_settings_update_hotspot_network(uint8_t hotspot, uint8_t network)
 {
     uint8_t packed = spi_make_hotspot_network(hotspot, network);
-    if (spi_validate_hotspot_network(packed)) {
+    if (spi_validate_hotspot_network(packed) && g_settings.hotspot_network != packed) {
         g_settings.hotspot_network = packed;
         spi_settings_mark_sync(true);
     }
@@ -148,7 +140,7 @@ void spi_settings_update_hotspot_network(uint8_t hotspot, uint8_t network)
 
 void spi_settings_update_mode(uint8_t mode)
 {
-    if (spi_validate_mode(mode)) {
+    if (spi_validate_mode(mode) && g_settings.mode != mode) {
         g_settings.mode = mode;
         spi_settings_mark_sync(true);
     }
@@ -156,7 +148,7 @@ void spi_settings_update_mode(uint8_t mode)
 
 void spi_settings_update_volume(uint8_t volume)
 {
-    if (spi_validate_percent(volume)) {
+    if (spi_validate_percent(volume) && g_settings.volume != volume) {
         g_settings.volume = volume;
         spi_settings_mark_sync(true);
     }
@@ -164,7 +156,7 @@ void spi_settings_update_volume(uint8_t volume)
 
 void spi_settings_update_brightness(uint8_t brightness)
 {
-    if (spi_validate_percent(brightness)) {
+    if (spi_validate_percent(brightness) && g_settings.brightness != brightness) {
         g_settings.brightness = brightness;
         spi_settings_mark_sync(true);
     }
@@ -172,7 +164,7 @@ void spi_settings_update_brightness(uint8_t brightness)
 
 void spi_settings_update_bass(uint8_t bass)
 {
-    if (spi_validate_percent(bass)) {
+    if (spi_validate_percent(bass) && g_settings.bass != bass) {
         g_settings.bass = bass;
         spi_settings_mark_sync(true);
     }
@@ -180,7 +172,7 @@ void spi_settings_update_bass(uint8_t bass)
 
 void spi_settings_update_tone(uint8_t tone)
 {
-    if (spi_validate_tone(tone)) {
+    if (spi_validate_tone(tone) && g_settings.tone != tone) {
         g_settings.tone = tone;
         spi_settings_mark_sync(true);
     }

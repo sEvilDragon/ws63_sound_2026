@@ -31,8 +31,8 @@ void nv_load_settings(void);
 
 /**
  * @brief 标记配置已变更（仅设置脏标志，不立即写 Flash）。
- *        每次 mode/volume/brightness/bass/hotspot 变更后调用。
- *        实际写入由 nv_flush_if_idle() 在空闲 2 秒后触发。
+ *        每次持久化配置字段变更后调用。
+ *        实际写入由 nv_flush_if_idle() 在空闲 5 秒后触发。
  */
 void nv_mark_dirty(void);
 

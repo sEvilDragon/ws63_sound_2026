@@ -42,10 +42,10 @@ void nv_load_settings(void)
         spi_validate_settings(&saved)) {
         g_settings = saved;
         g_settings.cmd = SPI_CMD_QUERY;
-        g_settings.tone = SPI_TONE_FLAT;
-        osal_printk("[DWS_S] NV settings loaded: mode=%u vol=%u bri=%u bass=%u flags=0x%02x len=%u\r\n",
+        osal_printk("[DWS_S] NV settings loaded: mode=%u vol=%u bri=%u bass=%u tone=%u flags=0x%02x len=%u\r\n",
                     (unsigned)g_settings.mode, (unsigned)g_settings.volume, (unsigned)g_settings.brightness,
-                    (unsigned)g_settings.bass, (unsigned)g_settings.flags, (unsigned)len);
+                    (unsigned)g_settings.bass, (unsigned)g_settings.tone, (unsigned)g_settings.flags,
+                    (unsigned)len);
     } else {
         osal_printk("[DWS_S] NV settings unavailable: ret=%d len=%u\r\n", (int)ret, (unsigned)len);
     }
@@ -64,17 +64,6 @@ static bool spi_settings_payload_equal(const spi_settings_t *a, const spi_settin
            a->tone == b->tone &&
            a->flags == b->flags;
 }
-
-static bool spi_settings_control_payload_equal(const spi_settings_t *a, const spi_settings_t *b)
-{
-    return a->hotspot_network == b->hotspot_network &&
-           a->mode == b->mode &&
-           a->volume == b->volume &&
-           a->brightness == b->brightness &&
-           a->bass == b->bass &&
-           a->flags == b->flags;
-}
-
 
 static void nv_mark_dirty_internal(bool local_change)
 {
@@ -161,7 +150,7 @@ void spi_settings_update_night(uint8_t enabled)
 }
 
 /**
- * @brief 若脏标志已置位且距上次变更超过 2 秒，执行 NV 写入。
+ * @brief 若脏标志已置位且距上次变更超过 5 秒，执行 NV 写入。
  *        由 ui_task 主循环周期性调用。
  */
 void nv_flush_if_idle(void)
@@ -177,10 +166,11 @@ void nv_flush_if_idle(void)
 
     spi_settings_t saved = g_settings;
     saved.cmd = SPI_CMD_QUERY;
-    saved.tone = SPI_TONE_FLAT;
     errcode_t ret = uapi_nv_write(NV_KEY_SPI_SETTINGS, (const uint8_t *)&saved, sizeof(saved));
     if (ret != ERRCODE_SUCC) {
         osal_printk("[DWS_S] NV write failed: %d\r\n", (int)ret);
+        g_nv_last_change_tick = now;
+        return;
     }
     g_nv_dirty = false;
 }
@@ -227,7 +217,6 @@ void *spi_slave_task(void *arg)
         }
         if (spi_validate_settings(&master_settings) && master_settings.cmd == SPI_CMD_SYNC) {
             bool changed = !spi_settings_payload_equal(&g_settings, &master_settings);
-            bool control_changed = !spi_settings_control_payload_equal(&g_settings, &master_settings);
             if (changed) {
                 g_settings.hotspot_network = master_settings.hotspot_network;
                 g_settings.mode = master_settings.mode;
@@ -236,9 +225,7 @@ void *spi_slave_task(void *arg)
                 g_settings.bass = master_settings.bass;
                 g_settings.tone = master_settings.tone;
                 g_settings.flags = master_settings.flags;
-                if (control_changed) {
-                    nv_mark_dirty_internal(false);
-                }
+                nv_mark_dirty_internal(false);
             }
             g_slave_sync_pending = false;
         }
