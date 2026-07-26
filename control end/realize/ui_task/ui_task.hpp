@@ -8,7 +8,8 @@ namespace sed_ws63 {
 enum ui_target_t {
     UI_TARGET_MODE = 0,
     UI_TARGET_VOLUME,
-    UI_TARGET_BRIGHTNESS,
+    UI_TARGET_NETWORK,
+    UI_TARGET_HOTSPOT,
     UI_TARGET_COUNT,
 };
 
@@ -25,10 +26,11 @@ inline const char *mode_name(uint8_t mode)
 inline const char *target_name(ui_target_t target)
 {
     switch (target) {
-        case UI_TARGET_MODE:       return "mode";
-        case UI_TARGET_VOLUME:     return "volume";
-        case UI_TARGET_BRIGHTNESS: return "brightness";
-        default:                   return "?";
+        case UI_TARGET_MODE:    return "mode";
+        case UI_TARGET_VOLUME:  return "volume";
+        case UI_TARGET_NETWORK: return "network";
+        case UI_TARGET_HOTSPOT: return "hotspot";
+        default:                return "?";
     }
 }
 

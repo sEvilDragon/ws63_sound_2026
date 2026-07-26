@@ -17,6 +17,7 @@ public:
     static void add_samples(const int16_t *data, uint32_t size);
     static void compute();
     static const audio_result_t &get_result();
+    static void reset();
 
     static constexpr uint8_t NUM_BANDS = 5;
     static constexpr uint32_t BLOCK_SIZE = 512;

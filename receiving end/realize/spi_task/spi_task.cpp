@@ -75,6 +75,7 @@ static void spi_settings_apply_control_payload(const spi_settings_t *src)
         return;
     }
 
+    bool mode_changed = g_settings.mode != src->mode;
     g_settings.hotspot_network = src->hotspot_network;
     g_settings.mode = src->mode;
     g_settings.volume = src->volume;
@@ -84,6 +85,9 @@ static void spi_settings_apply_control_payload(const spi_settings_t *src)
     g_settings.flags = src->flags;
     if (persist_changed) {
         spi_settings_mark_dirty();
+    }
+    if (mode_changed) {
+        audio_analyzer::reset();
     }
 }
 
@@ -142,6 +146,7 @@ void spi_settings_update_mode(uint8_t mode)
 {
     if (spi_validate_mode(mode) && g_settings.mode != mode) {
         g_settings.mode = mode;
+        audio_analyzer::reset();
         spi_settings_mark_sync(true);
     }
 }

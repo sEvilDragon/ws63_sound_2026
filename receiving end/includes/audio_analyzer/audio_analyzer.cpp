@@ -120,3 +120,24 @@ const audio_result_t &audio_analyzer::get_result()
 {
     return result[result_idx];
 }
+
+void audio_analyzer::reset()
+{
+    unsigned long flags = osal_irq_lock();
+
+    sample_count = 0;
+    buf_full = false;
+    result[0] = {};
+    result[1] = {};
+    result_idx = 0;
+    for (uint8_t i = 0; i < 6; i++) {
+        energy_history[i] = 0;
+    }
+    energy_hist_idx = 0;
+    for (uint8_t i = 0; i < NUM_BANDS; i++) {
+        max_band[i] = 1.0f;
+    }
+    max_overall = 1.0f;
+
+    osal_irq_restore(flags);
+}

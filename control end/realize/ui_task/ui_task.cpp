@@ -1,46 +1,45 @@
 #include "ui_task.h"
 #include "ui_task.hpp"
+#include "sk9822_task.h"
 #include "spi_task.h"
 #include "ttp_task.h"
-#include "voice_task.h"
 
 extern "C" {
 #include "app_init.h"
 #include "soc_osal.h"
+#include "systick.h"
 }
 
 namespace sed_ws63 {
 
 static constexpr uint8_t MODE_LIST[] = {
-    SPI_MODE_WIREED, // 无模式
+    SPI_MODE_WIREED,
     SPI_MODE_SLE,
     SPI_MODE_DLNA,
 };
 static constexpr int MODE_COUNT = sizeof(MODE_LIST) / sizeof(MODE_LIST[0]);
-static constexpr int SLIDER_SENSITIVITY = 50;
+
+static constexpr uint32_t LONG_PRESS_MS = 800;
+static constexpr uint32_t MODE_REPEAT_MS = 1200;
+static constexpr uint32_t VOLUME_REPEAT_MS = 100;
+static constexpr uint32_t VOLUME_EDGE_PAUSE_MS = 800;
+static constexpr uint8_t VOLUME_STEP = 2;
+
+enum class volume_hold_phase_t : uint8_t {
+    UP = 0,
+    PAUSE_AT_MAX,
+    DOWN,
+    STOPPED,
+};
 
 static ui_target_t g_target = UI_TARGET_MODE;
-static int g_last_slider_pos = TTP_SLIDER_NO_POS;
-static bool g_mode_changed_in_gesture = false;
+static bool g_button_was_pressed = false;
+static bool g_long_press_active = false;
+static uint64_t g_press_started_ms = 0;
+static uint64_t g_next_action_ms = 0;
+static volume_hold_phase_t g_volume_phase = volume_hold_phase_t::STOPPED;
 
-static int clamp_percent(int value)
-{
-    if (value < 0) {
-        return 0;
-    }
-    if (value > 100) {
-        return 100;
-    }
-    return value;
-}
-
-static void reset_slider_tracking(void)
-{
-    g_last_slider_pos = TTP_SLIDER_NO_POS;
-    g_mode_changed_in_gesture = false;
-}
-
-static void cycle_mode(int direction)
+static void cycle_mode(void)
 {
     const spi_settings_t *settings = get_spi_settings();
     int index = 0;
@@ -51,31 +50,9 @@ static void cycle_mode(int direction)
         }
     }
 
-    index = (index + direction + MODE_COUNT) % MODE_COUNT;
+    index = (index + 1) % MODE_COUNT;
     spi_settings_update_mode(MODE_LIST[index]);
-    osal_printk("[UI] slider: mode=%s direction=%s\r\n", mode_name(MODE_LIST[index]),
-                direction > 0 ? "right" : "left");
-}
-
-static void select_next_target(void)
-{
-    g_target = (ui_target_t)(((int)g_target + 1) % UI_TARGET_COUNT);
-    reset_slider_tracking();
-
-    switch (g_target) {
-        case UI_TARGET_MODE:
-            voice_request_mode_selection_prompt();
-            break;
-        case UI_TARGET_VOLUME:
-            voice_request_volume_adjust_prompt();
-            break;
-        case UI_TARGET_BRIGHTNESS:
-            voice_request_brightness_adjust_prompt();
-            break;
-        default:
-            break;
-    }
-    osal_printk("[UI] key A: target=%s\r\n", target_name(g_target));
+    osal_printk("[UI] hold: mode=%s\r\n", mode_name(MODE_LIST[index]));
 }
 
 static void toggle_hotspot(void)
@@ -86,13 +63,7 @@ static void toggle_hotspot(void)
     uint8_t next = (hotspot == SPI_HOTSPOT_ON) ? SPI_HOTSPOT_OFF : SPI_HOTSPOT_ON;
 
     spi_settings_update_hotspot_network(next, network);
-    bool is_on = spi_get_hotspot(get_spi_settings()->hotspot_network) == SPI_HOTSPOT_ON;
-    if (is_on) {
-        voice_request_hotspot_on_prompt();
-    } else {
-        voice_request_hotspot_off_prompt();
-    }
-    osal_printk("[UI] key B: hotspot=%s\r\n", is_on ? "ON" : "OFF");
+    osal_printk("[UI] hold: hotspot=%s\r\n", next == SPI_HOTSPOT_ON ? "ON" : "OFF");
 }
 
 static void toggle_network(void)
@@ -103,58 +74,47 @@ static void toggle_network(void)
     uint8_t next = (network == SPI_NETWORK_CONN) ? SPI_NETWORK_DISC : SPI_NETWORK_CONN;
 
     spi_settings_update_hotspot_network(hotspot, next);
-    bool is_on = spi_get_network(get_spi_settings()->hotspot_network) == SPI_NETWORK_CONN;
-    if (is_on) {
-        voice_request_network_on_prompt();
-    } else {
-        voice_request_network_off_prompt();
-    }
-    osal_printk("[UI] key C: network=%s\r\n", is_on ? "ON" : "OFF");
+    osal_printk("[UI] hold: network=%s\r\n", next == SPI_NETWORK_CONN ? "ON" : "OFF");
 }
 
-static void handle_slider(void)
+static void select_next_target(void)
 {
-    int pos = ttp_get_state()->slider_pos;
-    if (pos == TTP_SLIDER_NO_POS) {
-        reset_slider_tracking();
+    g_target = (ui_target_t)(((int)g_target + 1) % UI_TARGET_COUNT);
+    sk9822_show_control_target((uint8_t)g_target);
+    osal_printk("[UI] click: target=%s\r\n", target_name(g_target));
+}
+
+static void update_volume_hold(uint64_t now)
+{
+    if (g_volume_phase == volume_hold_phase_t::STOPPED || now < g_next_action_ms) {
         return;
     }
 
-    if (g_last_slider_pos == TTP_SLIDER_NO_POS) {
-        g_last_slider_pos = pos;
-        return;
-    }
-
-    int delta = pos - g_last_slider_pos;
-    if (delta == 0) {
-        return;
-    }
-    g_last_slider_pos = pos;
-
-    switch (g_target) {
-        case UI_TARGET_MODE:
-            if (!g_mode_changed_in_gesture) {
-                cycle_mode(delta > 0 ? 1 : -1);
-                g_mode_changed_in_gesture = true;
+    uint8_t volume = get_spi_settings()->volume;
+    switch (g_volume_phase) {
+        case volume_hold_phase_t::UP: {
+            uint16_t next = (uint16_t)volume + VOLUME_STEP;
+            if (next >= 100) {
+                next = 100;
+                g_volume_phase = volume_hold_phase_t::PAUSE_AT_MAX;
+                g_next_action_ms = now + VOLUME_EDGE_PAUSE_MS;
+            } else {
+                g_next_action_ms = now + VOLUME_REPEAT_MS;
             }
-            break;
-        case UI_TARGET_VOLUME: {
-            int value_delta = delta * SLIDER_SENSITIVITY /
-                              ((TTP_SLIDER_PADS_COUNT - 1) * TTP_SLIDER_SCALE);
-            if (value_delta != 0) {
-                int volume = clamp_percent((int)get_spi_settings()->volume + value_delta);
-                spi_settings_update_volume((uint8_t)volume);
-                osal_printk("[UI] slider: volume=%u delta=%d\r\n", (unsigned)volume, value_delta);
-            }
+            spi_settings_update_volume((uint8_t)next);
             break;
         }
-        case UI_TARGET_BRIGHTNESS: {
-            int value_delta = delta * SLIDER_SENSITIVITY /
-                              ((TTP_SLIDER_PADS_COUNT - 1) * TTP_SLIDER_SCALE);
-            if (value_delta != 0) {
-                int brightness = clamp_percent((int)get_spi_settings()->brightness + value_delta);
-                spi_settings_update_brightness((uint8_t)brightness);
-                osal_printk("[UI] slider: brightness=%u delta=%d\r\n", (unsigned)brightness, value_delta);
+        case volume_hold_phase_t::PAUSE_AT_MAX:
+            g_volume_phase = volume_hold_phase_t::DOWN;
+            g_next_action_ms = now;
+            break;
+        case volume_hold_phase_t::DOWN: {
+            uint8_t next = volume > VOLUME_STEP ? (uint8_t)(volume - VOLUME_STEP) : 0;
+            spi_settings_update_volume(next);
+            if (next == 0) {
+                g_volume_phase = volume_hold_phase_t::STOPPED;
+            } else {
+                g_next_action_ms = now + VOLUME_REPEAT_MS;
             }
             break;
         }
@@ -163,24 +123,83 @@ static void handle_slider(void)
     }
 }
 
+static void begin_long_press(uint64_t now)
+{
+    g_long_press_active = true;
+    osal_printk("[UI] long press: target=%s\r\n", target_name(g_target));
+
+    switch (g_target) {
+        case UI_TARGET_MODE:
+            cycle_mode();
+            g_next_action_ms = now + MODE_REPEAT_MS;
+            break;
+        case UI_TARGET_VOLUME:
+            if (get_spi_settings()->volume >= 100) {
+                g_volume_phase = volume_hold_phase_t::PAUSE_AT_MAX;
+                g_next_action_ms = now + VOLUME_EDGE_PAUSE_MS;
+            } else {
+                g_volume_phase = volume_hold_phase_t::UP;
+                g_next_action_ms = now;
+                update_volume_hold(now);
+            }
+            break;
+        case UI_TARGET_NETWORK:
+            toggle_network();
+            break;
+        case UI_TARGET_HOTSPOT:
+            toggle_hotspot();
+            break;
+        default:
+            break;
+    }
+}
+
+static void continue_long_press(uint64_t now)
+{
+    switch (g_target) {
+        case UI_TARGET_MODE:
+            if (now >= g_next_action_ms) {
+                cycle_mode();
+                g_next_action_ms = now + MODE_REPEAT_MS;
+            }
+            break;
+        case UI_TARGET_VOLUME:
+            update_volume_hold(now);
+            break;
+        default:
+            break;
+    }
+}
+
 static void ui_tick(void)
 {
-    uint8_t press = ttp_consume_press_latch();
+    uint64_t now = uapi_systick_get_ms();
+    bool pressed = ttp_get_state()->button_pressed != 0;
 
-    if (press & (1u << TTP_FUNC_IDX_A)) {
-        select_next_target();
-        return;
-    }
-    if (press & (1u << TTP_FUNC_IDX_B)) {
-        toggle_hotspot();
-        return;
-    }
-    if (press & (1u << TTP_FUNC_IDX_C)) {
-        toggle_network();
-        return;
+    if (pressed && !g_button_was_pressed) {
+        g_button_was_pressed = true;
+        g_long_press_active = false;
+        g_volume_phase = volume_hold_phase_t::STOPPED;
+        g_press_started_ms = now;
     }
 
-    handle_slider();
+    if (pressed) {
+        if (!g_long_press_active && now - g_press_started_ms >= LONG_PRESS_MS) {
+            begin_long_press(now);
+        } else if (g_long_press_active) {
+            continue_long_press(now);
+        }
+        return;
+    }
+
+    if (g_button_was_pressed) {
+        if (!g_long_press_active) {
+            select_next_target();
+        }
+        g_button_was_pressed = false;
+        g_long_press_active = false;
+        g_volume_phase = volume_hold_phase_t::STOPPED;
+    }
 }
 
 } // namespace sed_ws63
@@ -190,11 +209,13 @@ void *ui_task(void *arg)
     (void)arg;
 
     const spi_settings_t *settings = get_spi_settings();
-    osal_printk("[UI] started: target=%s mode=%s volume=%u brightness=%u hotspot=%s network=%s\r\n",
+    osal_printk("[UI] started: target=%s mode=%s volume=%u hotspot=%s network=%s\r\n",
                 sed_ws63::target_name(sed_ws63::UI_TARGET_MODE), sed_ws63::mode_name(settings->mode),
-                (unsigned)settings->volume, (unsigned)settings->brightness,
+                (unsigned)settings->volume,
                 spi_get_hotspot(settings->hotspot_network) == SPI_HOTSPOT_ON ? "ON" : "OFF",
                 spi_get_network(settings->hotspot_network) == SPI_NETWORK_CONN ? "ON" : "OFF");
+
+    sk9822_show_control_target((uint8_t)sed_ws63::UI_TARGET_MODE);
 
     while (true) {
         sed_ws63::ui_tick();

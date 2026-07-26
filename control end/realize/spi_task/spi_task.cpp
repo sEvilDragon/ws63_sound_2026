@@ -23,6 +23,15 @@ const spi_settings_t *get_spi_settings()
 }
 
 static audio_result_t g_audio = {};
+static volatile bool g_audio_suppressed = false;
+
+static void suppress_audio_until_mode_sync()
+{
+    unsigned long flags = osal_irq_lock();
+    g_audio = {};
+    g_audio_suppressed = true;
+    osal_irq_restore(flags);
+}
 
 const audio_result_t *get_audio_result()
 {
@@ -99,6 +108,7 @@ void spi_settings_update_mode(uint8_t mode)
         return;
     }
     g_settings.mode = mode;
+    suppress_audio_until_mode_sync();
     nv_mark_dirty();
 }
 
@@ -216,6 +226,7 @@ void *spi_slave_task(void *arg)
             ((uint8_t *)&master_settings)[i] = rx_buf[i];
         }
         if (spi_validate_settings(&master_settings) && master_settings.cmd == SPI_CMD_SYNC) {
+            bool mode_sync_complete = g_audio_suppressed && master_settings.mode == g_settings.mode;
             bool changed = !spi_settings_payload_equal(&g_settings, &master_settings);
             if (changed) {
                 g_settings.hotspot_network = master_settings.hotspot_network;
@@ -228,6 +239,9 @@ void *spi_slave_task(void *arg)
                 nv_mark_dirty_internal(false);
             }
             g_slave_sync_pending = false;
+            if (mode_sync_complete) {
+                g_audio_suppressed = false;
+            }
         }
 
         audio_result_t tmp;
@@ -242,7 +256,9 @@ void *spi_slave_task(void *arg)
         tmp.beat = (raw_beat == 0 || raw_beat == 1) ? raw_beat : 0;
 
         unsigned long flags = osal_irq_lock();
-        g_audio = tmp;
+        if (!g_audio_suppressed) {
+            g_audio = tmp;
+        }
         osal_irq_restore(flags);
 
         osal_msleep(5);

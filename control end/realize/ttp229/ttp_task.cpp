@@ -7,8 +7,8 @@ extern "C" {
 #include "app_init.h"
 }
 
-// 详细诊断开关: 1 = 输出逐帧原始值/按键消抖/质心细节; 0 = 仅关键事件
-// 默认 0, 调试 bit-bang 信号/消抖细节时手动改为 1 重新编译
+// 详细诊断开关: 1 = 输出逐帧串行原始值; 0 = 仅输出触摸状态变化
+// 默认 0, 调试 bit-bang 信号时手动改为 1 重新编译
 #ifndef TTP_VERBOSE
 #define TTP_VERBOSE 0
 #endif
@@ -27,12 +27,8 @@ namespace sed_ws63 {
 ttp229::ttp229()
     : m_healthy(false),
       m_state{},
-      m_slider_prev(0),
-      m_slider_integrator(0),
-      m_func_debounce{},
-      m_func_hold{},
-      m_func_stable{},
-      m_func_prev_raw{}
+      m_button_debounce(0),
+      m_button_stable(false)
 {
     init_serial();
 }
@@ -140,248 +136,27 @@ bool ttp229::read_touch(uint16_t *state_out)
     return true;
 }
 
-bool ttp229::is_pad_touched(uint16_t raw, int pad_number)
+void ttp229::process_button(uint16_t raw)
 {
-    // pad_number 是 1-based 芯片引脚号 (1..16), raw bit N = chip pin (N+1)
-    if (pad_number < 1 || pad_number > TTP_TOTAL_PADS)
-        return false;
-    return (raw & (1u << (pad_number - 1))) != 0;
-}
+    bool raw_pressed = (raw & BUTTON_RAW_MASK) != 0;
+    bool previous = m_button_stable;
 
-// 找 uint8_t 中最高置位的位置, 无置位返回 -1
-static int bit_high(uint8_t x)
-{
-    if (x == 0)
-        return -1;
-    int n = 7;
-    while (!(x & 0x80)) {
-        x <<= 1;
-        n--;
-    }
-    return n;
-}
-// 找 uint8_t 中最低置位的位置, 无置位返回 8
-static int bit_low(uint8_t x)
-{
-    if (x == 0)
-        return 8;
-    int n = 0;
-    while (!(x & 1)) {
-        x >>= 1;
-        n++;
-    }
-    return n;
-}
+    m_state.button_just_pressed = 0;
+    m_state.button_just_released = 0;
 
-void ttp229::process_slider(uint16_t raw)
-{
-    // === 二进制状态提取 ===
-    uint8_t cur = 0;
-    for (int i = 0; i < 8; i++) {
-        if (is_pad_touched(raw, PAD_SLIDER[i])) {
-            cur |= (uint8_t)(1 << i);
-        }
-    }
-
-    // === 无触摸 → 全部复位 ===
-    if (cur == 0) {
-        m_slider_prev = 0;
-        m_slider_integrator = 0;
-        m_state.slider_pos = TTP_SLIDER_NO_POS;
-        m_state.slider_direction = TTP_SWIPE_NONE;
-        m_state.slider_speed = 0;
-        return;
-    }
-
-    // === 首次触摸 ===
-    if (m_slider_prev == 0) {
-        m_slider_prev = cur;
-        m_slider_integrator = 0;
-        m_state.slider_pos = 0; // 由 UI 设 anchor
-        m_state.slider_direction = TTP_SWIPE_NONE;
-        m_state.slider_speed = 0;
-        return;
-    }
-
-    // === pad 集合无变化 → 积分器衰减 ===
-    if (cur == m_slider_prev) {
-        if (m_slider_integrator > 0) {
-            m_slider_integrator--;
-            if (m_slider_integrator == 0)
-                m_state.slider_direction = TTP_SWIPE_NONE;
-        } else if (m_slider_integrator < 0) {
-            m_slider_integrator++;
-            if (m_slider_integrator == 0)
-                m_state.slider_direction = TTP_SWIPE_NONE;
-        }
-        m_state.slider_speed = 0;
-        return;
-    }
-
-    // === 抬手再放检测: pad 集合无交集 且 距离 > 3 pad → 复位 ===
-    if ((cur & m_slider_prev) == 0) {
-        int lo_cur = bit_low(cur);
-        int hi_cur = bit_high(cur);
-        int lo_prv = bit_low(m_slider_prev);
-        int hi_prv = bit_high(m_slider_prev);
-        int dist = (lo_cur > hi_prv) ? (lo_cur - hi_prv) : (lo_prv > hi_cur) ? (lo_prv - hi_cur) : 0;
-        if (dist > 3) { // 跳跃 > 3 pad → 抬手再放
-            m_slider_prev = cur;
-            m_slider_integrator = 0;
-            m_state.slider_direction = TTP_SWIPE_NONE;
-            m_state.slider_speed = 0;
-            return;
-        }
-        // 否则是单键模式正常滑动, 继续进入/离开分析
-    }
-
-    // === 进入 / 离开 位集 ===
-    uint8_t entered = cur & ~m_slider_prev; // 新按下
-    uint8_t left = m_slider_prev & ~cur;    // 新释放
-
-    int hi_ent = bit_high(entered);
-    int lo_ent = bit_low(entered);
-    int hi_lft = bit_high(left);
-    int lo_lft = bit_low(left);
-
-    // 帧内位移方向 (加权)
-    int frame_dir = 0;
-    int frame_mag = 0;
-
-    if (entered && left) {
-        // 既有进入又有离开: 比较两组的中心
-        int ent_ctr = hi_ent + lo_ent; // ×2 省去, 不影响比较
-        int lft_ctr = hi_lft + lo_lft;
-        frame_dir = ent_ctr - lft_ctr;
-        frame_mag = (hi_ent >= lo_lft) ? (hi_ent - lo_lft + 1) : (lo_lft - hi_ent + 1);
-    } else if (entered) {
-        // 仅有进入: 手指在扩张
-        // 与当前保持的 pads 比较
-        uint8_t stay = cur & m_slider_prev;
-        int hi_stay = bit_high(stay);
-        int lo_stay = bit_low(stay);
-        if (hi_stay >= 0) {
-            if (lo_ent > hi_stay) {
-                frame_dir = +1; // 向右扩张
-                frame_mag = lo_ent - hi_stay;
-            } else if (hi_ent < lo_stay) {
-                frame_dir = -1; // 向左扩张
-                frame_mag = lo_stay - hi_ent;
-            }
-        }
-    } else if (left) {
-        // 仅有离开: 手指在收缩
-        uint8_t stay = cur & m_slider_prev;
-        int hi_stay = bit_high(stay);
-        int lo_stay = bit_low(stay);
-        if (hi_stay >= 0) {
-            if (lo_lft > hi_stay) {
-                frame_dir = -1; // 右侧离开 = 向左收缩
-                frame_mag = lo_lft - hi_stay;
-            } else if (hi_lft < lo_stay) {
-                frame_dir = +1; // 左侧离开 = 向右收缩
-                frame_mag = lo_stay - hi_lft;
-            }
-        }
-    }
-
-    // === 积分器累积 / 衰减 ===
-    if (frame_dir > 0) {
-        m_slider_integrator += frame_mag * TTP_SLIDER_SCALE;
-        if (m_slider_integrator > SLIDER_INTEGRATOR_MAX)
-            m_slider_integrator = SLIDER_INTEGRATOR_MAX;
-    } else if (frame_dir < 0) {
-        m_slider_integrator -= frame_mag * TTP_SLIDER_SCALE;
-        if (m_slider_integrator < -SLIDER_INTEGRATOR_MAX)
-            m_slider_integrator = -SLIDER_INTEGRATOR_MAX;
+    if (raw_pressed == m_button_stable) {
+        m_button_debounce = 0;
     } else {
-        // 方向不明 (进入和离开对称) → 衰减
-        if (m_slider_integrator > 0)
-            m_slider_integrator = (m_slider_integrator * 3) / 4;
-        else if (m_slider_integrator < 0)
-            m_slider_integrator = (m_slider_integrator * 3) / 4;
-    }
-
-    // === 积分器超过阈值 → 发射一步 (漏电积分-发射) ===
-    // 右滑(向 pad 10)→ integrator < 0 → slider_pos 增加 → 音量增大
-    if (m_slider_integrator < -SLIDER_FIRE_THRESHOLD) {
-        m_state.slider_direction = TTP_SWIPE_RIGHT;
-        m_state.slider_speed = SLIDER_STEP;
-        m_state.slider_pos += SLIDER_STEP;
-        m_slider_integrator += SLIDER_FIRE_THRESHOLD;
-    } else if (m_slider_integrator > SLIDER_FIRE_THRESHOLD) {
-        m_state.slider_direction = TTP_SWIPE_LEFT;
-        m_state.slider_speed = SLIDER_STEP;
-        m_state.slider_pos -= SLIDER_STEP;
-        m_slider_integrator -= SLIDER_FIRE_THRESHOLD;
-    } else {
-        m_state.slider_direction = TTP_SWIPE_NONE;
-        m_state.slider_speed = 0;
-    }
-
-    m_slider_prev = cur;
-}
-
-void ttp229::process_function_keys(uint16_t raw)
-{
-    static const int pad_of_idx[TTP_FUNC_PADS_COUNT] = {PAD_FUNC_A, PAD_FUNC_B, PAD_FUNC_C};
-
-    uint8_t pressed = 0;
-    uint8_t just_p = 0;
-    uint8_t just_r = 0;
-
-    uint8_t prev_pressed = m_state.func_pressed;
-
-    for (int i = 0; i < TTP_FUNC_PADS_COUNT; i++) {
-        bool cur_raw = is_pad_touched(raw, pad_of_idx[i]);
-
-        bool prev_raw = m_func_prev_raw[i];
-        int prev_db = m_func_debounce[i];
-        bool prev_stb = m_func_stable[i];
-        int prev_hold = m_func_hold[i];
-
-        // 最小保持窗口内: 强制忽略反向变化
-        if (m_func_hold[i] > 0) {
-            m_func_hold[i]--;
-            m_func_debounce[i] = 0;
-            m_func_prev_raw[i] = cur_raw;
-        } else if (cur_raw == prev_stb) {
-            // raw 与 stable 一致: 漏桶衰减而非归零, 容忍偶尔的噪声帧
-            if (m_func_debounce[i] > 0)
-                m_func_debounce[i]--;
-        } else {
-            // raw 与 stable 不一致: 累计证据, 达到阈值就接受新状态
-            m_func_debounce[i]++;
-            if (m_func_debounce[i] >= FUNC_DEBOUNCE_TICKS) {
-                m_func_stable[i] = cur_raw;
-                m_func_debounce[i] = 0;
-                m_func_hold[i] = FUNC_HOLD_TICKS;
-                TTP_VLOG("key[%d]=pad%d ACCEPT %d->%d\r\n", i, pad_of_idx[i], prev_stb ? 1 : 0, cur_raw ? 1 : 0);
-            }
-        }
-        m_func_prev_raw[i] = cur_raw;
-
-        bool stable = m_func_stable[i];
-        if (stable)
-            pressed |= (1u << i);
-
-        bool prev_in_state = ((m_state.func_pressed >> i) & 1) != 0;
-        if (stable && !prev_in_state)
-            just_p |= (1u << i);
-        if (!stable && prev_in_state)
-            just_r |= (1u << i);
-
-        // 仅在 raw/stable 发生变化时才输出, 避免 200Hz 刷屏
-        if (cur_raw != prev_raw || stable != prev_stb || prev_db != m_func_debounce[i] || prev_hold != m_func_hold[i]) {
-            TTP_VLOG("key[%d]=pad%d raw=%d->%d db=%d->%d stable=%d->%d hold=%d->%d\r\n", i, pad_of_idx[i],
-                     prev_raw ? 1 : 0, cur_raw ? 1 : 0, prev_db, m_func_debounce[i], prev_stb ? 1 : 0, stable ? 1 : 0,
-                     prev_hold, m_func_hold[i]);
+        int required_ticks = raw_pressed ? BUTTON_PRESS_DEBOUNCE_TICKS : BUTTON_RELEASE_DEBOUNCE_TICKS;
+        if (++m_button_debounce >= required_ticks) {
+            m_button_stable = raw_pressed;
+            m_button_debounce = 0;
         }
     }
 
-    m_state.func_pressed = pressed;
-    m_state.func_just_pressed = just_p;
-    m_state.func_just_released = just_r;
+    m_state.button_pressed = m_button_stable ? 1 : 0;
+    m_state.button_just_pressed = (!previous && m_button_stable) ? 1 : 0;
+    m_state.button_just_released = (previous && !m_button_stable) ? 1 : 0;
 }
 
 void ttp229::update()
@@ -392,8 +167,7 @@ void ttp229::update()
     }
 
     m_state.raw_state = raw;
-    process_slider(raw);
-    process_function_keys(raw);
+    process_button(raw);
 }
 
 } // namespace sed_ws63
@@ -401,27 +175,9 @@ void ttp229::update()
 static sed_ws63::ttp229 *g_ttp = nullptr;
 static ttp_state_t g_ttp_state;
 
-// 边沿锁存: ttp_task 累积, ui_task 读后清零
-static volatile uint8_t g_press_latch = 0;
-static volatile uint8_t g_release_latch = 0;
-
 const ttp_state_t *ttp_get_state(void)
 {
     return &g_ttp_state;
-}
-
-uint8_t ttp_consume_press_latch(void)
-{
-    uint8_t v = g_press_latch;
-    g_press_latch = 0;
-    return v;
-}
-
-uint8_t ttp_consume_release_latch(void)
-{
-    uint8_t v = g_release_latch;
-    g_release_latch = 0;
-    return v;
 }
 
 static int ttp_single_pad_from_mask(uint16_t mask)
@@ -455,9 +211,9 @@ static void ttp_debug_raw_change(const ttp_state_t *s)
     last_raw = s->raw_state;
 
     int pad = ttp_single_pad_from_mask(s->raw_state);
-    osal_printk("[TTP] touch=0x%04x pad=%d slider_pos=%d func=0x%02x just=0x%02x\r\n",
-                (unsigned)s->raw_state, pad, s->slider_pos,
-                (unsigned)s->func_pressed, (unsigned)s->func_just_pressed);
+    osal_printk("[TTP] touch=0x%04x pad=%d button=%u just=%u\r\n",
+                (unsigned)s->raw_state, pad, (unsigned)s->button_pressed,
+                (unsigned)s->button_just_pressed);
 }
 void *ttp_task(void *arg)
 {
@@ -466,32 +222,10 @@ void *ttp_task(void *arg)
     static sed_ws63::ttp229 s_ttp;
     g_ttp = &s_ttp;
 
-    // 诊断计数器: 统计每个功能键 pad 的原始触摸帧数
-    uint32_t diag_frame = 0;
-    uint32_t diag_raw_cnt[3] = {0};  // A=pad7, B=pad6, C=pad5
-
     while (true) {
         g_ttp->update();
         g_ttp_state = g_ttp->get_state();
         ttp_debug_raw_change(&g_ttp_state);
-
-        // 诊断: 统计功能键原始触摸
-        diag_frame++;
-        if (g_ttp_state.raw_state & 0x0040) diag_raw_cnt[0]++; // pad 7 = key A
-        if (g_ttp_state.raw_state & 0x0020) diag_raw_cnt[1]++; // pad 6 = key B
-        if (g_ttp_state.raw_state & 0x0010) diag_raw_cnt[2]++; // pad 5 = key C
-
-        if (diag_frame >= 100) {
-            osal_printk("[TTP] diag raw_hit/100: A=%u B=%u C=%u\r\n",
-                        (unsigned)diag_raw_cnt[0], (unsigned)diag_raw_cnt[1], (unsigned)diag_raw_cnt[2]);
-            diag_frame = 0;
-            diag_raw_cnt[0] = diag_raw_cnt[1] = diag_raw_cnt[2] = 0;
-        }
-
-        if (g_ttp_state.func_just_pressed)
-            g_press_latch |= g_ttp_state.func_just_pressed;
-        if (g_ttp_state.func_just_released)
-            g_release_latch |= g_ttp_state.func_just_released;
 
         osal_msleep(sed_ws63::ttp229::POLL_INTERVAL_MS);
     }

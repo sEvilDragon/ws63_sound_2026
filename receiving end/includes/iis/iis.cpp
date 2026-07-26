@@ -334,6 +334,9 @@ void iis::data_write(const int16_t *data, uint32_t size, uint8_t volume, uint8_t
 
 void iis::data_clear()
 {
+    /* IIS 中已没有有效音频时，不能继续向控制端报告上一段音频的节拍。 */
+    audio_analyzer::reset();
+
     // ���ٹر� TX��DMA LLI һ���������������У��� TX ֻ��������ţ�
     // DMA �ڲ������Լ������Ļ����������� pending_frames
     // ��Զ�޷����»��ۣ� TX ����ʧȥ�ؿ����ᡣ��Ϊ���� TX �������� DMA ����������ľ���֡��

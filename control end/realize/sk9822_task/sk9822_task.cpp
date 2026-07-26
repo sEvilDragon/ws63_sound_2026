@@ -5,12 +5,14 @@
 
 static constexpr uint8_t VISUAL_COLS = 9;
 static constexpr uint16_t FRAME_MS = 30;
+static constexpr uint16_t CONTROL_TARGET_OVERLAY_MS = 1000;
 static constexpr uint16_t VOLUME_OVERLAY_MS = 1000;
 static constexpr uint16_t MODE_WAVE_MS = 570;
 static constexpr uint16_t SLIDE_OVERLAY_MS = 600;
 
 enum class overlay_type_t : uint8_t {
     NONE = 0,
+    CONTROL_TARGET,
     VOLUME,
     MODE_WAVE,
     SLIDE,
@@ -36,10 +38,12 @@ static uint8_t overlay_priority(overlay_type_t type)
 {
     switch (type) {
         case overlay_type_t::MODE_WAVE:
-            return 3;
+            return 4;
         case overlay_type_t::SLIDE:
-            return 2;
+            return 3;
         case overlay_type_t::VOLUME:
+            return 2;
+        case overlay_type_t::CONTROL_TARGET:
             return 1;
         default:
             return 0;
@@ -168,6 +172,17 @@ static void start_volume_overlay(overlay_state_t *overlay, uint8_t volume)
     start_overlay(overlay, next);
 }
 
+static void start_control_target_overlay(overlay_state_t *overlay, uint8_t target)
+{
+    if (target > 3) {
+        target = 3;
+    }
+    overlay_state_t next = {overlay_type_t::CONTROL_TARGET, 0, CONTROL_TARGET_OVERLAY_MS, target, 110, 255, 165,
+                            slide_dir_t::LEFT_TO_RIGHT};
+    // 用户主动切换控制目标时必须立即可见；后续设置变化仍可按优先级覆盖它。
+    *overlay = next;
+}
+
 static void start_mode_overlay(overlay_state_t *overlay, uint8_t mode)
 {
     overlay_state_t next = {overlay_type_t::MODE_WAVE, 0, MODE_WAVE_MS, 0, 255, 255, 255,
@@ -194,6 +209,23 @@ static void render_volume_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf
     for (uint8_t col = 0; col < VISUAL_COLS; col++) {
         if (col < lit_cols) {
             set_visual_column(r_buf, g_buf, b_buf, col, white, white, white);
+        } else {
+            set_visual_column(r_buf, g_buf, b_buf, col, 0, 0, 0);
+        }
+    }
+}
+
+static void render_control_target_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf,
+                                          const overlay_state_t &overlay)
+{
+    uint8_t lit_cols = (uint8_t)(overlay.value * (VISUAL_COLS / 3));
+    if (lit_cols > VISUAL_COLS) {
+        lit_cols = VISUAL_COLS;
+    }
+
+    for (uint8_t col = 0; col < VISUAL_COLS; col++) {
+        if (col < lit_cols) {
+            set_visual_column(r_buf, g_buf, b_buf, col, overlay.r, overlay.g, overlay.b);
         } else {
             set_visual_column(r_buf, g_buf, b_buf, col, 0, 0, 0);
         }
@@ -289,6 +321,9 @@ static void render_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, const
     }
 
     switch (overlay.type) {
+        case overlay_type_t::CONTROL_TARGET:
+            render_control_target_overlay(r_buf, g_buf, b_buf, overlay);
+            break;
         case overlay_type_t::VOLUME:
             render_volume_overlay(r_buf, g_buf, b_buf, overlay, brightness_percent);
             break;
@@ -301,6 +336,30 @@ static void render_overlay(uint8_t *r_buf, uint8_t *g_buf, uint8_t *b_buf, const
         default:
             break;
     }
+}
+
+static uint8_t g_control_target_request = 0;
+static bool g_control_target_pending = false;
+
+void sk9822_show_control_target(uint8_t target)
+{
+    unsigned long irq = osal_irq_lock();
+    g_control_target_request = target > 3 ? 3 : target;
+    g_control_target_pending = true;
+    osal_irq_restore(irq);
+}
+
+static bool take_control_target_request(uint8_t *target)
+{
+    unsigned long irq = osal_irq_lock();
+    if (!g_control_target_pending) {
+        osal_irq_restore(irq);
+        return false;
+    }
+    *target = g_control_target_request;
+    g_control_target_pending = false;
+    osal_irq_restore(irq);
+    return true;
 }
 
 static void advance_overlay(overlay_state_t *overlay)
@@ -436,6 +495,9 @@ void *sk9822_task(void *arg)
             start_volume_overlay(&overlay, cur_settings.volume);
         }
         if (mode_changed) {
+            smoothed_ov = 0.0f;
+            fx_level = 0.0f;
+            beat_boost = 0;
             start_mode_overlay(&overlay, cur_settings.mode);
         }
         if (!mode_changed && hotspot_changed) {
@@ -444,6 +506,10 @@ void *sk9822_task(void *arg)
         } else if (!mode_changed && network_changed) {
             slide_dir_t dir = (cur_network == SPI_NETWORK_CONN) ? slide_dir_t::LEFT_TO_RIGHT : slide_dir_t::RIGHT_TO_LEFT;
             start_slide_overlay(&overlay, 0, 80, 255, dir);
+        }
+        uint8_t requested_target = 0;
+        if (take_control_target_request(&requested_target)) {
+            start_control_target_overlay(&overlay, requested_target);
         }
         prev_settings = cur_settings;
 

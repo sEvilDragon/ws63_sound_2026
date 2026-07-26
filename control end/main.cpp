@@ -33,8 +33,8 @@ void app_entry(void)
 
     osal_kthread_lock();
 
-    // taskid = osal_kthread_create((osal_kthread_handler)spi_slave_task, NULL, "spi_slave_task", 2048);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)spi_slave_task, NULL, "spi_slave_task", 2048);
+    (void)taskid;
 
     taskid = osal_kthread_create((osal_kthread_handler)ttp_task, NULL, "ttp_task", 2048);
     (void)taskid;
@@ -42,8 +42,8 @@ void app_entry(void)
     taskid = osal_kthread_create((osal_kthread_handler)ui_task, NULL, "ui_task", 2048);
     (void)taskid;
 
-    // taskid = osal_kthread_create((osal_kthread_handler)voice_task, NULL, "voice_task", 2048);
-    // (void)taskid;
+    taskid = osal_kthread_create((osal_kthread_handler)voice_task, NULL, "voice_task", 2048);
+    (void)taskid;
 
     taskid = osal_kthread_create((osal_kthread_handler)led_test_task, NULL, "led_test_task", 2048);
     (void)taskid;
